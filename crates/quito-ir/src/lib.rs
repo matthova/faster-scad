@@ -131,6 +131,8 @@ pub enum Node {
     Intersection(Vec<Node>),
     /// Convex hull of all children.
     Hull(Vec<Node>),
+    /// Minkowski sum of all children.
+    Minkowski(Vec<Node>),
 }
 
 impl Node {

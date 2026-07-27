@@ -475,6 +475,7 @@ impl Interp<'_> {
             "difference" => Ok(Node::Difference(self.eval_children(children)?)),
             "intersection" => Ok(Node::Intersection(self.eval_children(children)?)),
             "hull" => Ok(Node::Hull(self.eval_children(children)?)),
+            "minkowski" => Ok(Node::Minkowski(self.eval_children(children)?)),
             "group" => Ok(Node::group(self.eval_children(children)?)),
             "echo" => self.b_echo(args, children),
             "assert" => self.b_assert(args, children),

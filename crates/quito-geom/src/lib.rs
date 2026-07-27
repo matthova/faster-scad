@@ -88,6 +88,10 @@ pub fn render_with(node: &Node, kernel: &dyn Kernel) -> Result<Mesh, GeomError> 
             let meshes = render_all(children, kernel)?;
             kernel.hull(meshes)
         }
+        Node::Minkowski(children) => {
+            let meshes = render_all(children, kernel)?;
+            Ok(minkowski_fold(meshes))
+        }
         Node::Difference(children) => {
             let mut meshes = render_all(children, kernel)?;
             if meshes.is_empty() {
@@ -133,6 +137,31 @@ pub fn render_with(node: &Node, kernel: &dyn Kernel) -> Result<Mesh, GeomError> 
 
 fn render_all(children: &[Node], kernel: &dyn Kernel) -> Result<Vec<Mesh>, GeomError> {
     children.iter().map(|c| render_with(c, kernel)).collect()
+}
+
+/// Minkowski sum of a chain of meshes. Exact for convex operands (the common
+/// rounding case, e.g. `minkowski(){ cube; sphere; }`); for non-convex operands
+/// it is the convex Minkowski approximation. After the first sum the accumulator
+/// is convex, so the rest are exact.
+fn minkowski_fold(meshes: Vec<Mesh>) -> Mesh {
+    let mut it = meshes.into_iter().filter(|m| !m.is_empty());
+    let Some(mut acc) = it.next() else {
+        return Mesh::new();
+    };
+    for m in it {
+        acc = minkowski_pair(&acc, &m);
+    }
+    acc
+}
+
+fn minkowski_pair(a: &Mesh, b: &Mesh) -> Mesh {
+    let mut pts = Vec::with_capacity(a.verts.len() * b.verts.len());
+    for va in &a.verts {
+        for vb in &b.verts {
+            pts.push([va[0] + vb[0], va[1] + vb[1], va[2] + vb[2]]);
+        }
+    }
+    hull::convex_hull(&pts)
 }
 
 /// Extrude a 2D subtree, distributing over 2D booleans: because the extrusion
@@ -359,6 +388,19 @@ mod tests {
         };
         let m = render(&node).unwrap();
         assert!((m.volume() - 240.0).abs() < 1e-6, "vol {}", m.volume());
+        assert!(m.signed_volume() > 0.0);
+    }
+
+    #[test]
+    fn minkowski_rounded_cube() {
+        let frags = FragmentSpec { fn_: 24.0, fa: 12.0, fs: 2.0 };
+        let node = Node::Minkowski(vec![
+            Node::Cube { size: [10.0, 10.0, 10.0], center: true },
+            Node::Sphere { r: 2.0, frags },
+        ]);
+        let m = render(&node).unwrap();
+        // matches OpenSCAD (~2592.88); allow small tessellation tolerance
+        assert!((m.volume() - 2592.88).abs() < 5.0, "minkowski vol {}", m.volume());
         assert!(m.signed_volume() > 0.0);
     }
 
