@@ -468,6 +468,7 @@ impl Interp<'_> {
             "polygon" => self.b_polygon(args),
             "linear_extrude" => self.b_linear_extrude(args, children),
             "rotate_extrude" => self.b_rotate_extrude(args, children),
+            "offset" => self.b_offset(args, children),
             "translate" => self.transform(args, children, TransformKind::Translate),
             "rotate" => self.transform(args, children, TransformKind::Rotate),
             "scale" => self.transform(args, children, TransformKind::Scale),
@@ -769,6 +770,27 @@ impl Interp<'_> {
             twist,
             scale,
             slices,
+            child,
+        })
+    }
+
+    fn b_offset(&mut self, args: &[Arg], children: &[Stmt]) -> EResult<Node> {
+        let m = self.bind_named(&["r", "delta"], args)?;
+        let r = m.get("r").and_then(Value::as_number);
+        let delta = m.get("delta").and_then(Value::as_number);
+        let chamfer = m.get("chamfer").map(Value::truthy).unwrap_or(false);
+        // `r` takes precedence; default to r=1 if neither given.
+        let (r, delta) = match (r, delta) {
+            (Some(r), _) => (r, 0.0),
+            (None, Some(d)) => (0.0, d),
+            (None, None) => (1.0, 0.0),
+        };
+        let child = Box::new(Node::group(self.eval_children(children)?));
+        Ok(Node::Offset {
+            r,
+            delta,
+            chamfer,
+            frags: self.frag_spec(&m),
             child,
         })
     }

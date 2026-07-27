@@ -92,6 +92,15 @@ pub enum Node {
         frags: FragmentSpec,
         child: Box<Node>,
     },
+    /// 2D offset. `r` (rounded) or `delta` (mitred/chamfered) grows (>0) or
+    /// shrinks (<0) the child's contours.
+    Offset {
+        r: f64,
+        delta: f64,
+        chamfer: bool,
+        frags: FragmentSpec,
+        child: Box<Node>,
+    },
 
     // --- transforms ---
     Translate {

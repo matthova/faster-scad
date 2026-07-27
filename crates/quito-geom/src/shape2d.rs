@@ -20,6 +20,9 @@ pub fn render2d(node: &Node) -> Vec<Contour> {
         Node::Square { size, center } => vec![square_contour(*size, *center)],
         Node::Circle { r, frags } => vec![circle_contour(*r, *frags)],
         Node::Polygon { points, paths } => polygon_contours(points, paths),
+        Node::Offset { r, delta, chamfer, frags, child } => {
+            offset(&render2d(child), *r, *delta, *chamfer, *frags)
+        }
         Node::Translate { v, child } => {
             map_contours(render2d(child), |p| [p[0] + v[0], p[1] + v[1]])
         }
@@ -69,6 +72,104 @@ fn polygon_contours(points: &[Point2], paths: &Option<Vec<Vec<u32>>>) -> Vec<Con
             .collect(),
         None => vec![points.to_vec()],
     }
+}
+
+/// 2D offset of contours. `r` rounds convex corners; `delta` mitres (or
+/// chamfers). Positive grows, negative shrinks. Works on simple contours; it
+/// does not clip self-intersections from large concave offsets (a 2D-clipper
+/// refinement).
+pub fn offset(contours: &[Contour], r: f64, delta: f64, chamfer: bool, frags: FragmentSpec) -> Vec<Contour> {
+    let (amt, rounded) = if r != 0.0 { (r, true) } else { (delta, false) };
+    contours
+        .iter()
+        .filter(|c| c.len() >= 3)
+        .map(|c| offset_one(c, amt, rounded, chamfer, frags))
+        .collect()
+}
+
+fn offset_one(contour: &[Point2], amt: f64, rounded: bool, chamfer: bool, frags: FragmentSpec) -> Contour {
+    // Work CCW; reverse the result if the input was CW.
+    let cw = signed_area(contour) < 0.0;
+    let poly: Vec<Point2> = if cw {
+        contour.iter().rev().cloned().collect()
+    } else {
+        contour.to_vec()
+    };
+    let n = poly.len();
+    let seg_full = fragments(amt.abs(), frags).max(3) as f64;
+
+    // Outward unit normal of edge i (poly[i]->poly[i+1]) for a CCW polygon.
+    let edge_normal = |i: usize| -> Point2 {
+        let a = poly[i];
+        let b = poly[(i + 1) % n];
+        let d = [b[0] - a[0], b[1] - a[1]];
+        let len = (d[0] * d[0] + d[1] * d[1]).sqrt().max(1e-12);
+        [d[1] / len, -d[0] / len]
+    };
+
+    let mut out: Contour = Vec::new();
+    for i in 0..n {
+        let vi = poly[i];
+        let n_in = edge_normal((i + n - 1) % n);
+        let n_out = edge_normal(i);
+        let p_in = [vi[0] + amt * n_in[0], vi[1] + amt * n_in[1]];
+        let p_out = [vi[0] + amt * n_out[0], vi[1] + amt * n_out[1]];
+
+        // Convex (left turn) for a CCW polygon.
+        let din = [
+            vi[0] - poly[(i + n - 1) % n][0],
+            vi[1] - poly[(i + n - 1) % n][1],
+        ];
+        let dout = [poly[(i + 1) % n][0] - vi[0], poly[(i + 1) % n][1] - vi[1]];
+        let turn = din[0] * dout[1] - din[1] * dout[0];
+        let convex = turn > 0.0;
+
+        // A corner needs "filling" on its outer side: convex when growing,
+        // reflex when shrinking.
+        let fill = (amt > 0.0 && convex) || (amt < 0.0 && !convex);
+        if fill && rounded {
+            let a0 = n_in[1].atan2(n_in[0]);
+            let a1 = n_out[1].atan2(n_out[0]);
+            let mut da = a1 - a0;
+            while da <= -std::f64::consts::PI {
+                da += 2.0 * std::f64::consts::PI;
+            }
+            while da > std::f64::consts::PI {
+                da -= 2.0 * std::f64::consts::PI;
+            }
+            let steps = ((seg_full * (da.abs() / (2.0 * std::f64::consts::PI))).ceil() as usize).max(1);
+            for s in 0..=steps {
+                let a = a0 + da * (s as f64 / steps as f64);
+                out.push([vi[0] + amt * a.cos(), vi[1] + amt * a.sin()]);
+            }
+        } else if fill && chamfer {
+            out.push(p_in);
+            out.push(p_out);
+        } else {
+            // miter: intersection of the two offset lines
+            match line_intersect(p_in, din, p_out, dout) {
+                Some(p) => out.push(p),
+                None => {
+                    out.push(p_in);
+                    out.push(p_out);
+                }
+            }
+        }
+    }
+    if cw {
+        out.reverse();
+    }
+    out
+}
+
+/// Intersection of line (p1, dir d1) with line (p2, dir d2).
+fn line_intersect(p1: Point2, d1: Point2, p2: Point2, d2: Point2) -> Option<Point2> {
+    let denom = d1[0] * d2[1] - d1[1] * d2[0];
+    if denom.abs() < 1e-12 {
+        return None;
+    }
+    let t = ((p2[0] - p1[0]) * d2[1] - (p2[1] - p1[1]) * d2[0]) / denom;
+    Some([p1[0] + t * d1[0], p1[1] + t * d1[1]])
 }
 
 /// Signed area of a contour (positive when counter-clockwise).

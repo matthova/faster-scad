@@ -58,7 +58,7 @@ pub fn render_with(node: &Node, kernel: &dyn Kernel) -> Result<Mesh, GeomError> 
         }),
 
         // 2D shapes rendered as a flat mesh at z=0.
-        Node::Square { .. } | Node::Circle { .. } | Node::Polygon { .. } => {
+        Node::Square { .. } | Node::Circle { .. } | Node::Polygon { .. } | Node::Offset { .. } => {
             Ok(shape2d::flat_mesh(&shape2d::render2d(node)))
         }
         Node::LinearExtrude {
@@ -394,6 +394,39 @@ mod tests {
         let m = render(&node).unwrap();
         assert!((m.volume() - 240.0).abs() < 1e-6, "vol {}", m.volume());
         assert!(m.signed_volume() > 0.0);
+    }
+
+    #[test]
+    fn offset_shapes() {
+        let frags = FragmentSpec { fn_: 64.0, fa: 12.0, fs: 2.0 };
+        let ext = |child| Node::LinearExtrude {
+            height: 1.0,
+            center: false,
+            twist: 0.0,
+            scale: [1.0, 1.0],
+            slices: 1,
+            child: Box::new(child),
+        };
+        // mitred grow: 10x10 -> 14x14 = 196
+        let m = render(&ext(Node::Offset {
+            r: 0.0,
+            delta: 2.0,
+            chamfer: false,
+            frags,
+            child: Box::new(Node::Square { size: [10.0, 10.0], center: false }),
+        }))
+        .unwrap();
+        assert!((m.volume() - 196.0).abs() < 1e-6, "miter {}", m.volume());
+        // inset: 10x10 -> 6x6 = 36
+        let m = render(&ext(Node::Offset {
+            r: -2.0,
+            delta: 0.0,
+            chamfer: false,
+            frags,
+            child: Box::new(Node::Square { size: [10.0, 10.0], center: false }),
+        }))
+        .unwrap();
+        assert!((m.volume() - 36.0).abs() < 1e-6, "inset {}", m.volume());
     }
 
     #[test]
