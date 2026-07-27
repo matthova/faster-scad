@@ -12,9 +12,13 @@ straight from disk (`OPENSCADPATH`) as well as from the open in-editor files.
     mesh + console + customizer schema, using a persistent geometry cache.
   - `save_model(path, format, …)` — render and write STL/OFF/OBJ.
   - `parameters(source)` — the customizer schema JSON.
+  - `open_file(path)` — read a `.scad` from disk and start watching it; returns
+    its content + directory (for `include`/`use` resolution).
+- **Edit in your own editor:** an opened file is watched (via `notify`); an
+  external change fires a `file-changed` event and the app reloads + re-renders.
 - The frontend detects Tauri (`isTauri()` in `web/src/desktopEngine.ts`) and
-  routes rendering to these commands; in the browser it uses the wasm worker.
-  One UI, two engines.
+  routes rendering to these commands (plus native **Open…**/**Export** dialogs);
+  in the browser it uses the wasm worker. One UI, two engines.
 
 ## Build & run
 

@@ -392,7 +392,7 @@ fn prepare(contours: &[Contour]) -> (Vec<Point2>, Vec<(usize, usize)>, Vec<[u32;
         let mut flat: Vec<f64> = Vec::new();
         let mut map: Vec<u32> = Vec::new(); // group vertex index -> global index
         let mut hole_starts: Vec<usize> = Vec::new();
-        let mut push_ring = |flat: &mut Vec<f64>, map: &mut Vec<u32>, idx: usize| {
+        let push_ring = |flat: &mut Vec<f64>, map: &mut Vec<u32>, idx: usize| {
             let (s, len) = ranges[idx];
             for k in 0..len {
                 let g = (s + k) as u32;

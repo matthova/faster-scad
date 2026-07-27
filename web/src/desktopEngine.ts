@@ -26,6 +26,8 @@ interface NativeResult {
 
 export class DesktopEngine {
   private seq = 0;
+  /** Directory of the opened file, used for disk include/use resolution. */
+  dir = ".";
 
   constructor(private onResult: (r: RenderResponse) => void) {}
 
@@ -43,7 +45,7 @@ export class DesktopEngine {
       .then(({ invoke }) =>
         invoke<NativeResult>("render", {
           source,
-          dir: ".",
+          dir: this.dir,
           paramNames: names,
           paramValues: values,
           fileNames,
@@ -89,6 +91,34 @@ export class DesktopEngine {
         });
       });
   }
+}
+
+/** A file opened from disk (native). */
+export interface OpenedFile {
+  path: string;
+  name: string;
+  dir: string;
+  content: string;
+}
+
+/** Show a native open dialog and load the chosen `.scad` file (native only). */
+export async function openScadFile(): Promise<OpenedFile | null> {
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const { invoke } = await import("@tauri-apps/api/core");
+  const path = await open({
+    multiple: false,
+    filters: [{ name: "OpenSCAD", extensions: ["scad"] }],
+  });
+  if (!path || typeof path !== "string") return null;
+  return invoke<OpenedFile>("open_file", { path });
+}
+
+/** Subscribe to external edits of the opened file. Returns an unlisten fn. */
+export async function onFileChanged(
+  cb: (payload: { path: string; content: string }) => void,
+): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<{ path: string; content: string }>("file-changed", (e) => cb(e.payload));
 }
 
 /** Native save via a Tauri save dialog + the `save_model` command. */

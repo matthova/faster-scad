@@ -12,7 +12,13 @@ import { CustomizerPanel } from "./CustomizerPanel";
 import { parseSchema, toLiteral, type Param, type ParamValue } from "./customizer";
 import { loadProject, saveProject, clearProject, type File } from "./project";
 import { resolveClosure } from "./library";
-import { isTauri, DesktopEngine, saveModelNative } from "./desktopEngine";
+import {
+  isTauri,
+  DesktopEngine,
+  saveModelNative,
+  openScadFile,
+  onFileChanged,
+} from "./desktopEngine";
 
 const TAURI = isTauri();
 
@@ -188,11 +194,47 @@ export function App() {
 
     renderNow(); // initial render
 
+    // Live-reload the main file when it's edited in an external editor (desktop).
+    let unlisten: (() => void) | undefined;
+    if (TAURI) {
+      onFileChanged(({ content }) => setMainFile(filesRef.current[0].name, content))
+        .then((u) => (unlisten = u))
+        .catch(() => {});
+    }
+
     return () => {
       view.destroy();
+      unlisten?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /** Replace the rendered (first) file's content — from a native open or an
+   *  external-edit reload — updating the editor if that tab is active. */
+  function setMainFile(name: string, content: string, dir?: string) {
+    const next = filesRef.current.slice();
+    next[0] = { name, content };
+    filesRef.current = next;
+    setFiles(next);
+    if (dir && engineRef.current instanceof DesktopEngine) engineRef.current.dir = dir;
+    if (activeRef.current === 0 && viewRef.current) {
+      const view = viewRef.current;
+      suppressRef.current = true;
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: content } });
+      suppressRef.current = false;
+    }
+    persist();
+    requestRenderRef.current();
+  }
+
+  async function openNative() {
+    try {
+      const f = await openScadFile();
+      if (f) setMainFile(f.name, f.content, f.dir);
+    } catch {
+      /* dialog cancelled / unavailable */
+    }
+  }
 
   function switchTo(idx: number) {
     if (idx === activeRef.current || !viewRef.current) return;
@@ -361,6 +403,7 @@ export function App() {
         </div>
         <div className="actions">
           <button onClick={newProject}>New</button>
+          {TAURI && <button onClick={openNative}>Open…</button>}
           <button onClick={() => viewerRef.current?.resetView()}>Reset view</button>
           <div className="export">
             <button onClick={() => onDownload(exportFmt)} disabled={status.triangleCount === 0}>

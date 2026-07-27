@@ -5,11 +5,13 @@
 //! faster than the browser's pure-Rust kernel — with `include`/`use` resolved
 //! straight from disk and a geometry cache kept across renders.
 
+use notify::{RecursiveMode, Watcher};
 use quito_eval::{FileResolver, LoadedFile};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use tauri::Emitter;
 
 /// Rendering runs on a worker thread with a large stack: recursive libraries
 /// (e.g. BOSL2's attachment system) nest the evaluator deeply.
@@ -18,6 +20,26 @@ const RENDER_STACK: usize = 256 << 20;
 #[derive(Default)]
 struct AppState {
     cache: Arc<Mutex<quito_geom::GeomCache>>,
+    /// Keeps the active file watcher alive (dropping it stops watching).
+    watcher: Mutex<Option<notify::RecommendedWatcher>>,
+}
+
+/// A file opened from disk.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenedFile {
+    path: String,
+    name: String,
+    dir: String,
+    content: String,
+}
+
+/// Payload for the `file-changed` event (external edit detected).
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FileChanged {
+    path: String,
+    content: String,
 }
 
 /// Result of a render, serialized to the frontend.
@@ -234,6 +256,63 @@ fn engine_version() -> String {
     format!("quito-desktop {}", env!("CARGO_PKG_VERSION"))
 }
 
+/// Watch `target`'s directory and call `on_change(content)` whenever the file is
+/// modified/created externally (the "edit in your own editor" workflow). The
+/// returned watcher must be kept alive.
+fn install_watcher<F>(target: &Path, on_change: F) -> notify::Result<notify::RecommendedWatcher>
+where
+    F: Fn(String) + Send + 'static,
+{
+    let t = std::fs::canonicalize(target).unwrap_or_else(|_| target.to_path_buf());
+    let parent = t.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+    let target = t.clone();
+    let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+        // React to any change touching our file (event kinds vary by platform —
+        // macOS FSEvents in particular is coarse); ignore pure access events.
+        let Ok(event) = res else { return };
+        if matches!(event.kind, notify::EventKind::Access(_)) {
+            return;
+        }
+        let hit = event.paths.iter().any(|p| {
+            std::fs::canonicalize(p)
+                .map(|pc| pc == target)
+                .unwrap_or_else(|_| p.file_name() == target.file_name())
+        });
+        if hit {
+            if let Ok(content) = std::fs::read_to_string(&target) {
+                on_change(content);
+            }
+        }
+    })?;
+    watcher.watch(&parent, RecursiveMode::NonRecursive)?;
+    Ok(watcher)
+}
+
+/// Open a `.scad` file from disk and start watching it for external edits (which
+/// fire a `file-changed` event). Returns the content plus its directory (used
+/// for include/use resolution) and name.
+#[tauri::command]
+fn open_file(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    path: String,
+) -> Result<OpenedFile, String> {
+    let content = std::fs::read_to_string(&path).map_err(|e| format!("open {path}: {e}"))?;
+    let pb = PathBuf::from(&path);
+    let dir = pb.parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default();
+    let name =
+        pb.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "untitled.scad".into());
+
+    let emit_path = path.clone();
+    match install_watcher(&pb, move |content| {
+        let _ = app.emit("file-changed", FileChanged { path: emit_path.clone(), content });
+    }) {
+        Ok(w) => *state.watcher.lock().unwrap() = Some(w),
+        Err(e) => eprintln!("file watch failed for {path}: {e}"),
+    }
+    Ok(OpenedFile { path, name, dir, content })
+}
+
 /// Run `f` on a worker thread with a large stack and return its result.
 fn run_big_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     std::thread::Builder::new()
@@ -250,7 +329,13 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .manage(AppState::default())
-        .invoke_handler(tauri::generate_handler![render, save_model, parameters, engine_version])
+        .invoke_handler(tauri::generate_handler![
+            render,
+            save_model,
+            parameters,
+            open_file,
+            engine_version
+        ])
         .run(tauri::generate_context!())
         .expect("error while running Quito desktop");
 }
@@ -291,5 +376,38 @@ mod tests {
         )
         .unwrap();
         assert!((mesh.volume() - 27.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn file_watch_detects_external_change() {
+        use std::sync::mpsc::channel;
+        use std::time::Duration;
+        let dir = std::env::temp_dir().join(format!("quito_watch_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("w.scad");
+        std::fs::write(&f, "cube(1);").unwrap();
+
+        let (tx, rx) = channel();
+        let _w = install_watcher(&f, move |c| {
+            let _ = tx.send(c);
+        })
+        .unwrap();
+        std::thread::sleep(Duration::from_millis(300)); // let the watcher arm
+        std::fs::write(&f, "cube(2);").unwrap();
+
+        // FSEvents may replay the initial write, so drain until the new content
+        // shows up (or we hit the deadline).
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut saw_new = false;
+        while std::time::Instant::now() < deadline {
+            if let Ok(s) = rx.recv_timeout(Duration::from_millis(500)) {
+                if s.contains("cube(2)") {
+                    saw_new = true;
+                    break;
+                }
+            }
+        }
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(saw_new, "watcher did not report the external change");
     }
 }
