@@ -79,6 +79,16 @@ pub enum Expr {
         bindings: Vec<(String, Expr)>,
         body: Box<Expr>,
     },
+    /// An anonymous function literal: `function (params) body`.
+    FunctionLiteral {
+        params: Vec<Param>,
+        body: Box<Expr>,
+    },
+    /// Calling the result of an expression: `expr(args)`.
+    CallValue {
+        callee: Box<Expr>,
+        args: Vec<Arg>,
+    },
 }
 
 /// An element of a vector / list comprehension.

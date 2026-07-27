@@ -624,7 +624,35 @@ impl Interp {
                 r
             }
             Expr::Call { name, args } => self.eval_call(name, args),
+            Expr::FunctionLiteral { params, body } => Ok(Value::Function(std::rc::Rc::new((
+                params.clone(),
+                (**body).clone(),
+            )))),
+            Expr::CallValue { callee, args } => {
+                let c = self.eval_expr(callee)?;
+                if let Value::Function(f) = c {
+                    self.call_function(&f, args)
+                } else {
+                    Ok(Value::Undef)
+                }
+            }
         }
+    }
+
+    fn call_function(&mut self, f: &(Vec<Param>, Expr), args: &[Arg]) -> EResult<Value> {
+        if self.depth >= MAX_CALL_DEPTH {
+            return err("maximum call depth exceeded");
+        }
+        let bound = self.bind_params(&f.0, args)?;
+        self.depth += 1;
+        self.push_scope();
+        for (k, v) in bound {
+            self.set_var(&k, v);
+        }
+        let r = self.eval_expr(&f.1);
+        self.pop_scope();
+        self.depth -= 1;
+        r
     }
 
     fn eval_list_elem(&mut self, el: &ListElem, out: &mut Vec<Value>) -> EResult<()> {
@@ -702,6 +730,10 @@ impl Interp {
             self.pop_scope();
             self.depth -= 1;
             return r;
+        }
+        // A variable holding a function value?
+        if let Value::Function(f) = self.lookup_var(name) {
+            return self.call_function(&f, args);
         }
         // Builtins.
         let vals: Vec<Value> = args
@@ -895,6 +927,7 @@ fn builtin_fn(name: &str, args: &[Value], warnings: &mut Vec<String>) -> Value {
         "is_bool" => Value::Bool(matches!(args.first(), Some(Value::Bool(_)))),
         "is_string" => Value::Bool(matches!(args.first(), Some(Value::Str(_)))),
         "is_list" => Value::Bool(matches!(args.first(), Some(Value::Vector(_)))),
+        "is_function" => Value::Bool(matches!(args.first(), Some(Value::Function(_)))),
         "lookup" => lookup(args),
         "search" => search(args),
         "str" => {
@@ -1175,6 +1208,24 @@ mod tests {
             vec!["ECHO: 0.333333, 1e+10, 1e+6, 3, 0"]
         );
         assert_eq!(echoes("echo(sign(-4), sign(0), sign(4));"), vec!["ECHO: -1, 0, 1"]);
+    }
+
+    #[test]
+    fn function_literals() {
+        assert_eq!(echoes("f = function(x) x*x; echo(f(5));"), vec!["ECHO: 25"]);
+        assert_eq!(
+            echoes("g = function(a,b) a+b; echo(g(3,4), is_function(g), is_function(3));"),
+            vec!["ECHO: 7, true, false"]
+        );
+        assert_eq!(
+            echoes("f = function(x) x*x; echo([for(i=[1:4]) f(i)]);"),
+            vec!["ECHO: [1, 4, 9, 16]"]
+        );
+        // recursion through the bound name
+        assert_eq!(
+            echoes("h = function(n) n<=1 ? 1 : n*h(n-1); echo(h(5));"),
+            vec!["ECHO: 120"]
+        );
     }
 
     #[test]

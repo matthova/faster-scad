@@ -1,6 +1,7 @@
 //! Runtime values and their operational semantics.
 
-use quito_syntax::ast::{BinOp, UnOp};
+use quito_syntax::ast::{BinOp, Expr, Param, UnOp};
+use std::rc::Rc;
 
 /// A runtime value.
 #[derive(Debug, Clone, PartialEq)]
@@ -12,6 +13,9 @@ pub enum Value {
     Vector(Vec<Value>),
     /// A numeric range `[start : step : end]`.
     Range { start: f64, step: f64, end: f64 },
+    /// An anonymous function value (parameters + body). Called via
+    /// dynamic scoping in M2; lexical capture is a later refinement.
+    Function(Rc<(Vec<Param>, Expr)>),
 }
 
 impl Value {
@@ -24,6 +28,7 @@ impl Value {
             Value::Str(s) => !s.is_empty(),
             Value::Vector(v) => !v.is_empty(),
             Value::Range { .. } => true,
+            Value::Function(_) => true,
         }
     }
 
@@ -69,6 +74,7 @@ impl Value {
                 format_number(*step),
                 format_number(*end)
             ),
+            Value::Function(_) => "function".to_string(),
         }
     }
 
@@ -223,6 +229,7 @@ pub fn value_eq(a: &Value, b: &Value) -> bool {
         (Value::Vector(x), Value::Vector(y)) => {
             x.len() == y.len() && x.iter().zip(y).all(|(p, q)| value_eq(p, q))
         }
+        (Value::Function(x), Value::Function(y)) => Rc::ptr_eq(x, y),
         _ => false,
     }
 }

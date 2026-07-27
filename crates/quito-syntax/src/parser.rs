@@ -376,6 +376,15 @@ impl Parser {
                     base: Box::new(base),
                     field,
                 };
+            } else if self.peek() == Some(&Token::LParen) {
+                // calling the result of an expression, e.g. `funcs[0](3)`
+                self.advance();
+                let args = self.parse_args()?;
+                self.expect(&Token::RParen)?;
+                base = Expr::CallValue {
+                    callee: Box::new(base),
+                    args,
+                };
             } else {
                 break;
             }
@@ -406,6 +415,17 @@ impl Parser {
                 Ok(Expr::Undef)
             }
             Some(Token::Let) => self.parse_let(),
+            Some(Token::Function) => {
+                self.advance();
+                self.expect(&Token::LParen)?;
+                let params = self.parse_params()?;
+                self.expect(&Token::RParen)?;
+                let body = self.parse_expr()?;
+                Ok(Expr::FunctionLiteral {
+                    params,
+                    body: Box::new(body),
+                })
+            }
             Some(Token::Ident(name)) => {
                 self.advance();
                 if self.eat(&Token::LParen) {

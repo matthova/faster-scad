@@ -72,10 +72,13 @@ expression {
   ConditionalExpression |
   IndexExpression |
   MemberExpression |
-  LetExpression
+  LetExpression |
+  FunctionLiteral
 }
 
 CallExpression { VariableName ArgList }
+
+FunctionLiteral { kw<"function"> ParamList expression }
 
 ParenExpression { "(" expression ")" }
 
