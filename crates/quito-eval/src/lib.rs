@@ -1259,9 +1259,9 @@ fn builtin_fn(name: &str, args: &[Value], warnings: &mut Vec<String>) -> Value {
         "exp" => one(f64::exp),
         "ln" => one(f64::ln),
         "log" => one(f64::log10),
-        "sin" => one(|x| x.to_radians().sin()),
-        "cos" => one(|x| x.to_radians().cos()),
-        "tan" => one(|x| x.to_radians().tan()),
+        "sin" => one(sin_deg),
+        "cos" => one(cos_deg),
+        "tan" => one(tan_deg),
         "asin" => one(|x| x.asin().to_degrees()),
         "acos" => one(|x| x.acos().to_degrees()),
         "atan" => one(|x| x.atan().to_degrees()),
@@ -1305,6 +1305,7 @@ fn builtin_fn(name: &str, args: &[Value], warnings: &mut Vec<String>) -> Value {
         "is_list" => Value::Bool(matches!(args.first(), Some(Value::Vector(_)))),
         "is_function" => Value::Bool(matches!(args.first(), Some(Value::Function(_)))),
         "is_range" => Value::Bool(matches!(args.first(), Some(Value::Range { .. }))),
+        "rands" => rands_fn(args),
         "version" => value::vector(vec![
             Value::Number(2021.0),
             Value::Number(1.0),
@@ -1332,6 +1333,66 @@ fn builtin_fn(name: &str, args: &[Value], warnings: &mut Vec<String>) -> Value {
             warnings.push(format!("Ignoring unknown function '{name}'"));
             Value::Undef
         }
+    }
+}
+
+/// `rands(min, max, count, seed=undef)` — a list of pseudo-random numbers.
+/// Uses a seeded xorshift PRNG (deterministic per seed). Values won't match
+/// OpenSCAD's PRNG bit-for-bit, but distribution/range are correct, which is
+/// what identity-based tests (and most usage) rely on.
+fn rands_fn(args: &[Value]) -> Value {
+    let min = args.first().and_then(Value::as_number).unwrap_or(0.0);
+    let max = args.get(1).and_then(Value::as_number).unwrap_or(1.0);
+    let count = args.get(2).and_then(Value::as_number).unwrap_or(1.0).max(0.0) as usize;
+    let count = count.min(1_000_000);
+    let seed = args.get(3).and_then(Value::as_number);
+    let mut state: u64 = match seed {
+        Some(s) => (s.to_bits()) ^ 0x2545_F491_4F6C_DD1D,
+        None => 0x9E37_79B9_7F4A_7C15,
+    };
+    if state == 0 {
+        state = 1;
+    }
+    let mut out = Vec::with_capacity(count);
+    for _ in 0..count {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        let u = (state >> 11) as f64 / (1u64 << 53) as f64; // [0, 1)
+        out.push(Value::Number(min + u * (max - min)));
+    }
+    value::vector(out)
+}
+
+/// Degree trig that returns exact 0/±1 at multiples of 90°, matching OpenSCAD.
+fn norm_deg(x: f64) -> f64 {
+    let a = x % 360.0;
+    if a < 0.0 {
+        a + 360.0
+    } else {
+        a
+    }
+}
+fn sin_deg(x: f64) -> f64 {
+    match norm_deg(x) {
+        0.0 | 180.0 => 0.0,
+        90.0 => 1.0,
+        270.0 => -1.0,
+        a => a.to_radians().sin(),
+    }
+}
+fn cos_deg(x: f64) -> f64 {
+    match norm_deg(x) {
+        0.0 => 1.0,
+        90.0 | 270.0 => 0.0,
+        180.0 => -1.0,
+        a => a.to_radians().cos(),
+    }
+}
+fn tan_deg(x: f64) -> f64 {
+    match norm_deg(x) {
+        0.0 | 180.0 => 0.0,
+        a => a.to_radians().tan(),
     }
 }
 
