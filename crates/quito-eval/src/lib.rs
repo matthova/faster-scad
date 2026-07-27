@@ -1849,6 +1849,9 @@ fn search(args: &[Value]) -> Value {
     };
     let num_returns = args.get(2).and_then(Value::as_number).unwrap_or(1.0) as usize;
     let index = args.get(3).and_then(Value::as_number).unwrap_or(0.0) as usize;
+    // An explicitly-passed `undef` counts as "not given" (OpenSCAD semantics),
+    // so only a real numeric column index forces column matching.
+    let index_given = args.get(3).and_then(Value::as_number).is_some();
 
     let entries: Vec<Value> = match list {
         Value::Vector(v) => v.to_vec(),
@@ -1862,9 +1865,15 @@ fn search(args: &[Value]) -> Value {
         }
     };
     let match_indices = |needle: &Value| -> Vec<usize> {
+        // OpenSCAD: with no explicit `index_col_num`, a *list* needle is matched
+        // against the whole row (finding a vector in a list of vectors), while a
+        // scalar needle matches against column 0. An explicit index always
+        // matches against that column.
+        let whole_row = !index_given && matches!(needle, Value::Vector(_));
         let mut out = Vec::new();
         for (i, e) in entries.iter().enumerate() {
-            if value::value_eq(&compare_val(e), needle) {
+            let target = if whole_row { e.clone() } else { compare_val(e) };
+            if value::value_eq(&target, needle) {
                 out.push(i);
                 if num_returns != 0 && out.len() >= num_returns {
                     break;
@@ -2127,6 +2136,37 @@ mod tests {
             echoes("function t(a,b)=a && b; echo(t(true,false), t(true,true));"),
             vec!["ECHO: false, true"]
         );
+    }
+
+    #[test]
+    fn matrix_multiplication() {
+        // OpenSCAD linear-algebra `*`: dot, matrix·vector, vector·matrix, matrix·matrix.
+        assert_eq!(echoes("echo([1,2,3]*[4,5,6]);"), vec!["ECHO: 32"]);
+        assert_eq!(echoes("echo([[1,2],[3,4]]*[5,6]);"), vec!["ECHO: [17, 39]"]);
+        assert_eq!(echoes("echo([1,2]*[[5,6],[7,8]]);"), vec!["ECHO: [19, 22]"]);
+        assert_eq!(
+            echoes("echo([[1,2],[3,4]]*[[5,6],[7,8]]);"),
+            vec!["ECHO: [[19, 22], [43, 50]]"]
+        );
+        // Dimension mismatch → undef.
+        assert_eq!(echoes("echo([1,2,3]*[[1,2],[3,4]]);"), vec!["ECHO: undef"]);
+    }
+
+    #[test]
+    fn search_vector_needle_and_undef_index() {
+        // A list needle with no index matches the whole row (find a vector in a
+        // list of vectors) — the case BOSL2's in_list relies on.
+        assert_eq!(
+            echoes("echo(search([[0,0,1]],[[0,0,1],[1,0,0],[0,1,0]],num_returns_per_match=1));"),
+            vec!["ECHO: [0]"]
+        );
+        // An explicitly-passed undef index behaves like no index.
+        assert_eq!(
+            echoes("echo(search([[1,0,0]],[[0,0,1],[1,0,0]],1,undef));"),
+            vec!["ECHO: [1]"]
+        );
+        // A scalar needle still matches column 0 of a table.
+        assert_eq!(echoes("echo(search([3],[[0,3],[1,4]]));"), vec!["ECHO: [[]]"]);
     }
 
     #[test]

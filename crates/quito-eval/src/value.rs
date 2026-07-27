@@ -274,17 +274,9 @@ pub fn binary(op: BinOp, l: Value, r: Value) -> Value {
         (BinOp::Mul, Number(s), Vector(v)) | (BinOp::Mul, Vector(v), Number(s)) => {
             vector(v.iter().map(|e| binary(BinOp::Mul, Number(s), e.clone())).collect())
         }
-        // vector * vector -> dot product
-        (BinOp::Mul, Vector(a), Vector(b)) if a.len() == b.len() => {
-            let mut sum = 0.0;
-            for (x, y) in a.iter().zip(b.iter()) {
-                match (x.as_number(), y.as_number()) {
-                    (Some(x), Some(y)) => sum += x * y,
-                    _ => return Undef,
-                }
-            }
-            Number(sum)
-        }
+        // list * list — dot product / matrix·vector / vector·matrix / matrix·matrix,
+        // matching OpenSCAD's linear-algebra `*` (see `mul_lists`).
+        (BinOp::Mul, Vector(a), Vector(b)) => mul_lists(&a, &b),
         // vector / scalar
         (BinOp::Div, Vector(v), Number(s)) => {
             vector(v.iter().map(|e| binary(BinOp::Div, e.clone(), Number(s))).collect())
@@ -292,6 +284,104 @@ pub fn binary(op: BinOp, l: Value, r: Value) -> Value {
 
         _ => Undef,
     }
+}
+
+/// OpenSCAD's `*` between two lists. A list whose first element is itself a list
+/// is treated as a matrix (rows); otherwise as a vector of numbers:
+///
+/// * vector · vector      → scalar dot product (equal length),
+/// * matrix (m×n) · vector (n) → vector (m),
+/// * vector (n) · matrix (n×r) → vector (r)  (row-vector times matrix),
+/// * matrix (m×n) · matrix (n×r) → matrix (m×r).
+///
+/// Any dimension mismatch or non-numeric entry yields `undef`, as in OpenSCAD.
+fn mul_lists(a: &[Value], b: &[Value]) -> Value {
+    let a_mat = matches!(a.first(), Some(Value::Vector(_)));
+    let b_mat = matches!(b.first(), Some(Value::Vector(_)));
+    match (a_mat, b_mat) {
+        (false, false) => dot(a, b),
+        (true, false) => {
+            // matrix · vector: each row dotted with b.
+            let rows: Option<Vec<Value>> = a
+                .iter()
+                .map(|row| match row {
+                    Value::Vector(r) => match dot(r, b) {
+                        Value::Undef => None,
+                        v => Some(v),
+                    },
+                    _ => None,
+                })
+                .collect();
+            rows.map(vector).unwrap_or(Value::Undef)
+        }
+        (false, true) => {
+            // vector · matrix: a[i] weights row b[i]; requires a.len()==b.len().
+            let bm = as_matrix(b);
+            let (Some(bm), true) = (bm, a.len() == b.len()) else { return Value::Undef };
+            let cols = bm[0].len();
+            let mut out = vec![0.0; cols];
+            for (i, bi) in bm.iter().enumerate() {
+                let Some(ai) = a[i].as_number() else { return Value::Undef };
+                if bi.len() != cols {
+                    return Value::Undef;
+                }
+                for j in 0..cols {
+                    out[j] += ai * bi[j];
+                }
+            }
+            vector(out.into_iter().map(Value::Number).collect())
+        }
+        (true, true) => {
+            // matrix · matrix.
+            let (Some(am), Some(bm)) = (as_matrix(a), as_matrix(b)) else { return Value::Undef };
+            let inner = bm.len();
+            let cols = bm[0].len();
+            // Each row of `a` must have length == number of rows of `b`.
+            if am.iter().any(|r| r.len() != inner) || bm.iter().any(|r| r.len() != cols) {
+                return Value::Undef;
+            }
+            let mut out = Vec::with_capacity(am.len());
+            for ai in &am {
+                let mut row = vec![0.0; cols];
+                for k in 0..inner {
+                    for j in 0..cols {
+                        row[j] += ai[k] * bm[k][j];
+                    }
+                }
+                out.push(vector(row.into_iter().map(Value::Number).collect()));
+            }
+            vector(out)
+        }
+    }
+}
+
+/// Dot product of two numeric vectors; `undef` on length mismatch or non-numbers.
+fn dot(a: &[Value], b: &[Value]) -> Value {
+    if a.is_empty() || a.len() != b.len() {
+        return Value::Undef;
+    }
+    let mut sum = 0.0;
+    for (x, y) in a.iter().zip(b.iter()) {
+        match (x.as_number(), y.as_number()) {
+            (Some(x), Some(y)) => sum += x * y,
+            _ => return Value::Undef,
+        }
+    }
+    Value::Number(sum)
+}
+
+/// Interpret a list of numeric rows as a matrix of `f64`s (None if ragged/
+/// non-numeric/empty).
+fn as_matrix(rows: &[Value]) -> Option<Vec<Vec<f64>>> {
+    if rows.is_empty() {
+        return None;
+    }
+    rows.iter()
+        .map(|row| match row {
+            Value::Vector(r) if !r.is_empty() => r.iter().map(|e| e.as_number()).collect(),
+            _ => None,
+        })
+        .collect()
 }
 
 fn zip_map(a: &[Value], b: &[Value], op: BinOp) -> Vec<Value> {
