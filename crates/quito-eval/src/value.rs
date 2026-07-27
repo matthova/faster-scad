@@ -1,10 +1,10 @@
 //! Runtime values and their operational semantics.
 
-use quito_syntax::ast::{BinOp, Expr, Param, UnOp};
+use quito_syntax::ast::{BinOp, UnOp};
 use std::rc::Rc;
 
 /// A runtime value.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone)]
 pub enum Value {
     Undef,
     Bool(bool),
@@ -15,9 +15,31 @@ pub enum Value {
     Vector(Rc<Vec<Value>>),
     /// A numeric range `[start : step : end]`.
     Range { start: f64, step: f64, end: f64 },
-    /// An anonymous function value (parameters + body). Called via
-    /// dynamic scoping in M2; lexical capture is a later refinement.
-    Function(Rc<(Vec<Param>, Expr)>),
+    /// A function value: parameters, body, and the lexical environment it
+    /// closed over at definition time.
+    Function(Rc<crate::FnClosure>),
+}
+
+// Manual impls: `Function` captures a scope chain (with reference cycles), so
+// deriving Debug/PartialEq would recurse. Compare functions by identity.
+impl std::fmt::Debug for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Value::Undef => write!(f, "undef"),
+            Value::Bool(b) => write!(f, "{b}"),
+            Value::Number(n) => write!(f, "{n}"),
+            Value::Str(s) => write!(f, "{s:?}"),
+            Value::Vector(v) => f.debug_list().entries(v.iter()).finish(),
+            Value::Range { start, step, end } => write!(f, "[{start}:{step}:{end}]"),
+            Value::Function(_) => write!(f, "<function>"),
+        }
+    }
+}
+
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        value_eq(self, other)
+    }
 }
 
 /// Construct a list value from an owned `Vec`.

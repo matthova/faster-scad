@@ -1,9 +1,10 @@
 //! Tree-walk evaluator: AST -> CSG tree ([`quito_ir::Node`]).
 //!
-//! This is the M0 interpreter. It uses a dynamic scope stack (simple and
-//! correct enough for the M0 subset); lexical slot resolution, proper
-//! two-phase hoisting, and `$`-variable dynamic scoping with `children()`
-//! land in M2 alongside the echo oracle.
+//! Scoping matches OpenSCAD: ordinary variables, functions, and modules are
+//! lexically scoped (closures capture the scope chain at definition time),
+//! while `$` special variables are dynamically scoped (a separate frame stack
+//! that mirrors execution nesting). Function values and module `children()`
+//! both close over their definition / call-site environments.
 
 mod value;
 
@@ -26,23 +27,31 @@ fn err<T>(msg: impl Into<String>) -> EResult<T> {
     Err(EvalError(msg.into()))
 }
 
-#[derive(Clone)]
-struct FnDef {
+use std::cell::RefCell;
+use std::rc::Rc;
+
+type ScopeRef = Rc<RefCell<Scope>>;
+
+/// A function value: parameters, body, and the lexical environment (scope
+/// chain) captured at definition time.
+pub struct FnClosure {
     params: Vec<Param>,
     body: Expr,
+    env: Vec<ScopeRef>,
 }
 
-#[derive(Clone)]
-struct ModDef {
+/// A module definition with its captured lexical environment.
+struct ModClosure {
     params: Vec<Param>,
     body: Vec<Stmt>,
+    env: Vec<ScopeRef>,
 }
 
 #[derive(Default)]
 struct Scope {
     vars: HashMap<String, Value>,
-    funcs: HashMap<String, FnDef>,
-    modules: HashMap<String, ModDef>,
+    funcs: HashMap<String, Rc<FnClosure>>,
+    modules: HashMap<String, Rc<ModClosure>>,
 }
 
 /// The output of evaluating a program.
@@ -53,28 +62,36 @@ pub struct EvalOutput {
 }
 
 struct Interp {
-    scopes: Vec<Scope>,
+    /// Lexical scope chain (swapped to a closure's captured env during calls).
+    scopes: Vec<ScopeRef>,
+    /// Dynamic frames for `$` variables (mirrors execution nesting; NOT swapped
+    /// on calls, giving `$vars` dynamic scoping).
+    specials: Vec<HashMap<String, Value>>,
     echoes: Vec<String>,
     warnings: Vec<String>,
     root: Option<Node>,
     depth: usize,
-    /// Stack of the child statements passed at each active module call site,
-    /// so `children()` / `$children` inside a module body can reach them.
-    children_stack: Vec<Vec<Stmt>>,
+    /// For each active module call: the child statements plus the caller's
+    /// lexical scope chain, so `children()` evaluates them in the call site.
+    children_stack: Vec<(Vec<Stmt>, Vec<ScopeRef>)>,
 }
 
 /// Evaluate a parsed program into a CSG tree plus console output.
 pub fn eval_program(prog: &Program) -> EResult<EvalOutput> {
     let mut base = Scope::default();
     base.vars.insert("PI".into(), Value::Number(std::f64::consts::PI));
-    base.vars.insert("$fn".into(), Value::Number(0.0));
-    base.vars.insert("$fa".into(), Value::Number(12.0));
-    base.vars.insert("$fs".into(), Value::Number(2.0));
-    base.vars.insert("$t".into(), Value::Number(0.0));
-    base.vars.insert("$preview".into(), Value::Bool(true));
+
+    // `$` special variables live in the dynamic frame stack.
+    let mut globals = HashMap::new();
+    globals.insert("$fn".to_string(), Value::Number(0.0));
+    globals.insert("$fa".to_string(), Value::Number(12.0));
+    globals.insert("$fs".to_string(), Value::Number(2.0));
+    globals.insert("$t".to_string(), Value::Number(0.0));
+    globals.insert("$preview".to_string(), Value::Bool(true));
 
     let mut interp = Interp {
-        scopes: vec![base],
+        scopes: vec![Rc::new(RefCell::new(base))],
+        specials: vec![globals],
         echoes: Vec::new(),
         warnings: Vec::new(),
         root: None,
@@ -95,38 +112,57 @@ impl Interp {
     // ---- scope helpers -------------------------------------------------
 
     fn push_scope(&mut self) {
-        self.scopes.push(Scope::default());
+        self.scopes.push(Rc::new(RefCell::new(Scope::default())));
+        self.specials.push(HashMap::new());
     }
 
     fn pop_scope(&mut self) {
         self.scopes.pop();
+        self.specials.pop();
     }
 
     fn set_var(&mut self, name: &str, val: Value) {
-        self.scopes.last_mut().unwrap().vars.insert(name.to_string(), val);
+        if name.starts_with('$') {
+            self.specials.last_mut().unwrap().insert(name.to_string(), val);
+        } else {
+            self.scopes
+                .last()
+                .unwrap()
+                .borrow_mut()
+                .vars
+                .insert(name.to_string(), val);
+        }
     }
 
     fn lookup_var(&self, name: &str) -> Value {
-        for scope in self.scopes.iter().rev() {
-            if let Some(v) = scope.vars.get(name) {
-                return v.clone();
+        if name.starts_with('$') {
+            for frame in self.specials.iter().rev() {
+                if let Some(v) = frame.get(name) {
+                    return v.clone();
+                }
+            }
+        } else {
+            for scope in self.scopes.iter().rev() {
+                if let Some(v) = scope.borrow().vars.get(name) {
+                    return v.clone();
+                }
             }
         }
         Value::Undef
     }
 
-    fn lookup_func(&self, name: &str) -> Option<FnDef> {
+    fn lookup_func(&self, name: &str) -> Option<Rc<FnClosure>> {
         for scope in self.scopes.iter().rev() {
-            if let Some(f) = scope.funcs.get(name) {
+            if let Some(f) = scope.borrow().funcs.get(name) {
                 return Some(f.clone());
             }
         }
         None
     }
 
-    fn lookup_module(&self, name: &str) -> Option<ModDef> {
+    fn lookup_module(&self, name: &str) -> Option<Rc<ModClosure>> {
         for scope in self.scopes.iter().rev() {
-            if let Some(m) = scope.modules.get(name) {
+            if let Some(m) = scope.borrow().modules.get(name) {
                 return Some(m.clone());
             }
         }
@@ -136,25 +172,29 @@ impl Interp {
     // ---- statements ----------------------------------------------------
 
     fn eval_stmts(&mut self, stmts: &[Stmt]) -> EResult<Vec<Node>> {
-        // Phase 1: hoist definitions.
+        // Phase 1: hoist definitions, capturing the current lexical env.
         for s in stmts {
             match s {
                 Stmt::FunctionDef { name, params, body } => {
-                    self.scopes.last_mut().unwrap().funcs.insert(
+                    let env = self.scopes.clone();
+                    self.scopes.last().unwrap().borrow_mut().funcs.insert(
                         name.clone(),
-                        FnDef {
+                        Rc::new(FnClosure {
                             params: params.clone(),
                             body: body.clone(),
-                        },
+                            env,
+                        }),
                     );
                 }
                 Stmt::ModuleDef { name, params, body } => {
-                    self.scopes.last_mut().unwrap().modules.insert(
+                    let env = self.scopes.clone();
+                    self.scopes.last().unwrap().borrow_mut().modules.insert(
                         name.clone(),
-                        ModDef {
+                        Rc::new(ModClosure {
                             params: params.clone(),
                             body: body.clone(),
-                        },
+                            env,
+                        }),
                     );
                 }
                 _ => {}
@@ -298,56 +338,72 @@ impl Interp {
 
     fn instantiate_module(
         &mut self,
-        def: &ModDef,
+        def: &Rc<ModClosure>,
         args: &[Arg],
         children: &[Stmt],
     ) -> EResult<Node> {
+        // Arguments are evaluated in the caller's scope; the body runs in the
+        // module's captured (lexical) environment.
         let bound = self.bind_params(&def.params, args)?;
+        let caller_scopes = self.scopes.clone();
+        let saved = std::mem::replace(&mut self.scopes, def.env.clone());
         self.push_scope();
         for (k, v) in bound {
             self.set_var(&k, v);
         }
         self.set_var("$children", Value::Number(children.len() as f64));
-        self.children_stack.push(children.to_vec());
+        self.children_stack.push((children.to_vec(), caller_scopes));
         let r = self.eval_stmts(&def.body);
         self.children_stack.pop();
         self.pop_scope();
+        self.scopes = saved;
         Ok(Node::group(r?))
     }
 
-    /// `children()` / `children(i)` / `children([indices|range])`.
+    /// `children()` / `children(i)` / `children([indices|range])`. Children are
+    /// evaluated in the caller's lexical scope (where they were written).
     fn b_children(&mut self, args: &[Arg]) -> EResult<Node> {
-        let Some(kids) = self.children_stack.last().cloned() else {
+        let Some((kids, caller_scopes)) = self.children_stack.last().cloned() else {
             return Ok(Node::Empty);
         };
-        if args.is_empty() {
-            self.push_scope();
-            let r = self.eval_stmts(&kids);
-            self.pop_scope();
-            return Ok(Node::group(r?));
-        }
-        let sel = self.first_positional(args)?;
-        let idxs: Vec<usize> = match sel {
-            Value::Number(n) => vec![n as usize],
-            Value::Vector(ref v) => {
-                v.iter().filter_map(Value::as_number).map(|n| n as usize).collect()
-            }
-            Value::Range { .. } => iter_values(&sel)?
-                .iter()
-                .filter_map(Value::as_number)
-                .map(|n| n as usize)
-                .collect(),
-            _ => Vec::new(),
+        // The index selector is evaluated in the module's scope.
+        let idxs: Option<Vec<usize>> = if args.is_empty() {
+            None
+        } else {
+            let sel = self.first_positional(args)?;
+            Some(match sel {
+                Value::Number(n) => vec![n as usize],
+                Value::Vector(ref v) => {
+                    v.iter().filter_map(Value::as_number).map(|n| n as usize).collect()
+                }
+                Value::Range { .. } => iter_values(&sel)?
+                    .iter()
+                    .filter_map(Value::as_number)
+                    .map(|n| n as usize)
+                    .collect(),
+                _ => Vec::new(),
+            })
         };
-        let mut out = Vec::new();
+        // Evaluate the child geometry in the caller's lexical environment.
+        let saved = std::mem::replace(&mut self.scopes, caller_scopes);
         self.push_scope();
-        for i in idxs {
-            if let Some(stmt) = kids.get(i) {
-                out.extend(self.eval_geom(stmt)?);
+        let result = (|| -> EResult<Node> {
+            match idxs {
+                None => Ok(Node::group(self.eval_stmts(&kids)?)),
+                Some(idxs) => {
+                    let mut out = Vec::new();
+                    for i in idxs {
+                        if let Some(stmt) = kids.get(i) {
+                            out.extend(self.eval_geom(stmt)?);
+                        }
+                    }
+                    Ok(Node::group(out))
+                }
             }
-        }
+        })();
         self.pop_scope();
-        Ok(Node::group(out))
+        self.scopes = saved;
+        result
     }
 
     // ---- builtin modules ----------------------------------------------
@@ -640,10 +696,11 @@ impl Interp {
                 r
             }
             Expr::Call { name, args } => self.eval_call(name, args),
-            Expr::FunctionLiteral { params, body } => Ok(Value::Function(std::rc::Rc::new((
-                params.clone(),
-                (**body).clone(),
-            )))),
+            Expr::FunctionLiteral { params, body } => Ok(Value::Function(Rc::new(FnClosure {
+                params: params.clone(),
+                body: (**body).clone(),
+                env: self.scopes.clone(),
+            }))),
             Expr::CallValue { callee, args } => {
                 let c = self.eval_expr(callee)?;
                 if let Value::Function(f) = c {
@@ -655,18 +712,22 @@ impl Interp {
         }
     }
 
-    fn call_function(&mut self, f: &(Vec<Param>, Expr), args: &[Arg]) -> EResult<Value> {
+    /// Call a function closure: arguments are bound in the caller's scope, then
+    /// the body runs in the closure's captured lexical environment.
+    fn call_function(&mut self, f: &Rc<FnClosure>, args: &[Arg]) -> EResult<Value> {
         if self.depth >= MAX_CALL_DEPTH {
             return err("maximum call depth exceeded");
         }
-        let bound = self.bind_params(&f.0, args)?;
+        let bound = self.bind_params(&f.params, args)?;
         self.depth += 1;
+        let saved = std::mem::replace(&mut self.scopes, f.env.clone());
         self.push_scope();
         for (k, v) in bound {
             self.set_var(&k, v);
         }
-        let r = self.eval_expr(&f.1);
+        let r = self.eval_expr(&f.body);
         self.pop_scope();
+        self.scopes = saved;
         self.depth -= 1;
         r
     }
@@ -764,19 +825,7 @@ impl Interp {
     fn eval_call(&mut self, name: &str, args: &[Arg]) -> EResult<Value> {
         // User-defined function?
         if let Some(def) = self.lookup_func(name) {
-            if self.depth >= MAX_CALL_DEPTH {
-                return err("maximum call depth exceeded");
-            }
-            let bound = self.bind_params(&def.params, args)?;
-            self.depth += 1;
-            self.push_scope();
-            for (k, v) in bound {
-                self.set_var(&k, v);
-            }
-            let r = self.eval_expr(&def.body);
-            self.pop_scope();
-            self.depth -= 1;
-            return r;
+            return self.call_function(&def, args);
         }
         // A variable holding a function value?
         if let Value::Function(f) = self.lookup_var(name) {
@@ -1293,6 +1342,29 @@ mod tests {
         assert_eq!(
             echoes("h = function(n) n<=1 ? 1 : n*h(n-1); echo(h(5));"),
             vec!["ECHO: 120"]
+        );
+    }
+
+    #[test]
+    fn lexical_scoping() {
+        // A global function sees the global variable, not the caller's local.
+        assert_eq!(
+            echoes("a=10; function f()=a; module m(){a=20; echo(f(),a);} m();"),
+            vec!["ECHO: 10, 20"]
+        );
+        assert_eq!(
+            echoes("a=10; function g(x)=x+a; module n(a){echo(g(1));} n(99);"),
+            vec!["ECHO: 11"]
+        );
+        // A function literal closes over its defining scope.
+        assert_eq!(
+            echoes("x=5; lit=function() x; module m(){x=99; echo(lit());} m();"),
+            vec!["ECHO: 5"]
+        );
+        // `$` variables are dynamically scoped through module calls.
+        assert_eq!(
+            echoes("$fn=8; module r(){echo($fn);} module s(){$fn=16; r();} s(); r();"),
+            vec!["ECHO: 16", "ECHO: 8"]
         );
     }
 

@@ -8,19 +8,19 @@ are recorded here with a repro. Bug-for-bug fidelity is a non-goal.
 These are known gaps in the M0 walking skeleton, to be closed in later
 milestones (not permanent divergences unless noted):
 
-| # | Area | M0 behavior | Upstream | Milestone to close |
+| # | Area | Current behavior | Upstream | Milestone to close |
 |---|---|---|---|---|
-| 1 | Scoping | Dynamic scope stack; variable/`$`-var lookup walks the call stack. | Lexical slots for ordinary vars; dynamic scope for `$` vars. | M2 |
 | 2 | Assignment hoisting | Assignments in a scope are hoisted then evaluated in source order (last write wins). Handles the common `x=1; …; x=2;` case; does not yet resolve forward references the way a full pre-pass does. | Full "last assignment wins at first position" pre-pass with a lint. | M2 |
-| 3 | `children()` / `$children` | Not implemented; a call emits a warning and yields no geometry. | Full module children support. | M2 |
 | 5 | Modifiers `#` / `%` | Parsed and passed through (no visual distinction; geometry unchanged). | Highlight / transparent-background rendering. | M5 (viewer) |
 | 6 | Geometry breadth | Only `cube`/`sphere`/`cylinder` + `translate`/`rotate`/`scale` + booleans. No `polygon`/`polyhedron`/extrudes/`hull`/`minkowski`/`offset` yet. | Full primitive/transform set. | M3 |
 
-Closed since M0: echo number formatting now matches OpenSCAD exactly (`%.6g`
-with leading-zero-stripped exponents), verified by the echo oracle
-(`corpus/echo`, 10/10). List comprehensions (`for`/`if`/`let`/`each`, nested,
-2019.05 forms), string quoting in `echo`, `str`/`chr`/`ord`, and string
-indexing are implemented and oracle-checked.
+Closed since M0 (all oracle-checked, `corpus/echo` 16/16): echo number
+formatting (`%.6g`, stripped exponents); list comprehensions (`for`/`if`/`let`/
+`each`, nested, and the C-style 2019.05 `for(init;cond;update)` form); string
+quoting in `echo` + `str`/`chr`/`ord`/string-indexing; `search`/`lookup`/`is_*`;
+module `children()`/`$children`; function literals; **lexical scoping** for
+ordinary variables/functions/modules with dynamic scoping for `$` variables;
+and the `polyhedron` primitive.
 
 ## Permanent divergences (decided)
 
