@@ -1,0 +1,17 @@
+echo(1/3);
+echo(0.1+0.2);
+echo(1e10);
+echo(100000);
+echo(1000000);
+echo(-0.0001);
+echo(123.456789);
+echo(0);
+echo(-5);
+echo(3.0);
+echo(1/0);
+echo(-1/0);
+echo(0/0);
+echo(PI);
+echo(1234567);
+echo(0.000001234);
+echo(42);

@@ -1,0 +1,6 @@
+ECHO: "hello"
+ECHO: "x=5,y=true"
+ECHO: 5
+ECHO: "A", "a"
+ECHO: 65
+ECHO: ["a", "b", "c"]

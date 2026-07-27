@@ -7,6 +7,7 @@ members = [
     "crates/quito-geom",
     "crates/quito-cli",
     "crates/quito-wasm",
+    "xtask",
 ]
 
 [workspace.package]
