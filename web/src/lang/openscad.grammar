@@ -19,6 +19,8 @@
 statement {
   ";" |
   Block |
+  IncludeStatement |
+  UseStatement |
   ModuleDefinition |
   FunctionDefinition |
   Assignment |
@@ -28,6 +30,9 @@ statement {
 }
 
 Block { "{" statement* "}" }
+
+IncludeStatement { kw<"include"> IncludePath }
+UseStatement { kw<"use"> IncludePath }
 
 Assignment { VariableName "=" expression ";" }
 
@@ -141,6 +146,7 @@ kw<term> { @specialize[@name={term}]<identifier, term> }
 
   identifier { $[a-zA-Z_] $[a-zA-Z0-9_]* }
   SpecialVariableName { "$" $[a-zA-Z0-9_]+ }
+  IncludePath { "<" ![>\n]+ ">" }
 
   Number {
     (@digit+ ("." @digit*)? | "." @digit+) (("e" | "E") ("+" | "-")? @digit+)?
@@ -151,7 +157,7 @@ kw<term> { @specialize[@name={term}]<identifier, term> }
   "(" ")" "[" "]" "{" "}"
   "=" ";" "," ":" "." "/"
 
-  @precedence { BlockComment, LineComment, "/", Number, "." }
+  @precedence { BlockComment, LineComment, IncludePath, "/", "<", Number, "." }
 }
 
 @detectDelim

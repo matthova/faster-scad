@@ -188,6 +188,10 @@ pub enum Stmt {
     },
     /// A bare `{ ... }` block.
     Block(Vec<Stmt>),
+    /// `include <path>` — splice the file's top-level statements here.
+    Include { path: String },
+    /// `use <path>` — import only the file's module/function definitions.
+    Use { path: String },
 }
 
 /// A parsed program: a sequence of top-level statements.

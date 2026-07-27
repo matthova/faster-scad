@@ -62,9 +62,33 @@ fn echo_lines(s: &str) -> Vec<String> {
         .collect()
 }
 
-fn quito_echo(src: &str) -> Vec<String> {
-    match quito_syntax::parse(src) {
-        Ok(prog) => match quito_eval::eval_program(&prog) {
+struct DiskResolver;
+impl quito_eval::FileResolver for DiskResolver {
+    fn load(&self, path: &str, from_dir: &str) -> Option<quito_eval::LoadedFile> {
+        let p = Path::new(from_dir).join(path);
+        let source = fs::read_to_string(&p).ok()?;
+        let key = fs::canonicalize(&p)
+            .map(|c| c.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| p.to_string_lossy().into_owned());
+        let dir = p
+            .parent()
+            .map(|d| d.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        Some(quito_eval::LoadedFile { key, source, dir })
+    }
+}
+
+fn quito_echo(case: &Path) -> Vec<String> {
+    let src = match fs::read_to_string(case) {
+        Ok(s) => s,
+        Err(e) => return vec![format!("ERROR: read: {e}")],
+    };
+    let dir = case
+        .parent()
+        .map(|d| d.to_string_lossy().into_owned())
+        .unwrap_or_else(|| ".".into());
+    match quito_syntax::parse(&src) {
+        Ok(prog) => match quito_eval::eval_program_with(&prog, &DiskResolver, &dir) {
             Ok(out) => out.echoes,
             Err(e) => vec![format!("ERROR: {}", e.0)],
         },
@@ -105,8 +129,7 @@ fn check_echo(cases: &Path, goldens: &Path) -> bool {
         };
         total += 1;
         let expected: Vec<String> = golden.lines().map(|s| s.to_string()).collect();
-        let src = fs::read_to_string(&case).unwrap();
-        let actual = quito_echo(&src);
+        let actual = quito_echo(&case);
 
         if expected == actual {
             pass += 1;

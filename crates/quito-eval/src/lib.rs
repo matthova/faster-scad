@@ -12,7 +12,30 @@ pub use value::{format_number, Value};
 
 use quito_ir::{FragmentSpec, Node, Vec3};
 use quito_syntax::ast::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+
+/// A file loaded by an `include`/`use` resolver.
+pub struct LoadedFile {
+    /// A canonical key identifying the file (for cycle detection).
+    pub key: String,
+    pub source: String,
+    /// Directory of the loaded file (base for its own relative includes).
+    pub dir: String,
+}
+
+/// Resolves `include`/`use` paths to source. Native builds read from disk;
+/// the browser can supply an in-memory map.
+pub trait FileResolver {
+    fn load(&self, path: &str, from_dir: &str) -> Option<LoadedFile>;
+}
+
+/// A resolver that never finds anything (include/use become warnings).
+pub struct NullResolver;
+impl FileResolver for NullResolver {
+    fn load(&self, _path: &str, _from_dir: &str) -> Option<LoadedFile> {
+        None
+    }
+}
 
 const MAX_RANGE_ITERS: usize = 10_000_000;
 const MAX_CALL_DEPTH: usize = 20_000;
@@ -68,7 +91,7 @@ pub struct EvalOutput {
     pub warnings: Vec<String>,
 }
 
-struct Interp {
+struct Interp<'a> {
     /// Lexical scope chain (swapped to a closure's captured env during calls).
     scopes: Vec<ScopeRef>,
     /// Dynamic frames for `$` variables (mirrors execution nesting; NOT swapped
@@ -81,10 +104,27 @@ struct Interp {
     /// For each active module call: the child statements plus the caller's
     /// lexical scope chain, so `children()` evaluates them in the call site.
     children_stack: Vec<(Vec<Stmt>, Vec<ScopeRef>)>,
+    /// `include`/`use` file resolver.
+    resolver: &'a dyn FileResolver,
+    /// Directory of the file currently being evaluated (for relative includes).
+    cur_dir: String,
+    /// Files currently being loaded, for include/use cycle detection.
+    loading: HashSet<String>,
 }
 
-/// Evaluate a parsed program into a CSG tree plus console output.
+/// Evaluate a parsed program into a CSG tree plus console output (no file
+/// access; `include`/`use` become warnings).
 pub fn eval_program(prog: &Program) -> EResult<EvalOutput> {
+    eval_program_with(prog, &NullResolver, ".")
+}
+
+/// Evaluate a program with `include`/`use` support via `resolver`, resolving
+/// relative paths against `base_dir`.
+pub fn eval_program_with(
+    prog: &Program,
+    resolver: &dyn FileResolver,
+    base_dir: &str,
+) -> EResult<EvalOutput> {
     let mut base = Scope::default();
     base.vars.insert("PI".into(), Value::Number(std::f64::consts::PI));
 
@@ -104,6 +144,9 @@ pub fn eval_program(prog: &Program) -> EResult<EvalOutput> {
         root: None,
         depth: 0,
         children_stack: Vec::new(),
+        resolver,
+        cur_dir: base_dir.to_string(),
+        loading: HashSet::new(),
     };
 
     let nodes = interp.eval_stmts(prog)?;
@@ -115,7 +158,7 @@ pub fn eval_program(prog: &Program) -> EResult<EvalOutput> {
     })
 }
 
-impl Interp {
+impl Interp<'_> {
     // ---- scope helpers -------------------------------------------------
 
     fn push_scope(&mut self) {
@@ -179,7 +222,36 @@ impl Interp {
     // ---- statements ----------------------------------------------------
 
     fn eval_stmts(&mut self, stmts: &[Stmt]) -> EResult<Vec<Node>> {
-        // Phase 1: hoist definitions, capturing the current lexical env.
+        // Splice `include`d files in first (only when present, to avoid cloning).
+        let expanded;
+        let effective: &[Stmt] = if stmts.iter().any(|s| matches!(s, Stmt::Include { .. })) {
+            expanded = self.expand_includes(stmts)?;
+            &expanded
+        } else {
+            stmts
+        };
+
+        // Phases 1 (definitions + `use` imports) and 2 (assignments).
+        self.eval_defs_and_assigns(effective)?;
+
+        // Phase 3: geometry.
+        let mut out = Vec::new();
+        for s in effective {
+            match s {
+                Stmt::Assign { .. }
+                | Stmt::FunctionDef { .. }
+                | Stmt::ModuleDef { .. }
+                | Stmt::Use { .. }
+                | Stmt::Include { .. } => {}
+                _ => out.extend(self.eval_geom(s)?),
+            }
+        }
+        Ok(out)
+    }
+
+    /// Phase 1 (hoist definitions + process `use` imports) and phase 2 (hoist
+    /// assignments, last write wins) into the current scope.
+    fn eval_defs_and_assigns(&mut self, stmts: &[Stmt]) -> EResult<()> {
         for s in stmts {
             match s {
                 Stmt::FunctionDef { name, params, body } => {
@@ -204,25 +276,87 @@ impl Interp {
                         }),
                     );
                 }
+                Stmt::Use { path } => self.import_use(path)?,
                 _ => {}
             }
         }
-        // Phase 2: hoist assignments (source order, last write wins).
         for s in stmts {
             if let Stmt::Assign { name, value } = s {
                 let v = self.eval_expr(value)?;
                 self.set_var(name, v);
             }
         }
-        // Phase 3: geometry.
+        Ok(())
+    }
+
+    /// Recursively splice `include`d files' top-level statements in place.
+    fn expand_includes(&mut self, stmts: &[Stmt]) -> EResult<Vec<Stmt>> {
         let mut out = Vec::new();
         for s in stmts {
             match s {
-                Stmt::Assign { .. } | Stmt::FunctionDef { .. } | Stmt::ModuleDef { .. } => {}
-                _ => out.extend(self.eval_geom(s)?),
+                Stmt::Include { path } => {
+                    let Some(lf) = self.resolver.load(path, &self.cur_dir) else {
+                        self.warnings.push(format!("Can't open include file '{path}'"));
+                        continue;
+                    };
+                    if !self.loading.insert(lf.key.clone()) {
+                        continue; // cycle: already loading this file
+                    }
+                    let prog = quito_syntax::parse(&lf.source).map_err(|e| {
+                        EvalError(format!("in include '{path}': {}", e.message))
+                    })?;
+                    let prev = std::mem::replace(&mut self.cur_dir, lf.dir.clone());
+                    let expanded = self.expand_includes(&prog);
+                    self.cur_dir = prev;
+                    self.loading.remove(&lf.key);
+                    out.extend(expanded?);
+                }
+                other => out.push(other.clone()),
             }
         }
         Ok(out)
+    }
+
+    /// Import a `use`d file's module/function definitions (only) into the
+    /// current scope. The file is evaluated in isolation; its definitions close
+    /// over its own top-level scope so they can use its helpers/constants.
+    fn import_use(&mut self, path: &str) -> EResult<()> {
+        let Some(lf) = self.resolver.load(path, &self.cur_dir) else {
+            self.warnings.push(format!("Can't open 'use' file '{path}'"));
+            return Ok(());
+        };
+        if !self.loading.insert(lf.key.clone()) {
+            return Ok(()); // cycle
+        }
+        let prog = quito_syntax::parse(&lf.source)
+            .map_err(|e| EvalError(format!("in use '{path}': {}", e.message)))?;
+
+        let file_scope: ScopeRef = Rc::new(RefCell::new(Scope::default()));
+        let base = self.scopes[0].clone();
+        let saved = std::mem::replace(&mut self.scopes, vec![base, file_scope.clone()]);
+        let prev_dir = std::mem::replace(&mut self.cur_dir, lf.dir.clone());
+        self.specials.push(HashMap::new());
+
+        let expanded = self.expand_includes(&prog);
+        let result = expanded.and_then(|eff| self.eval_defs_and_assigns(&eff));
+
+        self.specials.pop();
+        self.cur_dir = prev_dir;
+        self.scopes = saved;
+        self.loading.remove(&lf.key);
+        result?;
+
+        // Import only the definitions.
+        let fs = file_scope.borrow();
+        let target = self.scopes.last().unwrap();
+        let mut t = target.borrow_mut();
+        for (k, v) in fs.funcs.iter() {
+            t.funcs.insert(k.clone(), v.clone());
+        }
+        for (k, v) in fs.modules.iter() {
+            t.modules.insert(k.clone(), v.clone());
+        }
+        Ok(())
     }
 
     fn eval_geom(&mut self, stmt: &Stmt) -> EResult<Vec<Node>> {
@@ -1402,6 +1536,37 @@ mod tests {
             echoes("h = function(n) n<=1 ? 1 : n*h(n-1); echo(h(5));"),
             vec!["ECHO: 120"]
         );
+    }
+
+    struct MapResolver(std::collections::HashMap<String, String>);
+    impl FileResolver for MapResolver {
+        fn load(&self, path: &str, _from: &str) -> Option<LoadedFile> {
+            self.0.get(path).map(|s| LoadedFile {
+                key: path.to_string(),
+                source: s.clone(),
+                dir: ".".to_string(),
+            })
+        }
+    }
+
+    #[test]
+    fn include_and_use() {
+        let mut files = std::collections::HashMap::new();
+        files.insert(
+            "lib.scad".to_string(),
+            "function sqr(x)=x*x; K=7; echo(\"libran\");".to_string(),
+        );
+        let resolver = MapResolver(files);
+
+        // `use` imports definitions only (no top-level echo, no variables).
+        let prog = quito_syntax::parse("use <lib.scad>\necho(sqr(5), is_undef(K));").unwrap();
+        let out = eval_program_with(&prog, &resolver, ".").unwrap();
+        assert_eq!(out.echoes, vec!["ECHO: 25, true"]);
+
+        // `include` splices everything (top-level echo runs; variables visible).
+        let prog = quito_syntax::parse("include <lib.scad>\necho(sqr(4), K);").unwrap();
+        let out = eval_program_with(&prog, &resolver, ".").unwrap();
+        assert_eq!(out.echoes, vec!["ECHO: \"libran\"", "ECHO: 16, 7"]);
     }
 
     #[test]

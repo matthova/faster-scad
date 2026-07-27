@@ -2,8 +2,35 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use std::path::PathBuf;
+use quito_eval::{FileResolver, LoadedFile};
+use std::path::{Path, PathBuf};
 use std::time::Instant;
+
+/// Resolves `include`/`use` paths from disk: relative to the including file,
+/// then each `OPENSCADPATH` library directory.
+struct DiskResolver {
+    libs: Vec<PathBuf>,
+}
+
+impl FileResolver for DiskResolver {
+    fn load(&self, path: &str, from_dir: &str) -> Option<LoadedFile> {
+        let candidates = std::iter::once(Path::new(from_dir).join(path))
+            .chain(self.libs.iter().map(|l| l.join(path)));
+        for c in candidates {
+            if let Ok(source) = std::fs::read_to_string(&c) {
+                let key = std::fs::canonicalize(&c)
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_else(|_| c.to_string_lossy().into_owned());
+                let dir = c
+                    .parent()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                return Some(LoadedFile { key, source, dir });
+            }
+        }
+        None
+    }
+}
 
 /// A fast OpenSCAD-compatible renderer (M0 subset).
 #[derive(Parser, Debug)]
@@ -42,8 +69,21 @@ fn main() -> Result<()> {
         anyhow::anyhow!("parse error at {:?}: {}", e.span, e.message)
     })?;
 
-    // Evaluate.
-    let out = quito_eval::eval_program(&program)
+    // Evaluate, resolving include/use relative to the input file + OPENSCADPATH.
+    let base_dir = cli
+        .input
+        .parent()
+        .map(|p| p.to_string_lossy().into_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| ".".to_string());
+    let libs = std::env::var("OPENSCADPATH")
+        .unwrap_or_default()
+        .split(':')
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .collect();
+    let resolver = DiskResolver { libs };
+    let out = quito_eval::eval_program_with(&program, &resolver, &base_dir)
         .map_err(|e| anyhow::anyhow!("evaluation error: {}", e.0))?;
 
     for line in &out.echoes {

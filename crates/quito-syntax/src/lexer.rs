@@ -62,6 +62,10 @@ pub enum Token {
     For,
     #[token("let")]
     Let,
+    #[token("include")]
+    Include,
+    #[token("use")]
+    Use,
 
     // identifiers (including `$special` variables)
     #[regex(r"\$?[A-Za-z_][A-Za-z0-9_]*", |lex| lex.slice().to_owned())]

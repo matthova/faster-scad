@@ -4,11 +4,11 @@ use crate::ast::*;
 use crate::lexer::{Spanned, Token};
 use crate::SyntaxError;
 
-pub struct Parser {
+pub struct Parser<'a> {
     tokens: Vec<Spanned>,
     pos: usize,
-    /// End of source, for EOF error spans.
-    eof: usize,
+    /// Source text, for reconstructing `<include paths>` and EOF spans.
+    src: &'a str,
 }
 
 type PResult<T> = Result<T, SyntaxError>;
@@ -21,12 +21,12 @@ fn describe(tok: Option<&Token>) -> String {
     }
 }
 
-impl Parser {
-    pub fn new(tokens: Vec<Spanned>, src_len: usize) -> Self {
+impl<'a> Parser<'a> {
+    pub fn new(tokens: Vec<Spanned>, src: &'a str) -> Self {
         Parser {
             tokens,
             pos: 0,
-            eof: src_len,
+            src,
         }
     }
 
@@ -42,7 +42,7 @@ impl Parser {
         self.tokens
             .get(self.pos)
             .map(|s| s.span.clone())
-            .unwrap_or(self.eof..self.eof)
+            .unwrap_or(self.src.len()..self.src.len())
     }
 
     fn at_end(&self) -> bool {
@@ -77,6 +77,36 @@ impl Parser {
         }
     }
 
+    /// Parse an `<include/use path>` by taking the raw source between the `<`
+    /// and the next `>` (paths aren't ordinary token sequences).
+    fn expect_angle_path(&mut self) -> PResult<String> {
+        let lt = self
+            .tokens
+            .get(self.pos)
+            .filter(|s| s.token == Token::Lt)
+            .ok_or_else(|| {
+                SyntaxError::new("expected `<` before include path".into(), self.span_here())
+            })?;
+        let start = lt.span.end;
+        self.pos += 1;
+        loop {
+            match self.tokens.get(self.pos) {
+                Some(s) if s.token == Token::Gt => {
+                    let path = self.src[start..s.span.start].trim().to_string();
+                    self.pos += 1;
+                    return Ok(path);
+                }
+                Some(_) => self.pos += 1,
+                None => {
+                    return Err(SyntaxError::new(
+                        "unterminated include path (missing `>`)".into(),
+                        self.span_here(),
+                    ))
+                }
+            }
+        }
+    }
+
     fn expect_ident(&mut self) -> PResult<String> {
         match self.advance() {
             Some(Token::Ident(name)) => Ok(name),
@@ -103,6 +133,16 @@ impl Parser {
     fn parse_statement(&mut self) -> PResult<Stmt> {
         match self.peek() {
             Some(Token::LBrace) => Ok(Stmt::Block(self.parse_block()?)),
+            Some(Token::Include) => {
+                self.advance();
+                let path = self.expect_angle_path()?;
+                Ok(Stmt::Include { path })
+            }
+            Some(Token::Use) => {
+                self.advance();
+                let path = self.expect_angle_path()?;
+                Ok(Stmt::Use { path })
+            }
             Some(Token::Module) => self.parse_module_def(),
             Some(Token::Function) => self.parse_function_def(),
             Some(Token::If) => self.parse_if(),

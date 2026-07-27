@@ -16,6 +16,8 @@ const parserWithMetadata = parser.configure({
     styleTags({
       "if else for each": t.controlKeyword,
       "module function let": t.definitionKeyword,
+      "include use": t.moduleKeyword,
+      IncludePath: t.string,
       "true false": t.bool,
       undef: t.null,
       Number: t.number,

@@ -26,7 +26,7 @@ impl SyntaxError {
 /// Parse a complete program from source.
 pub fn parse(src: &str) -> Result<Program, SyntaxError> {
     let tokens = lexer::lex(src)?;
-    let mut parser = parser::Parser::new(tokens, src.len());
+    let mut parser = parser::Parser::new(tokens, src);
     parser.parse_program()
 }
 

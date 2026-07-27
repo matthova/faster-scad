@@ -1,0 +1,1 @@
+ECHO: "use sqr:", 16, true
