@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "build:wasm": "wasm-pack build ../crates/quito-wasm --target web --out-dir ../web/engine --out-name quito",
+    "build:wasm": "wasm-pack build ../crates/quito-wasm --target web --out-dir ../../web/engine --out-name quito",
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview"
