@@ -52,10 +52,16 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
   try {
     res = render_with_files(source, names, values, fileNames, fileContents);
   } catch (err) {
+    // A wasm call-stack overflow (V8's limit) surfaces as a RangeError; give a
+    // human-readable hint instead of the raw engine message.
+    const raw = String(err);
+    const error = /call stack|RangeError/i.test(raw)
+      ? "recursion too deep (a non-tail-recursive function nested too far). Try an accumulator/tail-recursive form or reduce the depth."
+      : `engine error: ${raw}`;
     postMessage({
       seq,
       ok: false,
-      error: `engine panic: ${String(err)}`,
+      error,
       echo: "",
       warnings: "",
       positions: new Float32Array(0),
