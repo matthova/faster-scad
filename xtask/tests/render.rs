@@ -28,6 +28,39 @@ fn is_manifold(mesh: &quito_geom::Mesh) -> bool {
     edges.values().all(|&c| c == 2)
 }
 
+fn render_scad_src(src: &str, dir: &str) -> quito_geom::Mesh {
+    struct R(String);
+    impl quito_eval::FileResolver for R {
+        fn load(&self, path: &str, _from: &str) -> Option<quito_eval::LoadedFile> {
+            let p = std::path::Path::new(&self.0).join(path);
+            let source = std::fs::read_to_string(&p).ok()?;
+            Some(quito_eval::LoadedFile { key: p.to_string_lossy().into(), source, dir: self.0.clone() })
+        }
+    }
+    let prog = quito_syntax::parse(src).expect("parse");
+    let out = quito_eval::eval_program_with(&prog, &R(dir.to_string()), dir).expect("eval");
+    quito_geom::render(&out.node).expect("render")
+}
+
+/// The full parametric lamp *assembly* — hull, rotate_extrude (torus),
+/// linear_extrude, polyhedron, color, and nested differences (56 operations).
+/// Must render to a positive-volume solid comparable to OpenSCAD's Manifold
+/// backend (~36 in³; OpenSCAD's default CGAL backend actually crashes on it).
+#[test]
+fn renders_lamp_assembly() {
+    let src = std::fs::read_to_string(workspace_root().join("examples/lamp.scad"))
+        .expect("read lamp")
+        .replace("part = \"shade\"", "part = \"assembly\"");
+    let dir = workspace_root().to_string_lossy().into_owned();
+    let mesh = render_scad_src(&src, &dir);
+    assert!(mesh.tris.len() > 20_000, "unexpected tri count {}", mesh.tris.len());
+    assert!(
+        (mesh.volume() - 36.0).abs() < 2.0,
+        "assembly volume {} not ~36",
+        mesh.volume()
+    );
+}
+
 /// The draped/fluted dome lamp shade: a single analytic-surface polyhedron
 /// built with C-style-for comprehensions. Must render to a watertight,
 /// outward-facing mesh matching OpenSCAD (17408 triangles, volume ~13.596).
