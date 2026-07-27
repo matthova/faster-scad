@@ -4,7 +4,7 @@ A fast, greenfield reimplementation of the [OpenSCAD](https://openscad.org)
 language — same language spirit, a modern geometry kernel, one Rust core
 shipping to the browser (wasm) and desktop (Tauri).
 
-> **Status: M3 complete, M4 underway — full language + geometry + perf.**
+> **Status: M3 complete, M4 exit criteria met — full language + geometry + perf.**
 > M0 (native skeleton), M1 (playground + kernel bake-off) and M2 (full language)
 > are complete: BOSL2's function test suite passes **13/15 (87%)** and an echo
 > oracle (24/24) diffs the language against real OpenSCAD. M3 has added the 2D
@@ -82,24 +82,25 @@ same `.scad` files (`cargo build --release && cargo run -p xtask -- bench`):
 
 | model | quito | OpenSCAD (CGAL) | speed-up | OpenSCAD (Manifold) | speed-up |
 |---|--:|--:|--:|--:|--:|
-| lamp shade (analytic polyhedron) | 42 ms | 181 ms | **4.3×** | 177 ms | **4.3×** |
-| booleans (grid of holes in a slab) | 53 ms | 19,729 ms | **371×** | 167 ms | **3.1×** |
-| rounded (minkowski + hull) | 25 ms | 346 ms | **14×** | 56 ms | **2.3×** |
-| gears (extrude/revolve heavy) | 17 ms | 1,905 ms | **111×** | 61 ms | **3.5×** |
-| eval-bound (heavy compute, tiny mesh) | 455 ms | 513 ms | **1.1×** | 509 ms | **1.1×** |
+| lamp shade (analytic polyhedron) | 34 ms | 172 ms | **5.1×** | 180 ms | **5.3×** |
+| booleans (grid of holes in a slab) | 53 ms | 20,000 ms | **377×** | 172 ms | **3.2×** |
+| rounded (minkowski + hull) | 24 ms | 350 ms | **14×** | 52 ms | **2.1×** |
+| gears (extrude/revolve heavy) | 17 ms | 1,925 ms | **113×** | 60 ms | **3.5×** |
+| eval-bound (heavy compute, tiny mesh) | 138 ms | 517 ms | **3.8×** | 523 ms | **3.8×** |
 
-So Quito clears the **≥10× vs OpenSCAD 2021.01** goal (the 2021.01 renderer is
-CGAL, the left baseline) by a wide margin on geometry-heavy work, and is a solid
-**~3× ahead of OpenSCAD's newest Manifold backend** — while both baselines still
-pay process-startup overhead that dominates the smallest models, so these are
-conservative. Models live in [`benches/models/`](benches/models/).
+The **geometric mean across all five models is ~25× vs CGAL** (OpenSCAD
+2021.01's renderer) — clearing the ≥10× goal *including the eval-bound model* —
+and Quito stays **~3–5× ahead of OpenSCAD's newest Manifold backend**. Both
+baselines still pay process-startup overhead that dominates the smallest models,
+so these are conservative. Models live in [`benches/models/`](benches/models/).
 
-The **eval-bound** row is a deliberately published loss (per the project's
-losses-published policy): on a model that is nearly all interpretation and almost
-no geometry, Quito's tree-walk interpreter is only at parity with OpenSCAD's.
-Switching the interpreter's hot maps to a fast hasher took it from 0.9× to 1.1×;
-closing the rest of that gap is what the M4 **bytecode VM** is for (the tree-walk
-stays as its differential oracle).
+The **eval-bound** row — a model that is nearly all interpretation and almost no
+geometry — was a published loss until the M4 **bytecode VM** landed: function
+bodies now compile to slot-based bytecode (tail-calls become jumps), taking it
+from parity (1.1×) to **3.8×**. The tree-walk interpreter remains the reference
+semantics, the fallback for anything the VM doesn't compile (comprehensions,
+closures over locals, named-argument calls), and the differential oracle — so
+the VM only changes timing, never results (24/24 echo oracle unchanged).
 
 #### Warm-edit latency (M4 cache)
 

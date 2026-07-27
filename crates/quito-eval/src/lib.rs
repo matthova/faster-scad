@@ -7,6 +7,7 @@
 //! both close over their definition / call-site environments.
 
 mod value;
+mod vm;
 
 pub use value::{format_number, Value};
 
@@ -60,7 +61,7 @@ fn err<T>(msg: impl Into<String>) -> EResult<T> {
     Err(EvalError(msg.into()))
 }
 
-use std::cell::RefCell;
+use std::cell::{OnceCell, RefCell};
 use std::rc::Rc;
 
 type ScopeRef = Rc<RefCell<Scope>>;
@@ -71,6 +72,12 @@ pub struct FnClosure {
     params: Vec<Param>,
     body: Expr,
     env: Vec<ScopeRef>,
+    /// The defining name (for named `function` defs), used by the VM to detect
+    /// self-tail-calls. `None` for anonymous function literals.
+    name: Option<String>,
+    /// Lazily-compiled bytecode for the fast path; `Some(None)` means the body
+    /// isn't VM-compilable and the tree-walk is used. Computed on first call.
+    chunk: OnceCell<Option<Rc<vm::Chunk>>>,
 }
 
 /// Outcome of evaluating a function body in tail position.
@@ -272,6 +279,8 @@ impl Interp<'_> {
                             params: params.clone(),
                             body: body.clone(),
                             env,
+                            name: Some(name.clone()),
+                            chunk: OnceCell::new(),
                         }),
                     );
                 }
@@ -1115,6 +1124,8 @@ impl Interp<'_> {
                 params: params.clone(),
                 body: (**body).clone(),
                 env: self.scopes.clone(),
+                name: None,
+                chunk: OnceCell::new(),
             }))),
             Expr::CallValue { callee, args } => {
                 let c = self.eval_expr(callee)?;
@@ -1143,10 +1154,99 @@ impl Interp<'_> {
     /// reused in a loop instead of recursing, so accumulator-style recursion
     /// runs to arbitrary depth without overflowing the (small, on wasm) stack.
     fn call_function(&mut self, f: &Rc<FnClosure>, args: &[Arg]) -> EResult<Value> {
+        // Positional fast path for compiled functions: evaluate arguments
+        // straight into the VM's local frame, skipping the per-call binding map.
+        if args.iter().all(|a| a.name.is_none()) && args.len() <= f.params.len() {
+            if let Some(chunk) = f.chunk.get_or_init(|| vm::compile_fn(f).map(Rc::new)).clone() {
+                let mut locals = vec![Value::Undef; chunk.n_locals()];
+                // Defaults first (in caller scope), then positional overrides —
+                // matching `bind_params`' evaluation order.
+                for (i, p) in f.params.iter().enumerate() {
+                    if let Some(d) = &p.default {
+                        locals[i] = self.eval_expr(d)?;
+                    }
+                }
+                for (i, a) in args.iter().enumerate() {
+                    locals[i] = self.eval_expr(&a.value)?;
+                }
+                return self.run_chunk(f, chunk, locals);
+            }
+        }
+        let bound = self.bind_params(&f.params, args)?;
+        self.run_bound(f, bound)
+    }
+
+    /// Run a compiled chunk with a prepared local frame (depth guard + scope
+    /// swap to the closure's captured environment).
+    fn run_chunk(
+        &mut self,
+        f: &Rc<FnClosure>,
+        chunk: Rc<vm::Chunk>,
+        locals: Vec<Value>,
+    ) -> EResult<Value> {
         if self.depth >= MAX_CALL_DEPTH {
             return err("maximum call depth exceeded");
         }
-        let mut bound = self.bind_params(&f.params, args)?;
+        self.depth += 1;
+        let saved = std::mem::replace(&mut self.scopes, f.env.clone());
+        let r = vm::run(self, &chunk, locals, f);
+        self.scopes = saved;
+        self.depth -= 1;
+        r
+    }
+
+    /// Call a function with already-evaluated positional argument values
+    /// (used by the bytecode VM). Named args and defaults are handled by binding
+    /// positionally against the parameter list.
+    fn call_function_values(&mut self, f: &Rc<FnClosure>, argv: Vec<Value>) -> EResult<Value> {
+        let mut bound = FastMap::default();
+        for p in &f.params {
+            if let Some(d) = &p.default {
+                let v = self.eval_expr(d)?;
+                bound.insert(p.name.clone(), v);
+            }
+        }
+        for (i, v) in argv.into_iter().enumerate() {
+            if let Some(p) = f.params.get(i) {
+                bound.insert(p.name.clone(), v);
+            }
+        }
+        self.run_bound(f, bound)
+    }
+
+    /// Resolve a name to a user function / function-valued variable / builtin
+    /// and call it with pre-evaluated positional values (VM call path). Mirrors
+    /// [`Self::eval_call`] but with values instead of argument expressions.
+    fn call_named_values(&mut self, name: &str, argv: Vec<Value>) -> EResult<Value> {
+        if let Some(def) = self.lookup_func(name) {
+            return self.call_function_values(&def, argv);
+        }
+        if let Value::Function(f) = self.lookup_var(name) {
+            return self.call_function_values(&f, argv);
+        }
+        Ok(builtin_fn(name, &argv, &mut self.warnings))
+    }
+
+    /// Run a function whose parameters are already bound (by name → value),
+    /// dispatching to the bytecode VM when the body compiled, else the tree-walk
+    /// (which also handles tail-call elimination). Shared by all call paths.
+    fn run_bound(&mut self, f: &Rc<FnClosure>, mut bound: FastMap<String, Value>) -> EResult<Value> {
+        // Fast path: a compiled chunk uses slot-based locals (no per-call maps).
+        let compiled = f.chunk.get_or_init(|| vm::compile_fn(f).map(Rc::new)).clone();
+        if let Some(chunk) = compiled {
+            let mut locals = vec![Value::Undef; chunk.n_locals()];
+            for (i, p) in f.params.iter().enumerate() {
+                if let Some(v) = bound.remove(&p.name) {
+                    locals[i] = v;
+                }
+            }
+            return self.run_chunk(f, chunk, locals);
+        }
+
+        // Tree-walk fallback with self-tail-call elimination.
+        if self.depth >= MAX_CALL_DEPTH {
+            return err("maximum call depth exceeded");
+        }
         self.depth += 1;
         let mut iters = 0usize;
         let result = loop {
@@ -1885,6 +1985,85 @@ mod tests {
         assert_eq!(
             echoes("echo([for(i=[0:2], j=[0:2]) i*10+j]);"),
             vec!["ECHO: [0, 1, 2, 10, 11, 12, 20, 21, 22]"]
+        );
+    }
+
+    // The bytecode VM is a transparent fast path: these assert it produces the
+    // same results as the tree-walk across the constructs it compiles, and that
+    // unsupported constructs (comprehensions/closures in a body) fall back
+    // correctly.
+    #[test]
+    fn vm_recursion_and_tce() {
+        // Non-tail recursion (factorial).
+        assert_eq!(
+            echoes("function f(n)=n<2?1:n*f(n-1); echo(f(6));"),
+            vec!["ECHO: 720"]
+        );
+        // Tail-recursive accumulator to large depth must not overflow.
+        assert_eq!(
+            echoes("function s(n,a=0)=n==0?a:s(n-1,a+n); echo(s(100000));"),
+            vec!["ECHO: 5.00005e+9"]
+        );
+        // Mutual (non-self) recursion: g calls h and vice versa.
+        assert_eq!(
+            echoes(
+                "function h(n)=n==0?0:g(n-1); function g(n)=n==0?1:h(n-1); echo(g(7), h(7));"
+            ),
+            vec!["ECHO: 0, 1"]
+        );
+    }
+
+    #[test]
+    fn vm_let_shadowing_and_free_vars() {
+        // let bindings, sequential visibility, and shadowing a parameter.
+        assert_eq!(
+            echoes("function f(x)=let(a=x+1,b=a*2) let(x=b) x+a; echo(f(3));"),
+            vec!["ECHO: 12"] // a=4, b=8, inner x=8 -> 8+4
+        );
+        // A function reads a module-level (free) variable and a $ special.
+        assert_eq!(
+            echoes("K=10; function f(x)=x+K; echo(f(5));"),
+            vec!["ECHO: 15"]
+        );
+        assert_eq!(
+            echoes("$q=7; function f(x)=x+$q; echo(f(1));"),
+            vec!["ECHO: 8"]
+        );
+    }
+
+    #[test]
+    fn vm_vectors_ranges_index() {
+        assert_eq!(
+            echoes("function f(v)=v[0]+v.y+v[2]; echo(f([1,2,3]));"),
+            vec!["ECHO: 6"]
+        );
+        assert_eq!(
+            echoes("function mk(a,b)=[a,b,a+b]; echo(mk(2,3));"),
+            vec!["ECHO: [2, 3, 5]"]
+        );
+        // A range built inside a function, consumed by a comprehension outside.
+        assert_eq!(
+            echoes("function r(n)=[0:n]; echo([for(i=r(3)) i]);"),
+            vec!["ECHO: [0, 1, 2, 3]"]
+        );
+    }
+
+    #[test]
+    fn vm_falls_back_for_unsupported_bodies() {
+        // Comprehension in a function body: compiler bails, tree-walk handles it.
+        assert_eq!(
+            echoes("function sq(n)=[for(i=[1:n]) i*i]; echo(sq(4));"),
+            vec!["ECHO: [1, 4, 9, 16]"]
+        );
+        // A function literal captured inside a body: bail + correct closure.
+        assert_eq!(
+            echoes("function adder(k)=function(x) x+k; echo(adder(10)(5));"),
+            vec!["ECHO: 15"]
+        );
+        // Short-circuit && / || inside a compiled body.
+        assert_eq!(
+            echoes("function t(a,b)=a && b; echo(t(true,false), t(true,true));"),
+            vec!["ECHO: false, true"]
         );
     }
 
