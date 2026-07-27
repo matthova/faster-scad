@@ -518,9 +518,17 @@ impl<'a> Parser<'a> {
                 if self.eat(&Token::LParen) {
                     let args = self.parse_args()?;
                     self.expect(&Token::RParen)?;
-                    // `echo(...) expr` / `assert(...) expr` are expression prefixes.
-                    if (name == "echo" || name == "assert") && self.at_expr_start() {
-                        let body = Box::new(self.parse_expr()?);
+                    // `echo(...) expr` / `assert(...) expr` are expression
+                    // prefixes; a bare `assert(cond)` / `echo(...)` with no
+                    // trailing expression evaluates to `undef` (OpenSCAD does
+                    // this — BOSL2 relies on bare `assert(...)` in value
+                    // position, e.g. `x = assert(cond, msg);`).
+                    if name == "echo" || name == "assert" {
+                        let body = if self.at_expr_start() {
+                            Box::new(self.parse_expr()?)
+                        } else {
+                            Box::new(Expr::Undef)
+                        };
                         if name == "echo" {
                             Ok(Expr::Echo { args, body })
                         } else {

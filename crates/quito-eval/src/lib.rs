@@ -2368,6 +2368,18 @@ mod tests {
     }
 
     #[test]
+    fn bare_assert_is_undef_not_unknown_function() {
+        // `assert(cond)` in value position (no trailing expression) checks the
+        // condition and yields undef — BOSL2 relies on this. Must not warn.
+        let out = eval("y = assert(1 < 2, \"ok\"); echo(y);");
+        assert_eq!(out.echoes, vec!["ECHO: undef"]);
+        assert!(out.warnings.is_empty(), "unexpected warnings: {:?}", out.warnings);
+        // A failing bare assert still aborts.
+        let prog = parse("z = assert(1 > 2); echo(z);").unwrap();
+        assert!(eval_program(&prog).is_err(), "failing assert should error");
+    }
+
+    #[test]
     fn cross_2d_is_scalar_3d_is_vector() {
         // OpenSCAD: 2D cross -> scalar z, 3D cross -> vector, mismatch -> undef.
         assert_eq!(echoes("echo(cross([1,2],[3,4]));"), vec!["ECHO: -2"]);
