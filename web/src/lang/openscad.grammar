@@ -83,8 +83,21 @@ Vector { "[" listBody? "]" }
 
 listBody {
   RangePart |
-  commaSep<expression>
+  commaSep<ListElement>
 }
+
+ListElement {
+  ForComprehension |
+  IfComprehension |
+  EachComprehension |
+  expression
+}
+
+ForComprehension { kw<"for"> "(" bindingList ")" ListElement }
+IfComprehension {
+  kw<"if"> "(" expression ")" ListElement (!else kw<"else"> ListElement)?
+}
+EachComprehension { kw<"each"> expression }
 
 RangePart { expression ":" expression (":" expression)? }
 

@@ -442,12 +442,21 @@ impl Parser {
         })
     }
 
-    /// `[ ... ]` — either a vector literal or a range.
+    /// `[ ... ]` — an empty vector, a range, or a vector / list comprehension.
     fn parse_bracket(&mut self) -> PResult<Expr> {
         self.expect(&Token::LBracket)?;
         if self.eat(&Token::RBracket) {
             return Ok(Expr::Vector(Vec::new()));
         }
+
+        // A leading comprehension keyword means the whole bracket is a list of
+        // comprehension elements.
+        if self.at_list_keyword() {
+            let elems = self.parse_list_elements()?;
+            self.expect(&Token::RBracket)?;
+            return Ok(Expr::Vector(elems));
+        }
+
         let first = self.parse_expr()?;
         if self.eat(&Token::Colon) {
             // range: [start:end] or [start:step:end]
@@ -465,15 +474,70 @@ impl Parser {
                 end: Box::new(end),
             })
         } else {
-            let mut elems = vec![first];
+            let mut elems = vec![ListElem::Item(first)];
             while self.eat(&Token::Comma) {
                 if self.peek() == Some(&Token::RBracket) {
                     break;
                 }
-                elems.push(self.parse_expr()?);
+                elems.push(self.parse_list_element()?);
             }
             self.expect(&Token::RBracket)?;
             Ok(Expr::Vector(elems))
+        }
+    }
+
+    fn at_list_keyword(&self) -> bool {
+        matches!(self.peek(), Some(Token::For | Token::Let | Token::If))
+            || matches!(self.peek(), Some(Token::Ident(n)) if n == "each")
+    }
+
+    fn parse_list_elements(&mut self) -> PResult<Vec<ListElem>> {
+        let mut elems = vec![self.parse_list_element()?];
+        while self.eat(&Token::Comma) {
+            if self.peek() == Some(&Token::RBracket) {
+                break;
+            }
+            elems.push(self.parse_list_element()?);
+        }
+        Ok(elems)
+    }
+
+    fn parse_list_element(&mut self) -> PResult<ListElem> {
+        match self.peek() {
+            Some(Token::For) => {
+                self.advance();
+                self.expect(&Token::LParen)?;
+                let bindings = self.parse_bindings()?;
+                self.expect(&Token::RParen)?;
+                let body = Box::new(self.parse_list_element()?);
+                Ok(ListElem::For { bindings, body })
+            }
+            Some(Token::Let) => {
+                self.advance();
+                self.expect(&Token::LParen)?;
+                let bindings = self.parse_bindings()?;
+                self.expect(&Token::RParen)?;
+                let body = Box::new(self.parse_list_element()?);
+                Ok(ListElem::Let { bindings, body })
+            }
+            Some(Token::If) => {
+                self.advance();
+                self.expect(&Token::LParen)?;
+                let cond = self.parse_expr()?;
+                self.expect(&Token::RParen)?;
+                let then = Box::new(self.parse_list_element()?);
+                let els = if self.eat(&Token::Else) {
+                    Some(Box::new(self.parse_list_element()?))
+                } else {
+                    None
+                };
+                Ok(ListElem::If { cond, then, els })
+            }
+            Some(Token::Ident(n)) if n == "each" => {
+                self.advance();
+                Ok(ListElem::Each(self.parse_expr()?))
+            }
+            _ => Ok(ListElem::Item(self.parse_expr()?)),
         }
     }
 }

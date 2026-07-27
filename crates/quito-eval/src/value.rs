@@ -51,32 +51,55 @@ impl Value {
         }
     }
 
-    /// Format a value the way `echo` would (approximate; the exact 5-sig-digit
-    /// oracle formatting lands in M2 with the echo-oracle harness).
-    pub fn to_echo_string(&self) -> String {
+    /// The display representation used by `echo` and inside vectors: strings
+    /// are quoted, matching OpenSCAD.
+    pub fn repr(&self) -> String {
         match self {
             Value::Undef => "undef".to_string(),
             Value::Bool(b) => b.to_string(),
             Value::Number(n) => format_number(*n),
-            Value::Str(s) => s.clone(),
+            Value::Str(s) => format!("\"{}\"", escape_string(s)),
             Value::Vector(v) => {
-                let parts: Vec<String> = v.iter().map(|e| e.to_echo_string()).collect();
+                let parts: Vec<String> = v.iter().map(|e| e.repr()).collect();
                 format!("[{}]", parts.join(", "))
             }
-            Value::Range { start, step, end } => {
-                format!(
-                    "[{} : {} : {}]",
-                    format_number(*start),
-                    format_number(*step),
-                    format_number(*end)
-                )
-            }
+            Value::Range { start, step, end } => format!(
+                "[{} : {} : {}]",
+                format_number(*start),
+                format_number(*step),
+                format_number(*end)
+            ),
+        }
+    }
+
+    /// The `str()` representation: a top-level string is emitted raw (no
+    /// quotes); everything else uses [`Value::repr`] (so vector elements are
+    /// still quoted).
+    pub fn to_str(&self) -> String {
+        match self {
+            Value::Str(s) => s.clone(),
+            other => other.repr(),
         }
     }
 }
 
-/// Format a number roughly like OpenSCAD (up to 6 significant digits, no
-/// trailing zeros, `inf`/`nan` spelled out).
+fn escape_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\t' => out.push_str("\\t"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Format a number like OpenSCAD: C `%.6g` (6 significant digits), but with the
+/// exponent written without leading zeros (`1e+6`, `1.234e-6`).
 pub fn format_number(n: f64) -> String {
     if n.is_nan() {
         return "nan".to_string();
@@ -87,15 +110,37 @@ pub fn format_number(n: f64) -> String {
     if n == 0.0 {
         return "0".to_string();
     }
-    let s = format!("{:.6}", n);
-    // trim to significant form
-    let g = format!("{}", n);
-    // Prefer the shorter of the plain and fixed representations that round-trips.
-    if g.parse::<f64>() == Ok(n) && g.len() <= s.len() {
-        g
+
+    const P: i32 = 6;
+    // Reliable base-10 exponent via Rust's scientific formatter.
+    let sci = format!("{:e}", n);
+    let exp: i32 = sci
+        .split('e')
+        .nth(1)
+        .and_then(|e| e.parse().ok())
+        .unwrap_or(0);
+
+    if exp < -4 || exp >= P {
+        // scientific, P-1 fractional mantissa digits, trailing zeros trimmed
+        let s = format!("{:.*e}", (P - 1) as usize, n);
+        let (mant, e) = s.split_once('e').unwrap();
+        let mant = trim_frac(mant);
+        let exp_num: i32 = e.parse().unwrap_or(0);
+        let sign = if exp_num < 0 { "-" } else { "+" };
+        format!("{mant}e{sign}{}", exp_num.abs())
     } else {
-        let trimmed = s.trim_end_matches('0').trim_end_matches('.');
-        trimmed.to_string()
+        let decimals = (P - 1 - exp).max(0) as usize;
+        let s = format!("{n:.decimals$}");
+        trim_frac(&s).to_string()
+    }
+}
+
+/// Trim trailing zeros (and a trailing dot) from a decimal mantissa.
+fn trim_frac(s: &str) -> String {
+    if s.contains('.') {
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    } else {
+        s.to_string()
     }
 }
 

@@ -420,8 +420,8 @@ impl Interp {
         for a in args {
             let v = self.eval_expr(&a.value)?;
             match &a.name {
-                Some(n) => parts.push(format!("{} = {}", n, v.to_echo_string())),
-                None => parts.push(v.to_echo_string()),
+                Some(n) => parts.push(format!("{} = {}", n, v.repr())),
+                None => parts.push(v.repr()),
             }
         }
         self.echoes.push(format!("ECHO: {}", parts.join(", ")));
@@ -439,7 +439,7 @@ impl Interp {
                 .nth(1)
                 .map(|a| self.eval_expr(&a.value))
                 .transpose()?
-                .map(|v| v.to_echo_string())
+                .map(|v| v.to_str())
                 .unwrap_or_default();
             return err(format!("Assertion failed: {msg}"));
         }
@@ -517,7 +517,7 @@ impl Interp {
             Expr::Vector(elems) => {
                 let mut out = Vec::with_capacity(elems.len());
                 for e in elems {
-                    out.push(self.eval_expr(e)?);
+                    self.eval_list_elem(e, &mut out)?;
                 }
                 Ok(Value::Vector(out))
             }
@@ -579,6 +579,65 @@ impl Interp {
         }
     }
 
+    fn eval_list_elem(&mut self, el: &ListElem, out: &mut Vec<Value>) -> EResult<()> {
+        match el {
+            ListElem::Item(e) => {
+                out.push(self.eval_expr(e)?);
+            }
+            ListElem::Each(e) => {
+                let v = self.eval_expr(e)?;
+                match v {
+                    Value::Vector(xs) => out.extend(xs),
+                    Value::Range { .. } => out.extend(iter_values(&v)?),
+                    Value::Undef => {}
+                    other => out.push(other),
+                }
+            }
+            ListElem::For { bindings, body } => {
+                self.lc_for_rec(bindings, body, out)?;
+            }
+            ListElem::Let { bindings, body } => {
+                self.push_scope();
+                for (n, e) in bindings {
+                    let val = self.eval_expr(e)?;
+                    self.set_var(n, val);
+                }
+                let r = self.eval_list_elem(body, out);
+                self.pop_scope();
+                r?;
+            }
+            ListElem::If { cond, then, els } => {
+                if self.eval_expr(cond)?.truthy() {
+                    self.eval_list_elem(then, out)?;
+                } else if let Some(e) = els {
+                    self.eval_list_elem(e, out)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn lc_for_rec(
+        &mut self,
+        bindings: &[(String, Expr)],
+        body: &ListElem,
+        out: &mut Vec<Value>,
+    ) -> EResult<()> {
+        if bindings.is_empty() {
+            return self.eval_list_elem(body, out);
+        }
+        let (name, expr) = &bindings[0];
+        let vals = iter_values(&self.eval_expr(expr)?)?;
+        for v in vals {
+            self.push_scope();
+            self.set_var(name, v);
+            let r = self.lc_for_rec(&bindings[1..], body, out);
+            self.pop_scope();
+            r?;
+        }
+        Ok(())
+    }
+
     fn eval_call(&mut self, name: &str, args: &[Arg]) -> EResult<Value> {
         // User-defined function?
         if let Some(def) = self.lookup_func(name) {
@@ -632,7 +691,53 @@ fn index_value(base: &Value, index: &Value) -> Value {
                 Value::Undef
             }
         }
+        (Value::Str(s), Value::Number(n)) => {
+            let i = *n as isize;
+            if i >= 0 {
+                s.chars()
+                    .nth(i as usize)
+                    .map(|c| Value::Str(c.to_string()))
+                    .unwrap_or(Value::Undef)
+            } else {
+                Value::Undef
+            }
+        }
         _ => Value::Undef,
+    }
+}
+
+/// `chr()` — turn code point(s) into a string.
+fn chr(args: &[Value]) -> Value {
+    fn one(n: f64) -> String {
+        u32::try_from(n as i64)
+            .ok()
+            .and_then(char::from_u32)
+            .map(|c| c.to_string())
+            .unwrap_or_default()
+    }
+    match args.first() {
+        Some(Value::Number(n)) => Value::Str(one(*n)),
+        Some(Value::Vector(v)) => {
+            let mut s = String::new();
+            for e in v {
+                if let Some(n) = e.as_number() {
+                    s.push_str(&one(n));
+                }
+            }
+            Value::Str(s)
+        }
+        Some(r @ Value::Range { .. }) => {
+            let mut s = String::new();
+            if let Ok(vals) = iter_values(r) {
+                for e in vals {
+                    if let Some(n) = e.as_number() {
+                        s.push_str(&one(n));
+                    }
+                }
+            }
+            Value::Str(s)
+        }
+        _ => Value::Str(String::new()),
     }
 }
 
@@ -682,7 +787,15 @@ fn builtin_fn(name: &str, args: &[Value], warnings: &mut Vec<String>) -> Value {
 
     match name {
         "abs" => one(f64::abs),
-        "sign" => one(f64::signum),
+        "sign" => one(|x| {
+            if x > 0.0 {
+                1.0
+            } else if x < 0.0 {
+                -1.0
+            } else {
+                0.0
+            }
+        }),
         "floor" => one(f64::floor),
         "ceil" => one(f64::ceil),
         "round" => one(f64::round),
@@ -732,10 +845,18 @@ fn builtin_fn(name: &str, args: &[Value], warnings: &mut Vec<String>) -> Value {
         "str" => {
             let mut s = String::new();
             for a in args {
-                s.push_str(&a.to_echo_string());
+                s.push_str(&a.to_str());
             }
             Value::Str(s)
         }
+        "chr" => chr(args),
+        "ord" => match args.first() {
+            Some(Value::Str(s)) => match s.chars().next() {
+                Some(c) => Value::Number(c as u32 as f64),
+                None => Value::Undef,
+            },
+            _ => Value::Undef,
+        },
         _ => {
             warnings.push(format!("Ignoring unknown function '{name}'"));
             Value::Undef
@@ -826,7 +947,7 @@ mod tests {
     #[test]
     fn echo_collected() {
         let out = eval("echo(\"hello\", 1 + 2);");
-        assert_eq!(out.echoes, vec!["ECHO: hello, 3".to_string()]);
+        assert_eq!(out.echoes, vec!["ECHO: \"hello\", 3".to_string()]);
     }
 
     #[test]
@@ -853,6 +974,40 @@ mod tests {
             }
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    fn echoes(src: &str) -> Vec<String> {
+        eval(src).echoes
+    }
+
+    #[test]
+    fn comprehensions() {
+        assert_eq!(echoes("echo([for(i=[0:4]) i*i]);"), vec!["ECHO: [0, 1, 4, 9, 16]"]);
+        assert_eq!(echoes("echo([for(i=[0:5]) if(i%2==0) i]);"), vec!["ECHO: [0, 2, 4]"]);
+        assert_eq!(echoes("echo([for(i=[1:3]) let(sq=i*i) sq]);"), vec!["ECHO: [1, 4, 9]"]);
+        assert_eq!(echoes("echo([each [1,2], each [3,4]]);"), vec!["ECHO: [1, 2, 3, 4]"]);
+        assert_eq!(
+            echoes("echo([for(i=[0:2], j=[0:2]) i*10+j]);"),
+            vec!["ECHO: [0, 1, 2, 10, 11, 12, 20, 21, 22]"]
+        );
+    }
+
+    #[test]
+    fn string_repr_and_builtins() {
+        assert_eq!(echoes("echo(\"hi\");"), vec!["ECHO: \"hi\""]);
+        assert_eq!(echoes("echo(chr(65), ord(\"A\"));"), vec!["ECHO: \"A\", 65"]);
+        assert_eq!(echoes("echo(str(\"n=\", 5, true));"), vec!["ECHO: \"n=5true\""]);
+        assert_eq!(echoes("echo([\"a\", \"b\"]);"), vec!["ECHO: [\"a\", \"b\"]"]);
+        assert_eq!(echoes("s=\"abc\"; echo(s[1]);"), vec!["ECHO: \"b\""]);
+    }
+
+    #[test]
+    fn number_formatting() {
+        assert_eq!(
+            echoes("echo(1/3, 1e10, 1000000, 3.0, 0);"),
+            vec!["ECHO: 0.333333, 1e+10, 1e+6, 3, 0"]
+        );
+        assert_eq!(echoes("echo(sign(-4), sign(0), sign(4));"), vec!["ECHO: -1, 0, 1"]);
     }
 
     #[test]

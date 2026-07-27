@@ -35,8 +35,9 @@ pub enum Expr {
     Undef,
     /// A variable reference.
     Ident(String),
-    /// `[a, b, c]`
-    Vector(Vec<Expr>),
+    /// `[a, b, c]` — also the surface for list comprehensions, whose elements
+    /// are [`ListElem`]s (a plain expression is `ListElem::Item`).
+    Vector(Vec<ListElem>),
     /// `[start : end]` or `[start : step : end]`
     Range {
         start: Box<Expr>,
@@ -77,6 +78,31 @@ pub enum Expr {
     Let {
         bindings: Vec<(String, Expr)>,
         body: Box<Expr>,
+    },
+}
+
+/// An element of a vector / list comprehension.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ListElem {
+    /// A plain expression element.
+    Item(Expr),
+    /// `each expr` — splice a list's elements in place.
+    Each(Expr),
+    /// `for (bindings) body`
+    For {
+        bindings: Vec<(String, Expr)>,
+        body: Box<ListElem>,
+    },
+    /// `if (cond) then [else els]`
+    If {
+        cond: Expr,
+        then: Box<ListElem>,
+        els: Option<Box<ListElem>>,
+    },
+    /// `let (bindings) body`
+    Let {
+        bindings: Vec<(String, Expr)>,
+        body: Box<ListElem>,
     },
 }
 

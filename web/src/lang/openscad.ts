@@ -14,7 +14,7 @@ import { parser } from "./openscad.grammar";
 const parserWithMetadata = parser.configure({
   props: [
     styleTags({
-      "if else for": t.controlKeyword,
+      "if else for each": t.controlKeyword,
       "module function let": t.definitionKeyword,
       "true false": t.bool,
       undef: t.null,

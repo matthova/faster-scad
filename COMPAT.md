@@ -13,9 +13,20 @@ milestones (not permanent divergences unless noted):
 | 1 | Scoping | Dynamic scope stack; variable/`$`-var lookup walks the call stack. | Lexical slots for ordinary vars; dynamic scope for `$` vars. | M2 |
 | 2 | Assignment hoisting | Assignments in a scope are hoisted then evaluated in source order (last write wins). Handles the common `x=1; …; x=2;` case; does not yet resolve forward references the way a full pre-pass does. | Full "last assignment wins at first position" pre-pass with a lint. | M2 |
 | 3 | `children()` / `$children` | Not implemented; a call emits a warning and yields no geometry. | Full module children support. | M2 |
-| 4 | echo number formatting | Approximate (round-trip shortest / 6-figure). | Exact 5-significant-digit formatting. | M2 (echo oracle) |
 | 5 | Modifiers `#` / `%` | Parsed and passed through (no visual distinction; geometry unchanged). | Highlight / transparent-background rendering. | M5 (viewer) |
 | 6 | Geometry breadth | Only `cube`/`sphere`/`cylinder` + `translate`/`rotate`/`scale` + booleans. No `polygon`/`polyhedron`/extrudes/`hull`/`minkowski`/`offset` yet. | Full primitive/transform set. | M3 |
+
+Closed since M0: echo number formatting now matches OpenSCAD exactly (`%.6g`
+with leading-zero-stripped exponents), verified by the echo oracle
+(`corpus/echo`, 10/10). List comprehensions (`for`/`if`/`let`/`each`, nested,
+2019.05 forms), string quoting in `echo`, `str`/`chr`/`ord`, and string
+indexing are implemented and oracle-checked.
+
+## Permanent divergences (decided)
+
+| Area | Quito | OpenSCAD | Rationale |
+|---|---|---|---|
+| Reversed ranges | `[5:0]` (or `[1:0]`) iterates empty; echoes as written, e.g. `[1 : 1 : 0]`. | Silently swaps bounds: `[1:0]` iterates `0,1` and echoes `[0 : 1 : 1]`. | The upstream swap is a well-known footgun. Quito treats a range whose direction contradicts its step as empty — predictable and matches the plan's "saner reversed-range handling." |
 
 ## Candidate intentional cleanups (from the plan, not yet decided)
 
