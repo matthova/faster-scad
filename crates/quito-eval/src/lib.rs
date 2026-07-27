@@ -1199,6 +1199,8 @@ fn chr(args: &[Value]) -> Value {
 fn iter_values(v: &Value) -> EResult<Vec<Value>> {
     match v {
         Value::Vector(xs) => Ok(xs.to_vec()),
+        // Iterating a string yields its characters (OpenSCAD semantics).
+        Value::Str(s) => Ok(s.chars().map(|c| Value::Str(c.to_string())).collect()),
         Value::Range { start, step, end } => {
             let mut out = Vec::new();
             let (start, step, end) = (*start, *step, *end);
