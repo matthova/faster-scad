@@ -458,6 +458,11 @@ impl Interp<'_> {
             "sphere" => self.b_sphere(args),
             "cylinder" => self.b_cylinder(args),
             "polyhedron" => self.b_polyhedron(args),
+            "square" => self.b_square(args),
+            "circle" => self.b_circle(args),
+            "polygon" => self.b_polygon(args),
+            "linear_extrude" => self.b_linear_extrude(args, children),
+            "rotate_extrude" => self.b_rotate_extrude(args, children),
             "translate" => self.transform(args, children, TransformKind::Translate),
             "rotate" => self.transform(args, children, TransformKind::Rotate),
             "scale" => self.transform(args, children, TransformKind::Scale),
@@ -632,6 +637,118 @@ impl Interp<'_> {
             _ => Vec::new(),
         };
         Ok(Node::Polyhedron { points, faces })
+    }
+
+    fn b_square(&mut self, args: &[Arg]) -> EResult<Node> {
+        let m = self.bind_named(&["size", "center"], args)?;
+        let size = match m.get("size") {
+            Some(Value::Number(n)) => [*n, *n],
+            Some(Value::Vector(v)) => {
+                let g = |i: usize| v.get(i).and_then(Value::as_number).unwrap_or(0.0);
+                [g(0), g(1)]
+            }
+            _ => [1.0, 1.0],
+        };
+        let center = m.get("center").map(Value::truthy).unwrap_or(false);
+        Ok(Node::Square { size, center })
+    }
+
+    fn b_circle(&mut self, args: &[Arg]) -> EResult<Node> {
+        let m = self.bind_named(&["r"], args)?;
+        let r = if let Some(d) = m.get("d").and_then(Value::as_number) {
+            d / 2.0
+        } else {
+            m.get("r").and_then(Value::as_number).unwrap_or(1.0)
+        };
+        Ok(Node::Circle {
+            r,
+            frags: self.frag_spec(&m),
+        })
+    }
+
+    fn b_polygon(&mut self, args: &[Arg]) -> EResult<Node> {
+        let m = self.bind_named(&["points", "paths"], args)?;
+        let points: Vec<[f64; 2]> = match m.get("points") {
+            Some(Value::Vector(v)) => v
+                .iter()
+                .map(|p| {
+                    if let Value::Vector(c) = p {
+                        let g = |i: usize| c.get(i).and_then(Value::as_number).unwrap_or(0.0);
+                        [g(0), g(1)]
+                    } else {
+                        [0.0, 0.0]
+                    }
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        let paths = match m.get("paths") {
+            Some(Value::Vector(v)) => Some(
+                v.iter()
+                    .map(|p| match p {
+                        Value::Vector(idx) => idx
+                            .iter()
+                            .filter_map(Value::as_number)
+                            .map(|n| n as u32)
+                            .collect(),
+                        _ => Vec::new(),
+                    })
+                    .collect(),
+            ),
+            _ => None,
+        };
+        Ok(Node::Polygon { points, paths })
+    }
+
+    fn b_linear_extrude(&mut self, args: &[Arg], children: &[Stmt]) -> EResult<Node> {
+        let m = self.bind_named(&["height"], args)?;
+        let height = m
+            .get("height")
+            .or_else(|| m.get("h"))
+            .and_then(Value::as_number)
+            .unwrap_or(100.0);
+        let center = m.get("center").map(Value::truthy).unwrap_or(false);
+        let twist = m.get("twist").and_then(Value::as_number).unwrap_or(0.0);
+        let scale = match m.get("scale") {
+            Some(Value::Number(n)) => [*n, *n],
+            Some(Value::Vector(v)) => {
+                let g = |i: usize| v.get(i).and_then(Value::as_number).unwrap_or(1.0);
+                [g(0), g(1)]
+            }
+            _ => [1.0, 1.0],
+        };
+        let slices = m
+            .get("slices")
+            .and_then(Value::as_number)
+            .map(|s| s as u32)
+            .unwrap_or_else(|| {
+                if twist == 0.0 {
+                    1
+                } else {
+                    (twist.abs() / 15.0).ceil().max(1.0) as u32
+                }
+            })
+            .max(1);
+        let child = Box::new(Node::group(self.eval_children(children)?));
+        Ok(Node::LinearExtrude {
+            height,
+            center,
+            twist,
+            scale,
+            slices,
+            child,
+        })
+    }
+
+    fn b_rotate_extrude(&mut self, args: &[Arg], children: &[Stmt]) -> EResult<Node> {
+        let m = self.bind_named(&["angle"], args)?;
+        let angle = m.get("angle").and_then(Value::as_number).unwrap_or(360.0);
+        let child = Box::new(Node::group(self.eval_children(children)?));
+        Ok(Node::RotateExtrude {
+            angle,
+            frags: self.frag_spec(&m),
+            child,
+        })
     }
 
     /// Resolve the fragment spec from call-site `$fn/$fa/$fs` args, falling back

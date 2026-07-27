@@ -6,6 +6,7 @@
 //! canonicalization (n-ary union flattening, transform folding) arrive in M3/M4.
 
 pub type Vec3 = [f64; 3];
+pub type Vec2 = [f64; 2];
 
 /// The `$fn` / `$fa` / `$fs` values in effect when a curved primitive was
 /// instantiated. The concrete fragment count is derived from these plus the
@@ -56,6 +57,40 @@ pub enum Node {
     Polyhedron {
         points: Vec<Vec3>,
         faces: Vec<Vec<u32>>,
+    },
+
+    // --- 2D primitives (produce a set of contours, not a mesh) ---
+    Square {
+        size: Vec2,
+        center: bool,
+    },
+    Circle {
+        r: f64,
+        frags: FragmentSpec,
+    },
+    Polygon {
+        points: Vec<Vec2>,
+        /// Optional contour index lists; when absent, all points form one path.
+        paths: Option<Vec<Vec<u32>>>,
+    },
+
+    // --- 2D -> 3D operations ---
+    LinearExtrude {
+        height: f64,
+        center: bool,
+        /// Total twist in degrees over the height.
+        twist: f64,
+        /// Scale of the top relative to the bottom.
+        scale: Vec2,
+        /// Number of intermediate layers (>=1).
+        slices: u32,
+        child: Box<Node>,
+    },
+    RotateExtrude {
+        /// Sweep angle in degrees (360 = full revolution).
+        angle: f64,
+        frags: FragmentSpec,
+        child: Box<Node>,
     },
 
     // --- transforms ---

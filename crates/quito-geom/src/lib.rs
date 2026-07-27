@@ -3,6 +3,7 @@
 
 mod kernel;
 mod mesh;
+mod shape2d;
 mod tessellate;
 
 pub use kernel::{BoolmeshKernel, Kernel};
@@ -49,6 +50,29 @@ pub fn render_with(node: &Node, kernel: &dyn Kernel) -> Result<Mesh, GeomError> 
             frags,
         } => Ok(cylinder(*h, *r1, *r2, *center, *frags)),
         Node::Polyhedron { points, faces } => Ok(polyhedron(points, faces)),
+
+        // 2D shapes rendered as a flat mesh at z=0.
+        Node::Square { .. } | Node::Circle { .. } | Node::Polygon { .. } => {
+            Ok(shape2d::flat_mesh(&shape2d::render2d(node)))
+        }
+        Node::LinearExtrude {
+            height,
+            center,
+            twist,
+            scale,
+            slices,
+            child,
+        } => Ok(shape2d::linear_extrude(
+            &shape2d::render2d(child),
+            *height,
+            *center,
+            *twist,
+            *scale,
+            *slices,
+        )),
+        Node::RotateExtrude { angle, frags, child } => {
+            Ok(shape2d::rotate_extrude(&shape2d::render2d(child), *angle, *frags))
+        }
 
         Node::Group(children) => {
             let meshes = render_all(children, kernel)?;
@@ -187,6 +211,40 @@ mod tests {
         assert!(m.volume() > 0.0);
         // intersection is smaller than the cube
         assert!(m.volume() < 1000.0);
+    }
+
+    #[test]
+    fn linear_extrude_square() {
+        let node = Node::LinearExtrude {
+            height: 10.0,
+            center: false,
+            twist: 0.0,
+            scale: [1.0, 1.0],
+            slices: 1,
+            child: Box::new(Node::Square { size: [4.0, 6.0], center: false }),
+        };
+        let m = render(&node).unwrap();
+        assert!((m.volume() - 240.0).abs() < 1e-6, "vol {}", m.volume());
+        assert!(m.signed_volume() > 0.0);
+    }
+
+    #[test]
+    fn rotate_extrude_torus() {
+        // circle r=2 at radius 10 revolved -> torus, volume 2*pi^2*R*r^2.
+        let frags = FragmentSpec { fn_: 64.0, fa: 12.0, fs: 2.0 };
+        let node = Node::RotateExtrude {
+            angle: 360.0,
+            frags,
+            child: Box::new(Node::Translate {
+                v: [10.0, 0.0, 0.0],
+                child: Box::new(Node::Circle { r: 2.0, frags }),
+            }),
+        };
+        let m = render(&node).unwrap();
+        let expected = 2.0 * std::f64::consts::PI.powi(2) * 10.0 * 4.0;
+        let rel = (m.volume() - expected).abs() / expected;
+        assert!(rel < 0.01, "torus vol off by {rel}: {}", m.volume());
+        assert!(m.signed_volume() > 0.0);
     }
 
     /// Bake-off: the pure-Rust boolmesh kernel must agree with the C++ Manifold
