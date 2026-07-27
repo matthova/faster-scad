@@ -65,12 +65,13 @@ fn renders_lamp_assembly() {
 /// attachment system. `cuboid([20,20,20])` must render a 20 mm cube (vol 8000),
 /// proving matrix multiply, `search`, nested `children()`, and `use`-inside-
 /// `include` resolution all work together. Skipped if the submodule is absent.
-#[test]
-fn renders_bosl2_cuboid() {
+/// Render a snippet with BOSL2 available (from the corpus submodule), or `None`
+/// if the submodule isn't checked out.
+fn render_with_bosl2(body: &str) -> Option<quito_geom::Mesh> {
     let corpus = workspace_root().join("corpus");
     if !corpus.join("BOSL2/std.scad").exists() {
         eprintln!("skipping: corpus/BOSL2 submodule not checked out");
-        return;
+        return None;
     }
     struct DR(std::path::PathBuf);
     impl quito_eval::FileResolver for DR {
@@ -80,24 +81,38 @@ fn renders_bosl2_cuboid() {
                     let key = std::fs::canonicalize(&c)
                         .map(|p| p.to_string_lossy().into_owned())
                         .unwrap_or_else(|_| c.to_string_lossy().into_owned());
-                    let dir = c
-                        .parent()
-                        .map(|d| d.to_string_lossy().into_owned())
-                        .unwrap_or_default();
+                    let dir =
+                        c.parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default();
                     return Some(quito_eval::LoadedFile { key, source, dir });
                 }
             }
             None
         }
     }
-    let src = "include <BOSL2/std.scad>\ncuboid([20,20,20]);";
-    let prog = quito_syntax::parse(src).expect("parse");
+    let src = format!("include <BOSL2/std.scad>\n{body}");
+    let prog = quito_syntax::parse(&src).expect("parse");
     let out = quito_eval::eval_program_with(&prog, &DR(corpus.clone()), corpus.to_str().unwrap())
         .expect("eval");
-    let mesh = quito_geom::render(&out.node).expect("render");
+    Some(quito_geom::render(&out.node).expect("render"))
+}
+
+/// BOSL2 exercises a large slice of the language + its attachment system.
+/// `cuboid([20,20,20])` must be a 20 mm cube (vol 8000) — proving matrix
+/// multiply, `search`, nested `children()`, and `use`-inside-`include` all work.
+#[test]
+fn renders_bosl2_cuboid() {
+    let Some(mesh) = render_with_bosl2("cuboid([20,20,20]);") else { return };
+    assert!((mesh.volume() - 8000.0).abs() < 1.0, "cuboid volume {}", mesh.volume());
+}
+
+/// A *rounded* cuboid exercises range indexing (BOSL2's `is_range`) and the
+/// rounding construction; its volume matches OpenSCAD (~7244 at $fn=32).
+#[test]
+fn renders_bosl2_rounded_cuboid() {
+    let Some(mesh) = render_with_bosl2("cuboid([20,20,20], rounding=4, $fn=32);") else { return };
     assert!(
-        (mesh.volume() - 8000.0).abs() < 1.0,
-        "BOSL2 cuboid volume {} not ~8000",
+        (mesh.volume() - 7244.0).abs() < 25.0,
+        "rounded cuboid volume {} not ~7244",
         mesh.volume()
     );
 }

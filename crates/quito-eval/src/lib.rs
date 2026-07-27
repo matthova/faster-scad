@@ -1631,6 +1631,14 @@ fn index_value(base: &Value, index: &Value) -> Value {
                 Value::Undef
             }
         }
+        // A range indexes as [start, step, end] (OpenSCAD); BOSL2's is_range()
+        // relies on this.
+        (Value::Range { start, step, end }, Value::Number(n)) => match *n as isize {
+            0 => Value::Number(*start),
+            1 => Value::Number(*step),
+            2 => Value::Number(*end),
+            _ => Value::Undef,
+        },
         _ => Value::Undef,
     }
 }
@@ -2287,6 +2295,14 @@ mod tests {
         assert!((x1 - x0 - 9.21).abs() < 0.1, "width {}", x1 - x0);
         assert!((y1 - y0 - 9.55).abs() < 0.1, "height {}", y1 - y0);
         assert!(y0.abs() < 0.01, "baseline should be y=0, got {y0}");
+    }
+
+    #[test]
+    fn range_indexing() {
+        // A range indexes as [start, step, end] (BOSL2's is_range relies on it).
+        assert_eq!(echoes("r=[1:2:9]; echo(r[0], r[1], r[2], r[3]);"), vec!["ECHO: 1, 2, 9, undef"]);
+        // 2-arg range normalizes to step 1.
+        assert_eq!(echoes("r=[3:7]; echo(r[0], r[1], r[2]);"), vec!["ECHO: 3, 1, 7"]);
     }
 
     #[test]
