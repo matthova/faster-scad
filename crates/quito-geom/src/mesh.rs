@@ -77,6 +77,26 @@ impl Mesh {
         }
     }
 
+    /// Expand to a non-indexed triangle soup with per-face (flat) normals,
+    /// as f32, for direct upload to a GPU buffer. Returns `(positions,
+    /// normals)`, each with 9 floats per triangle.
+    pub fn to_triangle_soup_f32(&self) -> (Vec<f32>, Vec<f32>) {
+        let n = self.tris.len();
+        let mut positions = Vec::with_capacity(n * 9);
+        let mut normals = Vec::with_capacity(n * 9);
+        for t in &self.tris {
+            let a = self.verts[t[0] as usize];
+            let b = self.verts[t[1] as usize];
+            let c = self.verts[t[2] as usize];
+            let nrm = normalize(cross(sub(b, a), sub(c, a)));
+            for v in [a, b, c] {
+                positions.extend_from_slice(&[v[0] as f32, v[1] as f32, v[2] as f32]);
+                normals.extend_from_slice(&[nrm[0] as f32, nrm[1] as f32, nrm[2] as f32]);
+            }
+        }
+        (positions, normals)
+    }
+
     /// Serialize as binary STL.
     pub fn to_binary_stl(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(84 + self.tris.len() * 50);
