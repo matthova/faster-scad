@@ -58,6 +58,9 @@ struct Interp {
     warnings: Vec<String>,
     root: Option<Node>,
     depth: usize,
+    /// Stack of the child statements passed at each active module call site,
+    /// so `children()` / `$children` inside a module body can reach them.
+    children_stack: Vec<Vec<Stmt>>,
 }
 
 /// Evaluate a parsed program into a CSG tree plus console output.
@@ -76,6 +79,7 @@ pub fn eval_program(prog: &Program) -> EResult<EvalOutput> {
         warnings: Vec::new(),
         root: None,
         depth: 0,
+        children_stack: Vec::new(),
     };
 
     let nodes = interp.eval_stmts(prog)?;
@@ -271,9 +275,10 @@ impl Interp {
             "group" => Ok(Node::group(self.eval_children(children)?)),
             "echo" => self.b_echo(args, children),
             "assert" => self.b_assert(args, children),
+            "children" => self.b_children(args),
             _ => {
                 if let Some(def) = self.lookup_module(name) {
-                    self.instantiate_module(&def, args)
+                    self.instantiate_module(&def, args, children)
                 } else {
                     self.warnings
                         .push(format!("Ignoring unknown module '{name}'"));
@@ -290,15 +295,58 @@ impl Interp {
         r
     }
 
-    fn instantiate_module(&mut self, def: &ModDef, args: &[Arg]) -> EResult<Node> {
+    fn instantiate_module(
+        &mut self,
+        def: &ModDef,
+        args: &[Arg],
+        children: &[Stmt],
+    ) -> EResult<Node> {
         let bound = self.bind_params(&def.params, args)?;
         self.push_scope();
         for (k, v) in bound {
             self.set_var(&k, v);
         }
+        self.set_var("$children", Value::Number(children.len() as f64));
+        self.children_stack.push(children.to_vec());
         let r = self.eval_stmts(&def.body);
+        self.children_stack.pop();
         self.pop_scope();
         Ok(Node::group(r?))
+    }
+
+    /// `children()` / `children(i)` / `children([indices|range])`.
+    fn b_children(&mut self, args: &[Arg]) -> EResult<Node> {
+        let Some(kids) = self.children_stack.last().cloned() else {
+            return Ok(Node::Empty);
+        };
+        if args.is_empty() {
+            self.push_scope();
+            let r = self.eval_stmts(&kids);
+            self.pop_scope();
+            return Ok(Node::group(r?));
+        }
+        let sel = self.first_positional(args)?;
+        let idxs: Vec<usize> = match sel {
+            Value::Number(n) => vec![n as usize],
+            Value::Vector(ref v) => {
+                v.iter().filter_map(Value::as_number).map(|n| n as usize).collect()
+            }
+            Value::Range { .. } => iter_values(&sel)?
+                .iter()
+                .filter_map(Value::as_number)
+                .map(|n| n as usize)
+                .collect(),
+            _ => Vec::new(),
+        };
+        let mut out = Vec::new();
+        self.push_scope();
+        for i in idxs {
+            if let Some(stmt) = kids.get(i) {
+                out.extend(self.eval_geom(stmt)?);
+            }
+        }
+        self.pop_scope();
+        Ok(Node::group(out))
     }
 
     // ---- builtin modules ----------------------------------------------
@@ -1127,6 +1175,27 @@ mod tests {
             vec!["ECHO: 0.333333, 1e+10, 1e+6, 3, 0"]
         );
         assert_eq!(echoes("echo(sign(-4), sign(0), sign(4));"), vec!["ECHO: -1, 0, 1"]);
+    }
+
+    #[test]
+    fn module_children() {
+        let out = eval("module m() { translate([1,0,0]) children(); } m() { cube(2); sphere(3); }");
+        match out.node {
+            Node::Translate { child, .. } => match *child {
+                Node::Group(c) => assert_eq!(c.len(), 2),
+                other => panic!("unexpected: {other:?}"),
+            },
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn children_count_and_index() {
+        let out = eval(
+            "module m() { echo($children); children(1); } m() { cube(1); sphere(2); cube(3); }",
+        );
+        assert_eq!(out.echoes, vec!["ECHO: 3"]);
+        assert!(matches!(out.node, Node::Sphere { .. }));
     }
 
     #[test]
