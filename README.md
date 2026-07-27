@@ -4,13 +4,14 @@ A fast, greenfield reimplementation of the [OpenSCAD](https://openscad.org)
 language — same language spirit, a modern geometry kernel, one Rust core
 shipping to the browser (wasm) and desktop (Tauri).
 
-> **Status: M2 in progress — full expression language + browser playground live.**
-> M0 (native skeleton) and M1 (playground + kernel bake-off) are complete. The
-> language now covers list comprehensions (incl. C-style `for`), function
-> literals, module `children()`/`$children`, the math/string/list builtins, and
-> `polyhedron`; an echo oracle (15/15) diffs it against real OpenSCAD. The full
-> plan lives in `.context/attachments/HoR0PL/plan.md`; research is in
-> `.context/research/`.
+> **Status: M3 in progress — full language + growing geometry.**
+> M0 (native skeleton), M1 (playground + kernel bake-off) and M2 (full language)
+> are complete: BOSL2's function test suite passes **13/15 (87%)** and an echo
+> oracle (24/24) diffs the language against real OpenSCAD. M3 has added the 2D
+> subsystem (`square`/`circle`/`polygon`), `linear_extrude`/`rotate_extrude`
+> (with 2D booleans), `hull`, `mirror`/`multmatrix`/`resize`, and `color` — so
+> the complete parametric lamp *assembly* now renders. The full plan is in
+> `.context/attachments/HoR0PL/plan.md`; research is in `.context/research/`.
 
 ## What works today (M0 native)
 
