@@ -10,3 +10,6 @@ node_modules/
 dist/
 # wasm-pack build output (regenerate with `npm run build:wasm`)
 web/engine/
+
+# TypeScript incremental build info
+*.tsbuildinfo
