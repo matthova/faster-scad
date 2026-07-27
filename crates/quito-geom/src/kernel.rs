@@ -28,6 +28,32 @@ fn all_points(meshes: &[Mesh]) -> Vec<[f64; 3]> {
     meshes.iter().flat_map(|m| m.verts.iter().copied()).collect()
 }
 
+/// Combine items pairwise in a balanced (divide-and-conquer) tree rather than a
+/// linear fold. For an associative+commutative op like union/intersection this
+/// keeps intermediate operands small — O(log n) boolean "depth" instead of one
+/// accumulator that grows with every operand — which is much faster for the
+/// many-operand unions typical of `for`-generated geometry.
+fn balanced_reduce<T>(
+    mut items: Vec<T>,
+    combine: impl Fn(&T, &T) -> Result<T, GeomError>,
+) -> Result<Option<T>, GeomError> {
+    if items.is_empty() {
+        return Ok(None);
+    }
+    while items.len() > 1 {
+        let mut next = Vec::with_capacity(items.len().div_ceil(2));
+        let mut iter = items.into_iter();
+        while let Some(a) = iter.next() {
+            match iter.next() {
+                Some(b) => next.push(combine(&a, &b)?),
+                None => next.push(a),
+            }
+        }
+        items = next;
+    }
+    Ok(items.into_iter().next())
+}
+
 // ===================================================================
 // Pure-Rust backend: boolmesh
 // ===================================================================
@@ -78,48 +104,42 @@ mod bm {
 
 impl Kernel for BoolmeshKernel {
     fn union(&self, meshes: Vec<Mesh>) -> Result<Mesh, GeomError> {
-        let mut acc: Option<boolmesh::prelude::Manifold> = None;
-        for m in meshes {
-            if m.is_empty() {
-                continue;
-            }
-            let man = bm::to_manifold(&m)?;
-            acc = Some(match acc {
-                None => man,
-                Some(a) => bm::op(&a, &man, bm::Op::Add)?,
-            });
-        }
-        Ok(acc.map(|m| bm::from_manifold(&m)).unwrap_or_default())
+        let mans = meshes
+            .iter()
+            .filter(|m| !m.is_empty())
+            .map(bm::to_manifold)
+            .collect::<Result<Vec<_>, _>>()?;
+        let r = balanced_reduce(mans, |a, b| bm::op(a, b, bm::Op::Add))?;
+        Ok(r.map(|m| bm::from_manifold(&m)).unwrap_or_default())
     }
 
     fn difference(&self, base: Mesh, tools: Vec<Mesh>) -> Result<Mesh, GeomError> {
         if base.is_empty() {
             return Ok(Mesh::new());
         }
-        let mut acc = bm::to_manifold(&base)?;
-        for t in tools {
-            if t.is_empty() {
-                continue;
-            }
-            let tm = bm::to_manifold(&t)?;
-            acc = bm::op(&acc, &tm, bm::Op::Subtract)?;
-        }
-        Ok(bm::from_manifold(&acc))
+        // base - t1 - t2 - ... == base - (t1 ∪ t2 ∪ ...): union the tools once
+        // (balanced) then a single subtraction, instead of N subtractions that
+        // each re-process the whole base.
+        let tool_mans = tools
+            .iter()
+            .filter(|t| !t.is_empty())
+            .map(bm::to_manifold)
+            .collect::<Result<Vec<_>, _>>()?;
+        let base_man = bm::to_manifold(&base)?;
+        let result = match balanced_reduce(tool_mans, |a, b| bm::op(a, b, bm::Op::Add))? {
+            None => base_man,
+            Some(tools_union) => bm::op(&base_man, &tools_union, bm::Op::Subtract)?,
+        };
+        Ok(bm::from_manifold(&result))
     }
 
     fn intersection(&self, meshes: Vec<Mesh>) -> Result<Mesh, GeomError> {
-        let mut acc: Option<boolmesh::prelude::Manifold> = None;
-        for m in meshes {
-            if m.is_empty() {
-                return Ok(Mesh::new());
-            }
-            let man = bm::to_manifold(&m)?;
-            acc = Some(match acc {
-                None => man,
-                Some(a) => bm::op(&a, &man, bm::Op::Intersect)?,
-            });
+        if meshes.is_empty() || meshes.iter().any(|m| m.is_empty()) {
+            return Ok(Mesh::new());
         }
-        Ok(acc.map(|m| bm::from_manifold(&m)).unwrap_or_default())
+        let mans = meshes.iter().map(bm::to_manifold).collect::<Result<Vec<_>, _>>()?;
+        let r = balanced_reduce(mans, |a, b| bm::op(a, b, bm::Op::Intersect))?;
+        Ok(r.map(|m| bm::from_manifold(&m)).unwrap_or_default())
     }
 
     fn hull(&self, meshes: Vec<Mesh>) -> Result<Mesh, GeomError> {
@@ -183,48 +203,41 @@ mod manifold_backend {
 
     impl Kernel for ManifoldKernel {
         fn union(&self, meshes: Vec<Mesh>) -> Result<Mesh, GeomError> {
-            let mut acc: Option<Manifold> = None;
-            for m in meshes {
-                if m.is_empty() {
-                    continue;
-                }
-                let man = to_manifold(&m)?;
-                acc = Some(match acc {
-                    None => man,
-                    Some(a) => &a + &man,
-                });
-            }
-            Ok(acc.map(|m| from_manifold(&m)).unwrap_or_default())
+            let mans = meshes
+                .iter()
+                .filter(|m| !m.is_empty())
+                .map(to_manifold)
+                .collect::<Result<Vec<_>, _>>()?;
+            let r = super::balanced_reduce(mans, |a, b| Ok(a + b))?;
+            Ok(r.map(|m| from_manifold(&m)).unwrap_or_default())
         }
 
         fn difference(&self, base: Mesh, tools: Vec<Mesh>) -> Result<Mesh, GeomError> {
             if base.is_empty() {
                 return Ok(Mesh::new());
             }
-            let mut acc = to_manifold(&base)?;
-            for t in tools {
-                if t.is_empty() {
-                    continue;
-                }
-                let tm = to_manifold(&t)?;
-                acc = &acc - &tm;
-            }
-            Ok(from_manifold(&acc))
+            // base - t1 - t2 - ... == base - (t1 ∪ t2 ∪ ...): one subtraction
+            // after a balanced union of the tools.
+            let tool_mans = tools
+                .iter()
+                .filter(|t| !t.is_empty())
+                .map(to_manifold)
+                .collect::<Result<Vec<_>, _>>()?;
+            let base_man = to_manifold(&base)?;
+            let result = match super::balanced_reduce(tool_mans, |a, b| Ok(a + b))? {
+                None => base_man,
+                Some(tools_union) => &base_man - &tools_union,
+            };
+            Ok(from_manifold(&result))
         }
 
         fn intersection(&self, meshes: Vec<Mesh>) -> Result<Mesh, GeomError> {
-            let mut acc: Option<Manifold> = None;
-            for m in meshes {
-                if m.is_empty() {
-                    return Ok(Mesh::new());
-                }
-                let man = to_manifold(&m)?;
-                acc = Some(match acc {
-                    None => man,
-                    Some(a) => &a ^ &man,
-                });
+            if meshes.is_empty() || meshes.iter().any(|m| m.is_empty()) {
+                return Ok(Mesh::new());
             }
-            Ok(acc.map(|m| from_manifold(&m)).unwrap_or_default())
+            let mans = meshes.iter().map(to_manifold).collect::<Result<Vec<_>, _>>()?;
+            let r = super::balanced_reduce(mans, |a, b| Ok(a ^ b))?;
+            Ok(r.map(|m| from_manifold(&m)).unwrap_or_default())
         }
 
         fn hull(&self, meshes: Vec<Mesh>) -> Result<Mesh, GeomError> {
