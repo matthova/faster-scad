@@ -147,6 +147,11 @@ pub enum Node {
         data: Vec<u8>,
         format: String,
     },
+    /// `projection(cut)` — flatten a 3D child to 2D. `cut=true` sections at z=0.
+    Projection {
+        cut: bool,
+        child: Box<Node>,
+    },
 }
 
 impl Node {

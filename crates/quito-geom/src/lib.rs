@@ -76,6 +76,15 @@ pub fn render_with(node: &Node, kernel: &dyn Kernel) -> Result<Mesh, GeomError> 
         Node::RotateExtrude { angle, frags, child } => {
             extrude_csg(child, &|cs| shape2d::rotate_extrude(cs, *angle, *frags), kernel)
         }
+        Node::Projection { cut, child } => {
+            let mesh = render_with(child, kernel)?;
+            let contours = if *cut {
+                shape2d::slice_z0(&mesh)
+            } else {
+                Vec::new() // silhouette needs the 2D clipper
+            };
+            Ok(shape2d::flat_mesh(&contours))
+        }
 
         Node::Group(children) => {
             let meshes = render_all(children, kernel)?;
@@ -205,6 +214,16 @@ fn extrude_csg(
                 let base = meshes.remove(0);
                 kernel.difference(base, meshes)
             }
+        }
+        // projection: render the 3D child, flatten, then extrude.
+        Node::Projection { cut, child } => {
+            let mesh = render_with(child, kernel)?;
+            let contours = if *cut {
+                shape2d::slice_z0(&mesh)
+            } else {
+                Vec::new()
+            };
+            Ok(extrude(&contours))
         }
         // A leaf 2D shape (primitive or transform chain): render to contours.
         leaf => Ok(extrude(&shape2d::render2d(leaf))),
@@ -394,6 +413,27 @@ mod tests {
         let m = render(&node).unwrap();
         assert!((m.volume() - 240.0).abs() < 1e-6, "vol {}", m.volume());
         assert!(m.signed_volume() > 0.0);
+    }
+
+    #[test]
+    fn projection_cut_section() {
+        // Section a cube at z=0 (translated so z=0 is inside), extrude → prism.
+        let node = Node::LinearExtrude {
+            height: 3.0,
+            center: false,
+            twist: 0.0,
+            scale: [1.0, 1.0],
+            slices: 1,
+            child: Box::new(Node::Projection {
+                cut: true,
+                child: Box::new(Node::Translate {
+                    v: [0.0, 0.0, 1.0],
+                    child: Box::new(Node::Cube { size: [8.0, 6.0, 10.0], center: true }),
+                }),
+            }),
+        };
+        let m = render(&node).unwrap();
+        assert!((m.volume() - 144.0).abs() < 1e-6, "projection vol {}", m.volume());
     }
 
     #[test]

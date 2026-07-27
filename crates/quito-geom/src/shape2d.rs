@@ -74,6 +74,81 @@ fn polygon_contours(points: &[Point2], paths: &Option<Vec<Vec<u32>>>) -> Vec<Con
     }
 }
 
+/// Cross-section of a mesh at the z=0 plane (`projection(cut=true)`): returns
+/// the closed contours where the mesh crosses the plane.
+pub fn slice_z0(mesh: &Mesh) -> Vec<Contour> {
+    // Slice slightly above 0 to avoid coplanar-face degeneracies.
+    const Z: f64 = 1e-7;
+    let mut segs: Vec<(Point2, Point2)> = Vec::new();
+    for t in &mesh.tris {
+        let v = [
+            mesh.verts[t[0] as usize],
+            mesh.verts[t[1] as usize],
+            mesh.verts[t[2] as usize],
+        ];
+        let mut cross = Vec::new();
+        for &(a, b) in &[(0, 1), (1, 2), (2, 0)] {
+            let (za, zb) = (v[a][2] - Z, v[b][2] - Z);
+            if (za < 0.0) != (zb < 0.0) {
+                let f = za / (za - zb);
+                cross.push([
+                    v[a][0] + (v[b][0] - v[a][0]) * f,
+                    v[a][1] + (v[b][1] - v[a][1]) * f,
+                ]);
+            }
+        }
+        if cross.len() == 2 {
+            segs.push((cross[0], cross[1]));
+        }
+    }
+    chain_segments(segs)
+}
+
+/// Chain unordered segments into closed contours by walking segment by segment
+/// (so points shared by collinear segments are handled correctly).
+fn chain_segments(segs: Vec<(Point2, Point2)>) -> Vec<Contour> {
+    let key = |p: Point2| [(p[0] * 1e5).round() as i64, (p[1] * 1e5).round() as i64];
+    // point key -> indices of incident segments
+    let mut inc: std::collections::HashMap<[i64; 2], Vec<usize>> = Default::default();
+    for (i, (a, b)) in segs.iter().enumerate() {
+        inc.entry(key(*a)).or_default().push(i);
+        inc.entry(key(*b)).or_default().push(i);
+    }
+    let mut used = vec![false; segs.len()];
+    let mut contours = Vec::new();
+    for start in 0..segs.len() {
+        if used[start] {
+            continue;
+        }
+        let mut contour = Vec::new();
+        let mut si = start;
+        let mut cur = segs[si].0;
+        let start_key = key(cur);
+        loop {
+            used[si] = true;
+            contour.push(cur);
+            // step to the other endpoint of the current segment
+            cur = if key(segs[si].0) == key(cur) {
+                segs[si].1
+            } else {
+                segs[si].0
+            };
+            if key(cur) == start_key {
+                break; // closed loop
+            }
+            // next unused segment incident to `cur`
+            match inc.get(&key(cur)).and_then(|v| v.iter().find(|&&j| !used[j]).copied()) {
+                Some(j) => si = j,
+                None => break,
+            }
+        }
+        if contour.len() >= 3 {
+            contours.push(contour);
+        }
+    }
+    contours
+}
+
 /// 2D offset of contours. `r` rounds convex corners; `delta` mitres (or
 /// chamfers). Positive grows, negative shrinks. Works on simple contours; it
 /// does not clip self-intersections from large concave offsets (a 2D-clipper
@@ -292,10 +367,18 @@ fn extrude_one(
     scale: Point2,
     slices: u32,
 ) {
-    let n = contour.len();
-    if n < 3 {
+    if contour.len() < 3 {
         return;
     }
+    // Work CCW so walls and caps are consistently outward.
+    let owned: Vec<Point2>;
+    let contour: &[Point2] = if signed_area(contour) < 0.0 {
+        owned = contour.iter().rev().cloned().collect();
+        &owned
+    } else {
+        contour
+    };
+    let n = contour.len();
     let base = mesh.verts.len() as u32;
     // Build `slices+1` rings.
     for layer in 0..=slices {
@@ -355,10 +438,17 @@ pub fn rotate_extrude(contours: &[Contour], angle: f64, frags: FragmentSpec) -> 
 }
 
 fn revolve_one(mesh: &mut Mesh, contour: &[Point2], angle: f64, steps: u32, full: bool) {
-    let n = contour.len();
-    if n < 3 {
+    if contour.len() < 3 {
         return;
     }
+    let owned: Vec<Point2>;
+    let contour: &[Point2] = if signed_area(contour) < 0.0 {
+        owned = contour.iter().rev().cloned().collect();
+        &owned
+    } else {
+        contour
+    };
+    let n = contour.len();
     let base = mesh.verts.len() as u32;
     let ring_count = if full { steps } else { steps + 1 };
     for k in 0..ring_count {
