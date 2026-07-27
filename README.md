@@ -78,8 +78,9 @@ build:wasm && npm run dev`; see [`web/`](web/README.md).
   e.g. `BOSL2/…` from jsDelivr) with transitive resolution + caching.
 - **Export** — the format dropdown adapts to the model: 3D solids export to STL
   (binary), OFF, OBJ, 3MF, or AMF; 2D profiles export to DXF or SVG. Available
-  in the playground, the desktop app, and the CLI. 2D profiles can be imported
-  too (`import("foo.dxf")` / `import("foo.svg")`).
+  in the playground, the desktop app, and the CLI. `import()` reads meshes
+  (STL/OFF/OBJ/3MF/AMF, including OpenSCAD's ZIP64+deflate 3MF) and 2D profiles
+  (DXF/SVG).
 - **Console** — echo / warnings / errors, color-coded.
 - **Examples** — an Examples menu loads curated sample projects (CSG, twisted
   extrusion, text, a 2D gasket for DXF/SVG, a `$t` animation, and a BOSL2 model).

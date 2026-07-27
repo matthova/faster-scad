@@ -167,6 +167,8 @@ fn render_uncached(node: &Node, ctx: &mut Ctx) -> Result<Mesh, GeomError> {
         Node::Import { data, format } => Ok(match format.as_str() {
             "off" => Mesh::from_off(&String::from_utf8_lossy(data)),
             "obj" => Mesh::from_obj(&String::from_utf8_lossy(data)),
+            "3mf" => Mesh::from_3mf(data),
+            "amf" => Mesh::from_amf(data),
             "dxf" | "svg" => shape2d::flat_mesh(&shape2d::render2d(node)),
             _ => Mesh::from_stl(data), // stl (binary or ascii)
         }),

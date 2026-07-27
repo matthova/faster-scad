@@ -32,6 +32,7 @@ ttf-parser = "0.25"
 earcutr = "0.4"
 geo = "0.29"
 png = { version = "0.17", default-features = false }
+miniz_oxide = "0.8"
 
 [profile.release]
 opt-level = 3

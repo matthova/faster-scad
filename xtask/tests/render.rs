@@ -139,6 +139,28 @@ fn renders_surface() {
     assert!(mesh.signed_volume() > 0.0, "surface mesh is inward-facing");
 }
 
+/// Importing an OpenSCAD-produced 3MF (a ZIP64 archive with deflate-compressed
+/// parts) must reconstruct the mesh. This fixture is `difference(){ cube(20,
+/// center=true); sphere(12); }` exported by OpenSCAD; volume ≈ 1683.68.
+#[test]
+fn imports_openscad_3mf() {
+    struct R(Vec<u8>);
+    impl quito_eval::FileResolver for R {
+        fn load(&self, _p: &str, _f: &str) -> Option<quito_eval::LoadedFile> {
+            None
+        }
+        fn load_bytes(&self, path: &str, _f: &str) -> Option<Vec<u8>> {
+            (path == "m.3mf").then(|| self.0.clone())
+        }
+    }
+    let tmf = include_bytes!("fixtures/openscad.3mf").to_vec();
+    let prog = quito_syntax::parse("import(\"m.3mf\");").expect("parse");
+    let out = quito_eval::eval_program_with(&prog, &R(tmf), ".").expect("eval");
+    let mesh = quito_geom::render(&out.node).expect("render");
+    assert!(mesh.tris.len() > 100, "too few triangles: {}", mesh.tris.len());
+    assert!((mesh.volume() - 1683.68).abs() < 0.1, "3mf import volume {}", mesh.volume());
+}
+
 /// `surface()` on a PNG heightmap: each pixel's Rec.709 luma scales to 0..100,
 /// the base drops to min−1 (PNG rule). This 3×2 gray ramp matches OpenSCAD's
 /// rendered volume of 121.0196 (verified against the oracle).

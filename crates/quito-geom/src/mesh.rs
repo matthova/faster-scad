@@ -226,6 +226,60 @@ impl Mesh {
         zip.finish()
     }
 
+    /// Parse a 3MF package: read the ZIP, inflate `3D/3dmodel.model`, and build
+    /// an indexed mesh from its `<vertex>`/`<triangle>` elements. Returns an
+    /// empty mesh if the archive or model can't be read.
+    pub fn from_3mf(bytes: &[u8]) -> Mesh {
+        let Some(model) = zip_read_entry(bytes, "3D/3dmodel.model") else {
+            return Mesh::new();
+        };
+        let xml = String::from_utf8_lossy(&model);
+        let mut verts: Vec<[f64; 3]> = Vec::new();
+        let mut tris: Vec<[u32; 3]> = Vec::new();
+        for tag in xml_tags(&xml, "vertex") {
+            verts.push([
+                xml_attr_f64(tag, "x").unwrap_or(0.0),
+                xml_attr_f64(tag, "y").unwrap_or(0.0),
+                xml_attr_f64(tag, "z").unwrap_or(0.0),
+            ]);
+        }
+        for tag in xml_tags(&xml, "triangle") {
+            if let (Some(a), Some(b), Some(c)) = (
+                xml_attr_f64(tag, "v1"),
+                xml_attr_f64(tag, "v2"),
+                xml_attr_f64(tag, "v3"),
+            ) {
+                tris.push([a as u32, b as u32, c as u32]);
+            }
+        }
+        Mesh { verts, tris }
+    }
+
+    /// Parse an AMF document (plain XML) into an indexed mesh.
+    pub fn from_amf(bytes: &[u8]) -> Mesh {
+        let xml = String::from_utf8_lossy(bytes);
+        let mut verts: Vec<[f64; 3]> = Vec::new();
+        // Each <vertex> holds a <coordinates> with <x>/<y>/<z> child elements.
+        for v in split_elements(&xml, "vertex") {
+            verts.push([
+                xml_child_f64(v, "x").unwrap_or(0.0),
+                xml_child_f64(v, "y").unwrap_or(0.0),
+                xml_child_f64(v, "z").unwrap_or(0.0),
+            ]);
+        }
+        let mut tris: Vec<[u32; 3]> = Vec::new();
+        for t in split_elements(&xml, "triangle") {
+            if let (Some(a), Some(b), Some(c)) = (
+                xml_child_f64(t, "v1"),
+                xml_child_f64(t, "v2"),
+                xml_child_f64(t, "v3"),
+            ) {
+                tris.push([a as u32, b as u32, c as u32]);
+            }
+        }
+        Mesh { verts, tris }
+    }
+
     /// Parse a binary or ASCII STL into an indexed mesh (welding coincident
     /// vertices at 1e-6 precision).
     pub fn from_stl(bytes: &[u8]) -> Mesh {
@@ -432,6 +486,24 @@ mod io_tests {
     fn crc32_check_value() {
         assert_eq!(super::crc32(b"123456789"), 0xCBF4_3926);
     }
+
+    #[test]
+    fn threemf_roundtrip() {
+        // to_3mf packages a store-only ZIP; from_3mf reads it back exactly.
+        let m = cube();
+        let back = Mesh::from_3mf(&m.to_3mf());
+        assert_eq!(back.verts.len(), m.verts.len());
+        assert_eq!(back.tris.len(), m.tris.len());
+        assert!((back.volume() - 480.0).abs() < 1e-6, "vol {}", back.volume());
+    }
+
+    #[test]
+    fn amf_roundtrip() {
+        let m = cube();
+        let back = Mesh::from_amf(m.to_amf().as_bytes());
+        assert_eq!(back.verts.len(), m.verts.len());
+        assert!((back.volume() - 480.0).abs() < 1e-6, "vol {}", back.volume());
+    }
 }
 
 pub(crate) fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
@@ -555,4 +627,189 @@ fn crc32(data: &[u8]) -> u32 {
         }
     }
     !crc
+}
+
+// ---------------------------------------------------------------------------
+// ZIP reading (for 3MF import) + tiny XML helpers.
+// ---------------------------------------------------------------------------
+
+/// Read and decompress a single named entry from a ZIP archive via its central
+/// directory. Handles stored (method 0) and deflate (method 8). Returns None on
+/// any malformation or if the entry is absent.
+fn zip_read_entry(zip: &[u8], name: &str) -> Option<Vec<u8>> {
+    let rd_u16 = |o: usize| -> Option<usize> {
+        zip.get(o..o + 2).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize)
+    };
+    let rd_u32 = |o: usize| -> Option<usize> {
+        zip.get(o..o + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize)
+    };
+    let rd_u64 = |o: usize| -> Option<usize> {
+        zip.get(o..o + 8).map(|b| {
+            u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]) as usize
+        })
+    };
+    // Find the End Of Central Directory record (scan backward for its signature).
+    let eocd = (0..zip.len().saturating_sub(21))
+        .rev()
+        .find(|&i| zip[i..].starts_with(&[0x50, 0x4b, 0x05, 0x06]))?;
+    let mut count = rd_u16(eocd + 10)?;
+    let mut cd = rd_u32(eocd + 16)?;
+    // ZIP64: sentinels in the classic EOCD mean the real values are in a ZIP64
+    // EOCD record, pointed to by the ZIP64 locator just before the EOCD.
+    // (OpenSCAD's 3MF writer uses ZIP64.)
+    if cd == 0xFFFF_FFFF || count == 0xFFFF {
+        let loc = eocd.checked_sub(20)?;
+        if zip.get(loc..loc + 4)?.starts_with(&[0x50, 0x4b, 0x06, 0x07]) {
+            let z64 = rd_u64(loc + 8)?;
+            if zip.get(z64..z64 + 4)?.starts_with(&[0x50, 0x4b, 0x06, 0x06]) {
+                count = rd_u64(z64 + 32)?;
+                cd = rd_u64(z64 + 48)?;
+            }
+        }
+    }
+    const Z64: usize = 0xFFFF_FFFF;
+    for _ in 0..count {
+        if !zip.get(cd..cd + 4)?.starts_with(&[0x50, 0x4b, 0x01, 0x02]) {
+            return None;
+        }
+        let method = rd_u16(cd + 10)?;
+        let mut comp_size = rd_u32(cd + 20)?;
+        let raw_ucomp = rd_u32(cd + 24)?;
+        let name_len = rd_u16(cd + 28)?;
+        let extra_len = rd_u16(cd + 30)?;
+        let comment_len = rd_u16(cd + 32)?;
+        let mut local_off = rd_u32(cd + 42)?;
+        let entry_name = std::str::from_utf8(zip.get(cd + 46..cd + 46 + name_len)?).ok()?;
+        // ZIP64 extended-information extra field (id 0x0001): the sentinel
+        // fields are stored here, in order (uncompressed, compressed, offset).
+        if comp_size == Z64 || local_off == Z64 {
+            let mut e = cd + 46 + name_len;
+            let extra_end = e + extra_len;
+            while e + 4 <= extra_end {
+                let id = rd_u16(e)?;
+                let sz = rd_u16(e + 2)?;
+                if id == 0x0001 {
+                    let mut p = e + 4;
+                    if raw_ucomp == Z64 {
+                        p += 8; // skip uncompressed size
+                    }
+                    if comp_size == Z64 {
+                        comp_size = rd_u64(p)?;
+                        p += 8;
+                    }
+                    if local_off == Z64 {
+                        local_off = rd_u64(p)?;
+                    }
+                    break;
+                }
+                e += 4 + sz;
+            }
+        }
+        if entry_name == name {
+            // Jump to the local header to find where the data begins.
+            if !zip.get(local_off..local_off + 4)?.starts_with(&[0x50, 0x4b, 0x03, 0x04]) {
+                return None;
+            }
+            let lh_name = rd_u16(local_off + 26)?;
+            let lh_extra = rd_u16(local_off + 28)?;
+            let data_start = local_off + 30 + lh_name + lh_extra;
+            let data = zip.get(data_start..data_start + comp_size)?;
+            return match method {
+                0 => Some(data.to_vec()),
+                8 => miniz_oxide::inflate::decompress_to_vec(data).ok(),
+                _ => None,
+            };
+        }
+        cd += 46 + name_len + extra_len + comment_len;
+    }
+    None
+}
+
+/// True if `xml[at..]` begins a tag named `name` at a word boundary.
+fn tag_boundary(xml: &str, at: usize, name_len: usize) -> bool {
+    matches!(
+        xml.as_bytes().get(at + name_len),
+        Some(&b) if b.is_ascii_whitespace() || b == b'>' || b == b'/'
+    )
+}
+
+/// The attribute region (between `<name` and `>`) of each `<name ...>` tag.
+fn xml_tags<'a>(xml: &'a str, name: &str) -> Vec<&'a str> {
+    let open = format!("<{name}");
+    let mut out = Vec::new();
+    let mut i = 0;
+    while let Some(rel) = xml[i..].find(&open) {
+        let tstart = i + rel;
+        if !tag_boundary(xml, tstart + 1, name.len()) {
+            i = tstart + open.len();
+            continue;
+        }
+        let attr_start = tstart + open.len();
+        match xml[attr_start..].find('>') {
+            Some(end) => {
+                out.push(&xml[attr_start..attr_start + end]);
+                i = attr_start + end + 1;
+            }
+            None => break,
+        }
+    }
+    out
+}
+
+/// Parse a numeric XML attribute (`attr="..."` / `attr='...'`) from a tag region.
+fn xml_attr_f64(tag: &str, attr: &str) -> Option<f64> {
+    let mut from = 0;
+    while let Some(rel) = tag[from..].find(attr) {
+        let i = from + rel;
+        let before_ok = i == 0 || tag.as_bytes()[i - 1].is_ascii_whitespace();
+        let rest = tag[i + attr.len()..].trim_start();
+        if before_ok && rest.starts_with('=') {
+            let rest = rest[1..].trim_start();
+            let q = rest.chars().next()?;
+            if q == '"' || q == '\'' {
+                let end = rest[1..].find(q)?;
+                return rest[1..1 + end].trim().parse().ok();
+            }
+        }
+        from = i + attr.len();
+    }
+    None
+}
+
+/// The inner content of each `<name>...</name>` element (non-self-closing).
+fn split_elements<'a>(xml: &'a str, name: &str) -> Vec<&'a str> {
+    let open = format!("<{name}");
+    let close = format!("</{name}>");
+    let mut out = Vec::new();
+    let mut i = 0;
+    while let Some(rel) = xml[i..].find(&open) {
+        let tstart = i + rel;
+        if !tag_boundary(xml, tstart + 1, name.len()) {
+            i = tstart + open.len();
+            continue;
+        }
+        let Some(gt) = xml[tstart..].find('>') else { break };
+        let content_start = tstart + gt + 1;
+        if xml.as_bytes().get(tstart + gt - 1) == Some(&b'/') {
+            i = content_start; // self-closing, no content
+            continue;
+        }
+        match xml[content_start..].find(&close) {
+            Some(crel) => {
+                out.push(&xml[content_start..content_start + crel]);
+                i = content_start + crel + close.len();
+            }
+            None => break,
+        }
+    }
+    out
+}
+
+/// Parse the numeric text of a `<name>value</name>` child element.
+fn xml_child_f64(block: &str, name: &str) -> Option<f64> {
+    let open = format!("<{name}>");
+    let close = format!("</{name}>");
+    let s = block.find(&open)? + open.len();
+    let e = block[s..].find(&close)? + s;
+    block[s..e].trim().parse().ok()
 }
