@@ -1297,6 +1297,7 @@ fn builtin_fn(name: &str, args: &[Value], warnings: &mut Vec<String>) -> Value {
         "is_string" => Value::Bool(matches!(args.first(), Some(Value::Str(_)))),
         "is_list" => Value::Bool(matches!(args.first(), Some(Value::Vector(_)))),
         "is_function" => Value::Bool(matches!(args.first(), Some(Value::Function(_)))),
+        "is_range" => Value::Bool(matches!(args.first(), Some(Value::Range { .. }))),
         "version" => value::vector(vec![
             Value::Number(2021.0),
             Value::Number(1.0),

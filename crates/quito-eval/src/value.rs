@@ -310,6 +310,10 @@ pub fn value_eq(a: &Value, b: &Value) -> bool {
         (Value::Vector(x), Value::Vector(y)) => {
             x.len() == y.len() && x.iter().zip(y.iter()).all(|(p, q)| value_eq(p, q))
         }
+        (
+            Value::Range { start: a, step: b, end: c },
+            Value::Range { start: d, step: e, end: f },
+        ) => a == d && b == e && c == f,
         (Value::Function(x), Value::Function(y)) => Rc::ptr_eq(x, y),
         _ => false,
     }
@@ -338,6 +342,7 @@ fn value_cmp(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
     use std::cmp::Ordering;
     match (a, b) {
         (Value::Number(x), Value::Number(y)) => x.partial_cmp(y),
+        (Value::Bool(x), Value::Bool(y)) => Some(x.cmp(y)),
         (Value::Str(x), Value::Str(y)) => Some(x.cmp(y)),
         (Value::Vector(x), Value::Vector(y)) => {
             for (p, q) in x.iter().zip(y.iter()) {
