@@ -499,5 +499,6 @@ name = "xtask"
 version = "0.0.0"
 dependencies = [
  "quito-eval",
+ "quito-geom",
  "quito-syntax",
 ]

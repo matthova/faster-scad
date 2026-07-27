@@ -4,9 +4,12 @@ A fast, greenfield reimplementation of the [OpenSCAD](https://openscad.org)
 language — same language spirit, a modern geometry kernel, one Rust core
 shipping to the browser (wasm) and desktop (Tauri).
 
-> **Status: M1 in progress — browser playground live; kernel bake-off resolved.**
-> M0 (native walking skeleton) is complete and oracle-verified. The full plan
-> lives in `.context/attachments/HoR0PL/plan.md`; research dossiers are in
+> **Status: M2 in progress — full expression language + browser playground live.**
+> M0 (native skeleton) and M1 (playground + kernel bake-off) are complete. The
+> language now covers list comprehensions (incl. C-style `for`), function
+> literals, module `children()`/`$children`, the math/string/list builtins, and
+> `polyhedron`; an echo oracle (15/15) diffs it against real OpenSCAD. The full
+> plan lives in `.context/attachments/HoR0PL/plan.md`; research is in
 > `.context/research/`.
 
 ## What works today (M0 native)
@@ -59,7 +62,11 @@ models the meshes are **bit-for-bit identical in topology and volume**:
 | `demo.scad` (union/difference/for/modules) | 12119.0398 (1164 tris) | 12119.0399 (1164 tris) | 0.0000% |
 
 Output meshes are watertight and 2-manifold (every edge shared by exactly two
-triangles).
+triangles). As a larger end-to-end check, the parametric *draped/fluted dome
+lamp shade* (`examples/lamp.scad`) — a single analytic-surface `polyhedron`
+built with C-style-`for` comprehensions — renders to **17,408 triangles,
+watertight, volume 13.596**, identical in triangle count and matching in volume
+to OpenSCAD 2024.12 (regression-tested in CI).
 
 ## Build & run
 
