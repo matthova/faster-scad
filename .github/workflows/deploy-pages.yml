@@ -2,7 +2,7 @@ name: Deploy playground to GitHub Pages
 
 on:
   push:
-    branches: [main, matthova/quito-v1]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
