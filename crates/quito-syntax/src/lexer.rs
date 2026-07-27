@@ -114,6 +114,8 @@ pub enum Token {
     Slash,
     #[token("%")]
     Percent,
+    #[token("^")]
+    Caret,
     #[token("!")]
     Bang,
     #[token("#")]

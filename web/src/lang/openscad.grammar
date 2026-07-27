@@ -4,6 +4,7 @@
 
 @precedence {
   postfix,
+  pow @right,
   unary,
   mult @left,
   add @left,
@@ -111,6 +112,7 @@ MemberExpression { expression !postfix "." VariableName }
 UnaryExpression { !unary ("-" | "+" | "!") expression }
 
 BinaryExpression {
+  expression !pow "^" expression |
   expression !mult ("*" | "/" | "%") expression |
   expression !add ("+" | "-") expression |
   expression !compare ("<" | "<=" | ">" | ">=") expression |

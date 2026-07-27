@@ -1,0 +1,12 @@
+function is_even(n) = n==0 ? true : is_odd(n-1);
+function is_odd(n) = n==0 ? false : is_even(n-1);
+echo(is_even(10), is_odd(7));
+echo(let(a=2, b=a*3, c=b+a) c);
+echo([for(i=[1:3]) let(sq=i*i, cb=sq*i) [sq,cb]]);
+echo(len("hello world"), chr([72,105]), ord("z"));
+echo(floor(-2.5), ceil(-2.5), round(-2.5), round(2.5), abs(-7.3));
+echo(pow(2,0.5), sqrt(16), pow(2,10));
+echo(max(1,5,3,2), min([4,2,8,1]));
+echo(concat([1],[2,3],[[4,5]]));
+echo(norm([3,4,12]), cross([1,0,0],[0,0,1]), [1,2,3]*[4,5,6]);
+echo(1==1.0, "a"=="a", [1,2]==[1,2], undef==undef);

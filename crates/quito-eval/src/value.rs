@@ -214,6 +214,7 @@ pub fn binary(op: BinOp, l: Value, r: Value) -> Value {
         (BinOp::Mul, Number(a), Number(b)) => Number(a * b),
         (BinOp::Div, Number(a), Number(b)) => Number(a / b),
         (BinOp::Mod, Number(a), Number(b)) => Number(a % b),
+        (BinOp::Pow, Number(a), Number(b)) => Number(a.powf(b)),
 
         // vector +/- vector (elementwise, equal length)
         (BinOp::Add, Vector(a), Vector(b)) if a.len() == b.len() => {

@@ -356,7 +356,23 @@ impl Parser {
                 expr: Box::new(expr),
             })
         } else {
-            self.parse_postfix()
+            self.parse_power()
+        }
+    }
+
+    /// `base ^ exp` — exponentiation binds tighter than unary and `*`, and is
+    /// right-associative (`2^3^2 == 2^(3^2)`; the exponent may be unary).
+    fn parse_power(&mut self) -> PResult<Expr> {
+        let base = self.parse_postfix()?;
+        if self.eat(&Token::Caret) {
+            let exp = self.parse_unary()?;
+            Ok(Expr::Binary {
+                op: BinOp::Pow,
+                lhs: Box::new(base),
+                rhs: Box::new(exp),
+            })
+        } else {
+            Ok(base)
         }
     }
 

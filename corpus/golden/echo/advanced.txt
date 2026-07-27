@@ -1,0 +1,10 @@
+ECHO: true, true
+ECHO: 8
+ECHO: [[1, 1], [4, 8], [9, 27]]
+ECHO: 11, "Hi", 122
+ECHO: -3, -2, -3, 3, 7.3
+ECHO: 1.41421, 4, 1024
+ECHO: 5, 1
+ECHO: [1, 2, 3, [4, 5]]
+ECHO: 13, [0, -1, 0], 32
+ECHO: true, true, true, true

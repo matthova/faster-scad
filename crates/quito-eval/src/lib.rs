@@ -1369,6 +1369,15 @@ mod tests {
     }
 
     #[test]
+    fn power_operator() {
+        // right-associative, binds tighter than unary and *
+        assert_eq!(
+            echoes("echo(2^10, -2^2, 2^-3, 2^3^2, 3*2^2);"),
+            vec!["ECHO: 1024, -4, 0.125, 512, 12"]
+        );
+    }
+
+    #[test]
     fn cstyle_for() {
         assert_eq!(
             echoes("echo([for(k=0,s=0;k<=3;k=k+1,s=s+k) s]);"),

@@ -33,7 +33,7 @@ const parserWithMetadata = parser.configure({
       '"[" "]"': t.squareBracket,
       '"{" "}"': t.brace,
       '"="': t.definitionOperator,
-      '"+" "-" "*" "/" "%" "<" "<=" ">" ">=" "==" "!=" "&&" "||" "!" "?" ":"':
+      '"+" "-" "*" "/" "%" "^" "<" "<=" ">" ">=" "==" "!=" "&&" "||" "!" "?" ":"':
         t.operator,
       '";" ","': t.separator,
     }),
