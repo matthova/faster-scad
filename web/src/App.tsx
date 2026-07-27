@@ -47,6 +47,8 @@ difference() {
       cylinder(h = 2*height, r = 2.5);
   cylinder(h = 3*height, r = 4, center = true);
 }
+
+echo("bounding box", width, depth, height);
 `;
 
 interface Status {
@@ -56,6 +58,8 @@ interface Status {
   volume: number;
   ms: number;
   echo: string;
+  warnings: string;
+  error: string;
 }
 
 export function App() {
@@ -80,8 +84,11 @@ export function App() {
     volume: 0,
     ms: 0,
     echo: "",
+    warnings: "",
+    error: "",
   });
   const [version, setVersion] = useState("");
+  const [consoleOpen, setConsoleOpen] = useState(false);
   const [schema, setSchema] = useState<Param[]>([]);
   const [overrides, setOverrides] = useState<Record<string, ParamValue>>({});
 
@@ -165,11 +172,30 @@ export function App() {
         volume: r.volume,
         ms: r.ms,
         echo: r.echo,
+        warnings: r.warnings,
+        error: "",
       });
     } else {
-      setStatus((s) => ({ ...s, ok: false, message: r.error, ms: r.ms, echo: r.echo }));
+      setStatus((s) => ({
+        ...s,
+        ok: false,
+        message: r.error,
+        ms: r.ms,
+        echo: r.echo,
+        warnings: r.warnings,
+        error: r.error,
+      }));
+      setConsoleOpen(true); // surface failures immediately
     }
   }
+
+  // Console lines with severity, newest section first.
+  const consoleLines: { kind: "error" | "warn" | "echo"; text: string }[] = [];
+  if (status.error) consoleLines.push({ kind: "error", text: status.error });
+  for (const w of status.warnings.split("\n").filter(Boolean))
+    consoleLines.push({ kind: "warn", text: `WARNING: ${w}` });
+  for (const e of status.echo.split("\n").filter(Boolean))
+    consoleLines.push({ kind: "echo", text: e });
 
   function setOverride(name: string, value: ParamValue) {
     const next = { ...overridesRef.current, [name]: value };
@@ -216,6 +242,20 @@ export function App() {
         />
       </div>
 
+      {consoleOpen && (
+        <div className="console">
+          {consoleLines.length === 0 ? (
+            <div className="console-line muted">No output.</div>
+          ) : (
+            consoleLines.map((l, i) => (
+              <div className={`console-line ${l.kind}`} key={i}>
+                {l.text}
+              </div>
+            ))
+          )}
+        </div>
+      )}
+
       <footer className={`statusbar ${status.ok ? "ok" : "err"}`}>
         <span className="status-main">{status.message}</span>
         {status.ok && (
@@ -223,7 +263,13 @@ export function App() {
             vol {status.volume.toFixed(2)} · {status.ms.toFixed(0)} ms
           </span>
         )}
-        {status.echo && <span className="status-echo">{status.echo.replace(/\n/g, " | ")}</span>}
+        <button
+          className={`console-toggle ${consoleLines.some((l) => l.kind !== "echo") ? "alert" : ""}`}
+          onClick={() => setConsoleOpen((o) => !o)}
+          title="Toggle console"
+        >
+          console{consoleLines.length ? ` (${consoleLines.length})` : ""}
+        </button>
         <span className="status-version">{version && `engine ${version}`}</span>
       </footer>
     </div>

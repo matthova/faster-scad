@@ -201,6 +201,43 @@ body {
   width: 46px;
 }
 
+.console {
+  height: 160px;
+  overflow-y: auto;
+  background: var(--bg, #141414);
+  border-top: 1px solid var(--border);
+  padding: 6px 12px;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.console-line {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.console-line.error {
+  color: #ff6b6b;
+}
+.console-line.warn {
+  color: #e0b341;
+}
+.console-line.echo {
+  color: var(--fg, #ccc);
+}
+.console-line.muted {
+  color: #777;
+}
+
+.console-toggle {
+  font-size: 11px;
+  padding: 2px 8px;
+}
+.console-toggle.alert {
+  border-color: #e0b341;
+  color: #e0b341;
+}
+
 .statusbar {
   display: flex;
   align-items: center;
@@ -212,6 +249,10 @@ body {
   font-family: ui-monospace, Menlo, monospace;
   white-space: nowrap;
   overflow: hidden;
+}
+
+.statusbar .status-version {
+  margin-left: auto;
 }
 
 .statusbar.ok .status-main {
