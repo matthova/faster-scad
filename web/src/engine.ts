@@ -4,11 +4,18 @@
 // the plan). Results are delivered latest-wins.
 import type { RenderRequest, RenderResponse } from "./engineWorker";
 
+/** A pending render request: source plus parameter overrides. */
+interface Job {
+  source: string;
+  names: string[];
+  values: string[];
+}
+
 export class Engine {
   private worker!: Worker;
   private busy = false;
   private seq = 0;
-  private pending: string | null = null;
+  private pending: Job | null = null;
 
   constructor(private onResult: (r: RenderResponse) => void) {
     this.spawn();
@@ -22,14 +29,14 @@ export class Engine {
       this.busy = false;
       this.onResult(e.data);
       if (this.pending !== null) {
-        const src = this.pending;
+        const job = this.pending;
         this.pending = null;
-        this.render(src);
+        this.render(job.source, job.names, job.values);
       }
     };
   }
 
-  render(source: string) {
+  render(source: string, names: string[] = [], values: string[] = []) {
     if (this.busy) {
       // Cancel the in-flight render by terminating; respawn fresh.
       this.worker.terminate();
@@ -37,6 +44,6 @@ export class Engine {
     }
     this.busy = true;
     this.seq += 1;
-    this.worker.postMessage({ seq: this.seq, source } satisfies RenderRequest);
+    this.worker.postMessage({ seq: this.seq, source, names, values } satisfies RenderRequest);
   }
 }

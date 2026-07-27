@@ -1,10 +1,14 @@
 /// <reference lib="webworker" />
 // The engine worker: initializes the wasm module once, then renders on demand.
-import init, { render, version } from "../engine/quito.js";
+import init, { render_with_params, parameters, version } from "../engine/quito.js";
 
 export interface RenderRequest {
   seq: number;
   source: string;
+  /** Parameter override names, parallel to `values`. */
+  names: string[];
+  /** Override values as literal strings ("30", "true", "\"hi\"", "[1,2,3]"). */
+  values: string[];
 }
 
 export interface RenderResponse {
@@ -21,18 +25,27 @@ export interface RenderResponse {
   area: number;
   ms: number;
   version: string;
+  /** Customizer schema JSON (`{"params":[…]}`) for the current source. */
+  params: string;
 }
 
 const ready = init();
 
 self.onmessage = async (e: MessageEvent<RenderRequest>) => {
-  const { seq, source } = e.data;
+  const { seq, source, names, values } = e.data;
   await ready;
 
   const t0 = performance.now();
+  let params = `{"params":[]}`;
+  try {
+    params = parameters(source);
+  } catch {
+    // keep the empty schema
+  }
+
   let res;
   try {
-    res = render(source);
+    res = render_with_params(source, names, values);
   } catch (err) {
     postMessage({
       seq,
@@ -48,6 +61,7 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
       area: 0,
       ms: performance.now() - t0,
       version: "",
+      params,
     } satisfies RenderResponse);
     return;
   }
@@ -68,6 +82,7 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
     area: res.area,
     ms: performance.now() - t0,
     version: version(),
+    params,
   };
   res.free();
   (self as unknown as Worker).postMessage(msg, [positions.buffer, normals.buffer]);

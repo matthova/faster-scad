@@ -128,9 +128,24 @@ impl RenderResult {
     }
 }
 
+/// The customizer parameter schema for a source string, as a JSON string
+/// (`{"params":[…]}`). The playground renders a control panel from this.
+#[wasm_bindgen]
+pub fn parameters(source: &str) -> String {
+    customizer_json(&quito_syntax::customizer::extract(source))
+}
+
 /// Run the full pipeline on a source string.
 #[wasm_bindgen]
 pub fn render(source: &str) -> RenderResult {
+    render_with_params(source, Vec::new(), Vec::new())
+}
+
+/// Like [`render`], but with customizer overrides supplied as parallel arrays:
+/// `names[i]` is a top-level parameter and `values[i]` its new value as a
+/// literal string (`"30"`, `"true"`, `"\"hi\""`, `"[1,2,3]"`).
+#[wasm_bindgen]
+pub fn render_with_params(source: &str, names: Vec<String>, values: Vec<String>) -> RenderResult {
     // Parse.
     let program = match quito_syntax::parse(source) {
         Ok(p) => p,
@@ -143,8 +158,21 @@ pub fn render(source: &str) -> RenderResult {
         }
     };
 
+    // Build overrides from the parallel arrays.
+    let mut overrides = Vec::new();
+    for (name, val) in names.iter().zip(values.iter()) {
+        if let Some(pv) = quito_syntax::customizer::parse_value(val) {
+            overrides.push((name.clone(), quito_eval::value_from_param(&pv)));
+        }
+    }
+
     // Evaluate.
-    let eval = match quito_eval::eval_program(&program) {
+    let eval = match quito_eval::eval_program_with_params(
+        &program,
+        &quito_eval::NullResolver,
+        ".",
+        &overrides,
+    ) {
         Ok(o) => o,
         Err(e) => return RenderResult::from_error(format!("evaluation error: {}", e.0), String::new(), String::new()),
     };
@@ -177,5 +205,147 @@ pub fn render(source: &str) -> RenderResult {
         echo,
         warnings,
         error: None,
+    }
+}
+
+// ===================================================================
+// Customizer schema → JSON (small, fixed-shape; no serde dependency)
+// ===================================================================
+
+use quito_syntax::customizer::{Control, Customizer, ParamValue};
+
+fn json_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            _ => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn json_num(n: f64) -> String {
+    if n.is_finite() {
+        format!("{n}")
+    } else {
+        "0".to_string()
+    }
+}
+
+/// JSON for a parameter value, plus its `"type"` tag.
+fn value_json(v: &ParamValue) -> (String, &'static str) {
+    match v {
+        ParamValue::Number(n) => (json_num(*n), "number"),
+        ParamValue::Bool(b) => (b.to_string(), "bool"),
+        ParamValue::Text(s) => (json_str(s), "string"),
+        ParamValue::Vector(xs) => {
+            let items: Vec<String> = xs.iter().map(|n| json_num(*n)).collect();
+            (format!("[{}]", items.join(",")), "vector")
+        }
+    }
+}
+
+fn control_json(c: &Control) -> String {
+    match c {
+        Control::Number => r#"{"kind":"number"}"#.to_string(),
+        Control::Checkbox => r#"{"kind":"checkbox"}"#.to_string(),
+        Control::Slider { min, step, max } => {
+            let step = step.map(|s| json_num(s)).unwrap_or_else(|| "null".into());
+            format!(
+                r#"{{"kind":"slider","min":{},"max":{},"step":{}}}"#,
+                json_num(*min),
+                json_num(*max),
+                step
+            )
+        }
+        Control::Text { max_length } => {
+            let ml = max_length.map(|n| n.to_string()).unwrap_or_else(|| "null".into());
+            format!(r#"{{"kind":"text","maxLength":{ml}}}"#)
+        }
+        Control::Vector { length } => format!(r#"{{"kind":"vector","length":{length}}}"#),
+        Control::Dropdown(choices) => {
+            let opts: Vec<String> = choices
+                .iter()
+                .map(|ch| {
+                    let (v, _) = value_json(&ch.value);
+                    format!(r#"{{"value":{},"label":{}}}"#, v, json_str(&ch.label))
+                })
+                .collect();
+            format!(r#"{{"kind":"dropdown","options":[{}]}}"#, opts.join(","))
+        }
+    }
+}
+
+fn customizer_json(c: &Customizer) -> String {
+    let params: Vec<String> = c
+        .params
+        .iter()
+        .map(|p| {
+            let (value, ty) = value_json(&p.value);
+            let desc = p
+                .description
+                .as_deref()
+                .map(json_str)
+                .unwrap_or_else(|| "null".into());
+            format!(
+                r#"{{"name":{},"group":{},"description":{},"type":"{}","value":{},"control":{}}}"#,
+                json_str(&p.name),
+                json_str(&p.group),
+                desc,
+                ty,
+                value,
+                control_json(&p.control),
+            )
+        })
+        .collect();
+    format!(r#"{{"params":[{}]}}"#, params.join(","))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn schema_json_shapes() {
+        let src = "\
+/* [Box] */
+// the width
+width = 10; // [1:100]
+mode = 1;   // [0:Off, 1:On]
+flag = true;
+name = \"hi\"; // 8
+v = [1, 2, 3];
+";
+        let json = customizer_json(&quito_syntax::customizer::extract(src));
+        // Spot-check the salient pieces (order preserved).
+        assert!(json.contains(r#""name":"width""#));
+        assert!(json.contains(r#""group":"Box""#));
+        assert!(json.contains(r#""description":"the width""#));
+        assert!(json.contains(r#""kind":"slider","min":1,"max":100,"step":null"#));
+        assert!(json.contains(r#""kind":"dropdown","options":[{"value":0,"label":"Off"}"#));
+        assert!(json.contains(r#""name":"flag","group":"Box","description":null,"type":"bool","value":true"#));
+        assert!(json.contains(r#""kind":"text","maxLength":8"#));
+        assert!(json.contains(r#""type":"vector","value":[1,2,3],"control":{"kind":"vector","length":3}"#));
+    }
+
+    #[test]
+    fn render_applies_overrides() {
+        // width=10 default → 10*10*10; override width=4 → 4*10*10 = 400.
+        let src = "width = 10;\ncube([width, 10, 10]);";
+        let base = render_with_params(src, vec![], vec![]);
+        assert!(base.ok());
+        assert!((base.volume() - 1000.0).abs() < 1e-6, "vol {}", base.volume());
+
+        let overridden =
+            render_with_params(src, vec!["width".to_string()], vec!["4".to_string()]);
+        assert!(overridden.ok());
+        assert!((overridden.volume() - 400.0).abs() < 1e-6, "vol {}", overridden.volume());
     }
 }

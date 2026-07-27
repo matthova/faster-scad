@@ -8,9 +8,25 @@ import { Viewer } from "./viewer";
 import { Engine } from "./engine";
 import type { RenderResponse } from "./engineWorker";
 import { buildBinarySTL, downloadBlob } from "./stl";
+import { CustomizerPanel } from "./CustomizerPanel";
+import { parseSchema, toLiteral, type Param, type ParamValue } from "./customizer";
 
 const DEFAULT_SOURCE = `// Quito playground — edits re-render live.
+// Drag the parameters on the right (they come from these annotated variables).
 $fn = 48;
+
+/* [Bracket] */
+// outer width
+width = 40;   // [20:80]
+// outer depth
+depth = 30;   // [20:80]
+height = 20;  // [10:40]
+// wall thickness
+wall = 3;     // [1:0.5:6]
+
+/* [Boss] */
+boss = true;
+boss_h = 8;   // [0:20]
 
 module bracket(w, d, h, t) {
   difference() {
@@ -21,20 +37,16 @@ module bracket(w, d, h, t) {
 
 difference() {
   union() {
-    bracket(40, 30, 20, 3);
-    // rounded boss
-    translate([0, 0, 10])
-      cylinder(h = 8, r1 = 9, r2 = 6);
+    bracket(width, depth, height, wall);
+    if (boss)
+      translate([0, 0, height/2])
+        cylinder(h = boss_h, r1 = 9, r2 = 6);
   }
-  // bolt pattern
-  for (dx = [-15, 15], dy = [-10, 10])
-    translate([dx, dy, -20])
-      cylinder(h = 40, r = 2.5);
-  // central bore
-  cylinder(h = 60, r = 4, center = true);
+  for (dx = [-width/2 + 8, width/2 - 8], dy = [-depth/2 + 8, depth/2 - 8])
+    translate([dx, dy, -height])
+      cylinder(h = 2*height, r = 2.5);
+  cylinder(h = 3*height, r = 4, center = true);
 }
-
-echo("triangles will render live");
 `;
 
 interface Status {
@@ -54,6 +66,13 @@ export function App() {
   const lastPositions = useRef<Float32Array>(new Float32Array(0));
   const debounceTimer = useRef<number | undefined>(undefined);
 
+  // Customizer state. Refs mirror the state so imperative render calls (from
+  // slider drags and editor edits) never see a stale closure.
+  const sourceRef = useRef(DEFAULT_SOURCE);
+  const overridesRef = useRef<Record<string, ParamValue>>({});
+  const paramsJsonRef = useRef("");
+  const requestRenderRef = useRef<() => void>(() => {});
+
   const [status, setStatus] = useState<Status>({
     ok: true,
     message: "initializing…",
@@ -63,6 +82,8 @@ export function App() {
     echo: "",
   });
   const [version, setVersion] = useState("");
+  const [schema, setSchema] = useState<Param[]>([]);
+  const [overrides, setOverrides] = useState<Record<string, ParamValue>>({});
 
   useEffect(() => {
     if (!canvasRef.current || !editorHost.current) return;
@@ -73,12 +94,17 @@ export function App() {
     const engine = new Engine((r: RenderResponse) => onResult(r));
     engineRef.current = engine;
 
-    const requestRender = (source: string) => {
-      window.clearTimeout(debounceTimer.current);
-      debounceTimer.current = window.setTimeout(() => {
-        engine.render(source);
-      }, 200);
+    const renderNow = () => {
+      const ov = overridesRef.current;
+      const names = Object.keys(ov);
+      const values = names.map((n) => toLiteral(ov[n]));
+      engine.render(sourceRef.current, names, values);
     };
+    const requestRender = () => {
+      window.clearTimeout(debounceTimer.current);
+      debounceTimer.current = window.setTimeout(renderNow, 150);
+    };
+    requestRenderRef.current = requestRender;
 
     const view = new EditorView({
       state: EditorState.create({
@@ -92,15 +118,17 @@ export function App() {
             ".cm-scroller": { fontFamily: "ui-monospace, Menlo, monospace" },
           }),
           EditorView.updateListener.of((u) => {
-            if (u.docChanged) requestRender(u.state.doc.toString());
+            if (u.docChanged) {
+              sourceRef.current = u.state.doc.toString();
+              requestRender();
+            }
           }),
         ],
       }),
       parent: editorHost.current,
     });
 
-    // initial render
-    engine.render(DEFAULT_SOURCE);
+    renderNow(); // initial render
 
     return () => {
       view.destroy();
@@ -110,6 +138,23 @@ export function App() {
 
   function onResult(r: RenderResponse) {
     if (r.version) setVersion(r.version);
+
+    // Update the parameter schema when it changed. Preserve override values for
+    // params that still exist (by name), drop the rest.
+    if (r.params && r.params !== paramsJsonRef.current) {
+      paramsJsonRef.current = r.params;
+      const next = parseSchema(r.params);
+      setSchema(next);
+      const kept: Record<string, ParamValue> = {};
+      for (const [k, v] of Object.entries(overridesRef.current)) {
+        if (next.some((p) => p.name === k)) kept[k] = v;
+      }
+      if (Object.keys(kept).length !== Object.keys(overridesRef.current).length) {
+        overridesRef.current = kept;
+        setOverrides(kept);
+      }
+    }
+
     if (r.ok) {
       lastPositions.current = r.positions;
       viewerRef.current?.setMesh(r.positions, r.normals);
@@ -124,6 +169,19 @@ export function App() {
     } else {
       setStatus((s) => ({ ...s, ok: false, message: r.error, ms: r.ms, echo: r.echo }));
     }
+  }
+
+  function setOverride(name: string, value: ParamValue) {
+    const next = { ...overridesRef.current, [name]: value };
+    overridesRef.current = next;
+    setOverrides(next);
+    requestRenderRef.current();
+  }
+
+  function resetOverrides() {
+    overridesRef.current = {};
+    setOverrides({});
+    requestRenderRef.current();
   }
 
   function onDownload() {
@@ -150,6 +208,12 @@ export function App() {
         <div className="viewer">
           <canvas ref={canvasRef} />
         </div>
+        <CustomizerPanel
+          params={schema}
+          overrides={overrides}
+          onChange={setOverride}
+          onReset={resetOverrides}
+        />
       </div>
 
       <footer className={`statusbar ${status.ok ? "ok" : "err"}`}>

@@ -110,6 +110,12 @@ pub fn extract(src: &str) -> Customizer {
         };
         let (name, value_src, trailing) = assign;
 
+        // `$` special variables (e.g. `$fn`) are never customizer parameters.
+        if name.starts_with('$') {
+            pending_desc = None;
+            continue;
+        }
+
         let Some(value) = parse_value(value_src) else {
             pending_desc = None;
             continue; // not a literal → not a customizer parameter
@@ -404,8 +410,10 @@ depth = 5; // depth here
 
     #[test]
     fn ignores_non_literals_and_expressions() {
-        // Expressions, comparisons, and module calls are not parameters.
+        // Expressions, comparisons, module calls, and `$` specials are not
+        // parameters.
         let src = "\
+$fn = 48;
 a = 1 + 2;
 b == 3;
 c = sin(30);
