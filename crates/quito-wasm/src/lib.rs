@@ -5,12 +5,29 @@
 //! console output and diagnostics. Geometry uses the pure-Rust boolmesh kernel
 //! (the default on wasm).
 
+use std::cell::RefCell;
 use wasm_bindgen::prelude::*;
+
+thread_local! {
+    /// Persistent geometry cache across renders — makes warm edits incremental
+    /// (only subtrees whose structure changed are re-rendered). The worker is
+    /// single-threaded, so a thread-local is the whole story.
+    static CACHE: RefCell<quito_geom::GeomCache> = RefCell::new(quito_geom::GeomCache::new());
+}
+
+/// Bound on cached subtrees; past this the cache is reset to cap memory.
+const CACHE_CAP: usize = 8192;
 
 /// Initialize panic hook for readable errors in the browser console.
 #[wasm_bindgen(start)]
 pub fn start() {
     console_error_panic_hook::set_once();
+}
+
+/// Drop the persistent geometry cache (e.g. when loading a new document).
+#[wasm_bindgen]
+pub fn clear_cache() {
+    CACHE.with(|c| c.borrow_mut().clear());
 }
 
 /// Engine version string.
@@ -134,8 +151,17 @@ pub fn render(source: &str) -> RenderResult {
     let echo = eval.echoes.join("\n");
     let warnings = eval.warnings.join("\n");
 
-    // Render geometry (boolmesh kernel on wasm).
-    let mesh = match quito_geom::render(&eval.node) {
+    // Render geometry (boolmesh kernel on wasm), reusing the persistent cache
+    // so unchanged subtrees survive across edits.
+    let kernel = quito_geom::BoolmeshKernel::new();
+    let mesh = CACHE.with(|c| {
+        let mut cache = c.borrow_mut();
+        if cache.len() > CACHE_CAP {
+            cache.clear();
+        }
+        quito_geom::render_cached(&eval.node, &kernel, &mut cache)
+    });
+    let mesh = match mesh {
         Ok(m) => m,
         Err(e) => return RenderResult::from_error(format!("geometry error: {e}"), echo, warnings),
     };

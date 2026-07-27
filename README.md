@@ -4,7 +4,7 @@ A fast, greenfield reimplementation of the [OpenSCAD](https://openscad.org)
 language — same language spirit, a modern geometry kernel, one Rust core
 shipping to the browser (wasm) and desktop (Tauri).
 
-> **Status: M3 nearly complete — full language + geometry.**
+> **Status: M3 complete, M4 underway — full language + geometry + perf.**
 > M0 (native skeleton), M1 (playground + kernel bake-off) and M2 (full language)
 > are complete: BOSL2's function test suite passes **13/15 (87%)** and an echo
 > oracle (24/24) diffs the language against real OpenSCAD. M3 has added the 2D
@@ -92,6 +92,24 @@ CGAL, the left baseline) by a wide margin on geometry-heavy work, and is a solid
 **~3× ahead of OpenSCAD's newest Manifold backend** — while both baselines still
 pay process-startup overhead that dominates the smallest models, so these are
 conservative. Models live in [`benches/models/`](benches/models/).
+
+#### Warm-edit latency (M4 cache)
+
+A content-addressed geometry cache (`GeomCache`, keyed by a structural hash of
+each CSG subtree) makes re-renders incremental: only subtrees whose structure
+changed are recomputed, the rest are `Mesh` clones, and identical subtrees in one
+render are deduplicated (CSE). Re-rendering after an edit that doesn't change
+geometry (in-process, native kernel):
+
+| model | cold | warm (cache reused) | speed-up |
+|---|--:|--:|--:|
+| booleans | 47 ms | 0.08 ms | 597× |
+| rounded (minkowski) | 159 ms | 0.01 ms | 14,000× |
+| gears | 6.8 ms | 0.04 ms | 153× |
+
+Comfortably inside the **<100 ms warm-edit** M4 target. The cache is persisted
+across edits in the playground's Web Worker; a real geometry edit re-renders only
+the changed root-to-leaf path.
 
 ## Build & run
 

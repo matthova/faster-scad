@@ -125,6 +125,39 @@ fn run_bench(root: &Path) {
         );
     }
     println!("\n(× = OpenSCAD time / quito time; higher is quito being faster.)");
+
+    warm_edit_bench(root, &models);
+}
+
+/// Warm-edit bench (M4 exit): in-process, native kernel, render each model with
+/// a fresh cache (cold) then re-render the same tree reusing the cache (warm).
+/// The warm number is the floor for an edit that doesn't change geometry — and
+/// a real geometry edit re-renders only the changed root-to-leaf path.
+fn warm_edit_bench(root: &Path, models: &[(&str, &str)]) {
+    println!("\nWarm re-render — in-process, native kernel, cache reused (ms):\n");
+    println!("{:<12} {:>10} {:>10} {:>10}", "model", "cold", "warm", "speed-up");
+    println!("{}", "-".repeat(46));
+    let kernel = quito_geom::ManifoldKernel::new();
+    for (name, rel) in models {
+        let path = root.join(rel);
+        let Ok(src) = fs::read_to_string(&path) else { continue };
+        let Ok(prog) = quito_syntax::parse(&src) else { continue };
+        let dir = path.parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default();
+        let eval = |()| quito_eval::eval_program_with(&prog, &DiskResolver, &dir).ok();
+        let Some(out) = eval(()) else { continue };
+        let mut cache = quito_geom::GeomCache::new();
+        let t0 = Instant::now();
+        let _ = quito_geom::render_cached(&out.node, &kernel, &mut cache);
+        let cold = t0.elapsed().as_secs_f64() * 1000.0;
+        // A fresh eval yields a structurally identical tree → all cache hits.
+        let Some(out2) = eval(()) else { continue };
+        let t1 = Instant::now();
+        let _ = quito_geom::render_cached(&out2.node, &kernel, &mut cache);
+        let warm = t1.elapsed().as_secs_f64() * 1000.0;
+        let speedup = if warm > 0.0 { format!("{:.0}×", cold / warm) } else { "-".into() };
+        println!("{:<12} {:>10.1} {:>10.2} {:>10}", name, cold, warm, speedup);
+    }
+    println!("\n(warm = unchanged tree, all cache hits — the incremental-edit floor.)");
 }
 
 /// Best-of-`runs` full-process wall-clock in ms; `None` if the command fails.

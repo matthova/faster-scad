@@ -14,6 +14,8 @@ pub use mesh::Mesh;
 pub use tessellate::{cube, cylinder, fragments, polyhedron, sphere};
 
 use quito_ir::{Node, Vec3};
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 
 #[derive(Debug, thiserror::Error)]
 pub enum GeomError {
@@ -21,6 +23,41 @@ pub enum GeomError {
     Kernel(String),
     #[error("input geometry is not manifold: {0}")]
     NonManifold(String),
+}
+
+/// A content-addressed geometry cache (M4): maps a structural hash of a CSG
+/// subtree to its rendered mesh. Reused across renders, it makes warm edits
+/// incremental — only subtrees whose structure changed are re-rendered, the
+/// rest are cheap `Mesh` clones; within a single render it also deduplicates
+/// identical subtrees (common-subexpression elimination).
+#[derive(Default)]
+pub struct GeomCache {
+    meshes: HashMap<u64, Mesh>,
+}
+
+impl GeomCache {
+    pub fn new() -> Self {
+        GeomCache::default()
+    }
+    /// Number of cached subtrees.
+    pub fn len(&self) -> usize {
+        self.meshes.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.meshes.is_empty()
+    }
+    /// Drop all cached meshes.
+    pub fn clear(&mut self) {
+        self.meshes.clear();
+    }
+}
+
+/// Shared state threaded through a single render traversal.
+struct Ctx<'a> {
+    kernel: &'a dyn Kernel,
+    cache: &'a mut GeomCache,
+    /// Precomputed structural hash of every node in the tree, by address.
+    hashes: &'a HashMap<*const Node, u64>,
 }
 
 /// Render a CSG tree to a mesh using the default kernel for the target:
@@ -37,8 +74,38 @@ pub fn render(node: &Node) -> Result<Mesh, GeomError> {
     render_with(node, &BoolmeshKernel::new())
 }
 
-/// Render a CSG tree to a mesh using the given kernel.
+/// Render a CSG tree to a mesh using the given kernel (no persistent cache).
 pub fn render_with(node: &Node, kernel: &dyn Kernel) -> Result<Mesh, GeomError> {
+    let mut cache = GeomCache::new();
+    render_cached(node, kernel, &mut cache)
+}
+
+/// Render using the given kernel and a caller-owned [`GeomCache`], enabling
+/// incremental warm-edit re-renders (unchanged subtrees are not recomputed).
+pub fn render_cached(
+    node: &Node,
+    kernel: &dyn Kernel,
+    cache: &mut GeomCache,
+) -> Result<Mesh, GeomError> {
+    let mut hashes = HashMap::new();
+    hash_all(node, &mut hashes);
+    let mut ctx = Ctx { kernel, cache, hashes: &hashes };
+    render_node(node, &mut ctx)
+}
+
+/// Memoized render of one node: cache hit → clone; miss → render + store.
+fn render_node(node: &Node, ctx: &mut Ctx) -> Result<Mesh, GeomError> {
+    let key = ctx.hashes[&(node as *const Node)];
+    if let Some(m) = ctx.cache.meshes.get(&key) {
+        return Ok(m.clone());
+    }
+    let mesh = render_uncached(node, ctx)?;
+    ctx.cache.meshes.insert(key, mesh.clone());
+    Ok(mesh)
+}
+
+/// The actual per-variant renderer (children go back through [`render_node`]).
+fn render_uncached(node: &Node, ctx: &mut Ctx) -> Result<Mesh, GeomError> {
     match node {
         Node::Empty => Ok(Mesh::new()),
         Node::Cube { size, center } => Ok(cube(*size, *center)),
@@ -71,13 +138,13 @@ pub fn render_with(node: &Node, kernel: &dyn Kernel) -> Result<Mesh, GeomError> 
         } => extrude_csg(
             child,
             &|cs| shape2d::linear_extrude(cs, *height, *center, *twist, *scale, *slices),
-            kernel,
+            ctx,
         ),
         Node::RotateExtrude { angle, frags, child } => {
-            extrude_csg(child, &|cs| shape2d::rotate_extrude(cs, *angle, *frags), kernel)
+            extrude_csg(child, &|cs| shape2d::rotate_extrude(cs, *angle, *frags), ctx)
         }
         Node::Projection { cut, child } => {
-            let mesh = render_with(child, kernel)?;
+            let mesh = render_node(child, ctx)?;
             let contours = if *cut {
                 shape2d::slice_z0(&mesh)
             } else {
@@ -87,70 +154,201 @@ pub fn render_with(node: &Node, kernel: &dyn Kernel) -> Result<Mesh, GeomError> 
         }
 
         Node::Group(children) => {
-            let meshes = render_all(children, kernel)?;
-            kernel.union(meshes)
+            let meshes = render_all(children, ctx)?;
+            ctx.kernel.union(meshes)
         }
         Node::Union(children) => {
-            let meshes = render_all(children, kernel)?;
-            kernel.union(meshes)
+            let meshes = render_all(children, ctx)?;
+            ctx.kernel.union(meshes)
         }
         Node::Intersection(children) => {
-            let meshes = render_all(children, kernel)?;
-            kernel.intersection(meshes)
+            let meshes = render_all(children, ctx)?;
+            ctx.kernel.intersection(meshes)
         }
         Node::Hull(children) => {
-            let meshes = render_all(children, kernel)?;
-            kernel.hull(meshes)
+            let meshes = render_all(children, ctx)?;
+            ctx.kernel.hull(meshes)
         }
         Node::Minkowski(children) => {
-            let meshes = render_all(children, kernel)?;
+            let meshes = render_all(children, ctx)?;
             Ok(minkowski_fold(meshes))
         }
         Node::Difference(children) => {
-            let mut meshes = render_all(children, kernel)?;
+            let mut meshes = render_all(children, ctx)?;
             if meshes.is_empty() {
                 Ok(Mesh::new())
             } else {
                 let base = meshes.remove(0);
-                kernel.difference(base, meshes)
+                ctx.kernel.difference(base, meshes)
             }
         }
 
         Node::Translate { v, child } => {
-            let mut m = render_with(child, kernel)?;
+            let mut m = render_node(child, ctx)?;
             translate(&mut m, *v);
             Ok(m)
         }
         Node::Rotate { deg, child } => {
-            let mut m = render_with(child, kernel)?;
+            let mut m = render_node(child, ctx)?;
             rotate(&mut m, *deg);
             Ok(m)
         }
         Node::Scale { v, child } => {
-            let mut m = render_with(child, kernel)?;
+            let mut m = render_node(child, ctx)?;
             scale(&mut m, *v);
             Ok(m)
         }
         Node::Mirror { v, child } => {
-            let mut m = render_with(child, kernel)?;
+            let mut m = render_node(child, ctx)?;
             mirror(&mut m, *v);
             Ok(m)
         }
         Node::MultMatrix { m: mat, child } => {
-            let mut mesh = render_with(child, kernel)?;
+            let mut mesh = render_node(child, ctx)?;
             mult_matrix(&mut mesh, mat);
             Ok(mesh)
         }
         Node::Resize { new, auto, child } => {
-            let mut mesh = render_with(child, kernel)?;
+            let mut mesh = render_node(child, ctx)?;
             resize(&mut mesh, *new, *auto);
             Ok(mesh)
         }
     }
 }
 
-fn render_all(children: &[Node], kernel: &dyn Kernel) -> Result<Vec<Mesh>, GeomError> {
-    children.iter().map(|c| render_with(c, kernel)).collect()
+fn render_all(children: &[Node], ctx: &mut Ctx) -> Result<Vec<Mesh>, GeomError> {
+    children.iter().map(|c| render_node(c, ctx)).collect()
+}
+
+/// Structural hash of every node in the tree, keyed by node address. Computed
+/// once per render in a single O(n) post-order pass (child hashes combine into
+/// the parent's), so [`render_node`] can look up any subtree's hash in O(1)
+/// without re-traversing it.
+fn hash_all(node: &Node, out: &mut HashMap<*const Node, u64>) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    std::mem::discriminant(node).hash(&mut h);
+    let bits = |x: &f64, h: &mut std::collections::hash_map::DefaultHasher| x.to_bits().hash(h);
+    let frags = |f: &quito_ir::FragmentSpec, h: &mut std::collections::hash_map::DefaultHasher| {
+        f.fn_.to_bits().hash(h);
+        f.fa.to_bits().hash(h);
+        f.fs.to_bits().hash(h);
+    };
+    match node {
+        Node::Empty => {}
+        Node::Group(cs)
+        | Node::Union(cs)
+        | Node::Difference(cs)
+        | Node::Intersection(cs)
+        | Node::Hull(cs)
+        | Node::Minkowski(cs) => {
+            for c in cs {
+                hash_all(c, out).hash(&mut h);
+            }
+        }
+        Node::Cube { size, center } => {
+            for x in size {
+                bits(x, &mut h);
+            }
+            center.hash(&mut h);
+        }
+        Node::Sphere { r, frags: f } => {
+            bits(r, &mut h);
+            frags(f, &mut h);
+        }
+        Node::Cylinder { h: hh, r1, r2, center, frags: f } => {
+            bits(hh, &mut h);
+            bits(r1, &mut h);
+            bits(r2, &mut h);
+            center.hash(&mut h);
+            frags(f, &mut h);
+        }
+        Node::Polyhedron { points, faces } => {
+            for p in points {
+                for x in p {
+                    bits(x, &mut h);
+                }
+            }
+            faces.hash(&mut h);
+        }
+        Node::Square { size, center } => {
+            for x in size {
+                bits(x, &mut h);
+            }
+            center.hash(&mut h);
+        }
+        Node::Circle { r, frags: f } => {
+            bits(r, &mut h);
+            frags(f, &mut h);
+        }
+        Node::Polygon { points, paths } => {
+            for p in points {
+                for x in p {
+                    bits(x, &mut h);
+                }
+            }
+            paths.hash(&mut h);
+        }
+        Node::LinearExtrude { height, center, twist, scale, slices, child } => {
+            bits(height, &mut h);
+            center.hash(&mut h);
+            bits(twist, &mut h);
+            for x in scale {
+                bits(x, &mut h);
+            }
+            slices.hash(&mut h);
+            hash_all(child, out).hash(&mut h);
+        }
+        Node::RotateExtrude { angle, frags: f, child } => {
+            bits(angle, &mut h);
+            frags(f, &mut h);
+            hash_all(child, out).hash(&mut h);
+        }
+        Node::Offset { r, delta, chamfer, frags: f, child } => {
+            bits(r, &mut h);
+            bits(delta, &mut h);
+            chamfer.hash(&mut h);
+            frags(f, &mut h);
+            hash_all(child, out).hash(&mut h);
+        }
+        Node::Translate { v, child } | Node::Scale { v, child } | Node::Mirror { v, child } => {
+            for x in v {
+                bits(x, &mut h);
+            }
+            hash_all(child, out).hash(&mut h);
+        }
+        Node::Rotate { deg, child } => {
+            for x in deg {
+                bits(x, &mut h);
+            }
+            hash_all(child, out).hash(&mut h);
+        }
+        Node::MultMatrix { m, child } => {
+            for row in m {
+                for x in row {
+                    bits(x, &mut h);
+                }
+            }
+            hash_all(child, out).hash(&mut h);
+        }
+        Node::Resize { new, auto, child } => {
+            for x in new {
+                bits(x, &mut h);
+            }
+            auto.hash(&mut h);
+            hash_all(child, out).hash(&mut h);
+        }
+        Node::Import { data, format } => {
+            data.hash(&mut h);
+            format.hash(&mut h);
+        }
+        Node::Projection { cut, child } => {
+            cut.hash(&mut h);
+            hash_all(child, out).hash(&mut h);
+        }
+    }
+    let val = h.finish();
+    out.insert(node as *const Node, val);
+    val
 }
 
 /// Minkowski sum of a chain of meshes. Exact for convex operands (the common
@@ -185,39 +383,39 @@ fn minkowski_pair(a: &Mesh, b: &Mesh) -> Mesh {
 fn extrude_csg(
     node: &Node,
     extrude: &dyn Fn(&[shape2d::Contour]) -> Mesh,
-    kernel: &dyn Kernel,
+    ctx: &mut Ctx,
 ) -> Result<Mesh, GeomError> {
     match node {
         Node::Empty => Ok(Mesh::new()),
         Node::Union(children) | Node::Group(children) => {
             let meshes = children
                 .iter()
-                .map(|c| extrude_csg(c, extrude, kernel))
+                .map(|c| extrude_csg(c, extrude, ctx))
                 .collect::<Result<Vec<_>, _>>()?;
-            kernel.union(meshes)
+            ctx.kernel.union(meshes)
         }
         Node::Intersection(children) => {
             let meshes = children
                 .iter()
-                .map(|c| extrude_csg(c, extrude, kernel))
+                .map(|c| extrude_csg(c, extrude, ctx))
                 .collect::<Result<Vec<_>, _>>()?;
-            kernel.intersection(meshes)
+            ctx.kernel.intersection(meshes)
         }
         Node::Difference(children) => {
             let mut meshes = children
                 .iter()
-                .map(|c| extrude_csg(c, extrude, kernel))
+                .map(|c| extrude_csg(c, extrude, ctx))
                 .collect::<Result<Vec<_>, _>>()?;
             if meshes.is_empty() {
                 Ok(Mesh::new())
             } else {
                 let base = meshes.remove(0);
-                kernel.difference(base, meshes)
+                ctx.kernel.difference(base, meshes)
             }
         }
         // projection: render the 3D child, flatten, then extrude.
         Node::Projection { cut, child } => {
-            let mesh = render_with(child, kernel)?;
+            let mesh = render_node(child, ctx)?;
             let contours = if *cut {
                 shape2d::slice_z0(&mesh)
             } else {
@@ -521,6 +719,59 @@ mod tests {
         let rel = (m.volume() - expected).abs() / expected;
         assert!(rel < 0.01, "torus vol off by {rel}: {}", m.volume());
         assert!(m.signed_volume() > 0.0);
+    }
+
+    #[test]
+    fn cache_matches_cold_and_reuses() {
+        let frags = FragmentSpec { fn_: 32.0, fa: 12.0, fs: 2.0 };
+        let model = |r: f64| {
+            Node::Difference(vec![
+                Node::Cube { size: [20.0, 20.0, 20.0], center: true },
+                Node::Sphere { r, frags },
+            ])
+        };
+        let kernel = ManifoldKernel::new();
+        let mut cache = GeomCache::new();
+
+        // Warm render matches a cold render.
+        let cold = render_with(&model(8.0), &kernel).unwrap();
+        let warm = render_cached(&model(8.0), &kernel, &mut cache).unwrap();
+        assert!((cold.volume() - warm.volume()).abs() < 1e-6);
+        let after_first = cache.len();
+        assert!(after_first > 0);
+
+        // Re-rendering the identical tree adds nothing (pure cache hits).
+        let again = render_cached(&model(8.0), &kernel, &mut cache).unwrap();
+        assert!((again.volume() - warm.volume()).abs() < 1e-6);
+        assert_eq!(cache.len(), after_first, "identical re-render should not grow cache");
+
+        // A warm edit (changed radius) reuses the unchanged cube leaf: only the
+        // sphere and the difference are new, so the cache grows by exactly 2.
+        let edited = render_cached(&model(7.0), &kernel, &mut cache).unwrap();
+        let cold_edit = render_with(&model(7.0), &kernel).unwrap();
+        assert!((edited.volume() - cold_edit.volume()).abs() < 1e-6);
+        assert_eq!(cache.len(), after_first + 2, "warm edit should reuse the cube leaf");
+    }
+
+    #[test]
+    fn cache_cse_dedups_identical_subtrees() {
+        // Two identical spheres in a union hash the same → rendered once.
+        let frags = FragmentSpec { fn_: 32.0, fa: 12.0, fs: 2.0 };
+        let node = Node::Union(vec![
+            Node::Translate {
+                v: [0.0, 0.0, 0.0],
+                child: Box::new(Node::Sphere { r: 5.0, frags }),
+            },
+            Node::Translate {
+                v: [20.0, 0.0, 0.0],
+                child: Box::new(Node::Sphere { r: 5.0, frags }),
+            },
+        ]);
+        let kernel = ManifoldKernel::new();
+        let mut cache = GeomCache::new();
+        render_cached(&node, &kernel, &mut cache).unwrap();
+        // Entries: 1 sphere (shared), 2 translates (distinct v), 1 union = 4.
+        assert_eq!(cache.len(), 4, "identical spheres should share one cache entry");
     }
 
     /// Bake-off: the pure-Rust boolmesh kernel must agree with the C++ Manifold

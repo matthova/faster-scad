@@ -8,6 +8,4 @@ publish = false
 [dependencies]
 quito-syntax = { workspace = true }
 quito-eval = { workspace = true }
-
-[dev-dependencies]
 quito-geom = { workspace = true }
