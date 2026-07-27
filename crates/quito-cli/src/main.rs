@@ -56,6 +56,12 @@ struct Cli {
     /// Print echo/warning output only; do not render geometry.
     #[arg(long)]
     check: bool,
+
+    /// Override a top-level parameter, e.g. `-D width=20` or `-D label="hi"`.
+    /// Repeatable. Values are literals (number/bool/string/vector), matching
+    /// the customizer.
+    #[arg(short = 'D', long = "param", value_name = "NAME=VALUE")]
+    params: Vec<String>,
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
@@ -89,7 +95,19 @@ fn main() -> Result<()> {
         .map(PathBuf::from)
         .collect();
     let resolver = DiskResolver { libs };
-    let out = quito_eval::eval_program_with(&program, &resolver, &base_dir)
+
+    // Parameter overrides (`-D name=value`).
+    let mut overrides = Vec::new();
+    for p in &cli.params {
+        let (name, val) = p
+            .split_once('=')
+            .with_context(|| format!("--param must be NAME=VALUE, got '{p}'"))?;
+        let pv = quito_syntax::customizer::parse_value(val.trim())
+            .with_context(|| format!("invalid parameter value: '{val}'"))?;
+        overrides.push((name.trim().to_string(), quito_eval::value_from_param(&pv)));
+    }
+
+    let out = quito_eval::eval_program_with_params(&program, &resolver, &base_dir, &overrides)
         .map_err(|e| anyhow::anyhow!("evaluation error: {}", e.0))?;
 
     for line in &out.echoes {

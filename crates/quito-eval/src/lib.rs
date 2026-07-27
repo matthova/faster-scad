@@ -127,6 +127,9 @@ struct Interp<'a> {
     cur_dir: String,
     /// Files currently being loaded, for include/use cycle detection.
     loading: HashSet<String>,
+    /// Customizer / `-D` overrides: these replace matching *top-level*
+    /// assignments in the main file (they win, like OpenSCAD's `-D`).
+    overrides: FastMap<String, Value>,
 }
 
 /// Evaluate a parsed program into a CSG tree plus console output (no file
@@ -135,12 +138,36 @@ pub fn eval_program(prog: &Program) -> EResult<EvalOutput> {
     eval_program_with(prog, &NullResolver, ".")
 }
 
+/// Convert a customizer parameter value into a runtime [`Value`], for use as an
+/// override in [`eval_program_with_params`].
+pub fn value_from_param(p: &quito_syntax::customizer::ParamValue) -> Value {
+    use quito_syntax::customizer::ParamValue as P;
+    match p {
+        P::Number(n) => Value::Number(*n),
+        P::Bool(b) => Value::Bool(*b),
+        P::Text(s) => Value::Str(s.clone()),
+        P::Vector(xs) => value::vector(xs.iter().map(|n| Value::Number(*n)).collect()),
+    }
+}
+
 /// Evaluate a program with `include`/`use` support via `resolver`, resolving
 /// relative paths against `base_dir`.
 pub fn eval_program_with(
     prog: &Program,
     resolver: &dyn FileResolver,
     base_dir: &str,
+) -> EResult<EvalOutput> {
+    eval_program_with_params(prog, resolver, base_dir, &[])
+}
+
+/// Like [`eval_program_with`], but with customizer / `-D`-style parameter
+/// overrides: each `(name, value)` replaces the main file's top-level
+/// assignment of `name` (the override wins, matching OpenSCAD's `-D`).
+pub fn eval_program_with_params(
+    prog: &Program,
+    resolver: &dyn FileResolver,
+    base_dir: &str,
+    overrides: &[(String, Value)],
 ) -> EResult<EvalOutput> {
     let mut base = Scope::default();
     base.vars.insert("PI".into(), Value::Number(std::f64::consts::PI));
@@ -164,6 +191,7 @@ pub fn eval_program_with(
         resolver,
         cur_dir: base_dir.to_string(),
         loading: HashSet::new(),
+        overrides: overrides.iter().cloned().collect(),
     };
 
     let nodes = interp.eval_stmts(prog)?;
@@ -299,9 +327,16 @@ impl Interp<'_> {
                 _ => {}
             }
         }
+        // Only the *main file's* top-level assignments (scope depth 1) are
+        // customizer parameters; `use`d files run deeper and modules deeper
+        // still, so their internal variables are never overridden.
+        let top_level = self.scopes.len() == 1;
         for s in stmts {
             if let Stmt::Assign { name, value } = s {
-                let v = self.eval_expr(value)?;
+                let v = match self.overrides.get(name) {
+                    Some(ov) if top_level => ov.clone(),
+                    _ => self.eval_expr(value)?,
+                };
                 self.set_var(name, v);
             }
         }
@@ -1992,6 +2027,33 @@ mod tests {
     // same results as the tree-walk across the constructs it compiles, and that
     // unsupported constructs (comprehensions/closures in a body) fall back
     // correctly.
+    #[test]
+    fn parameter_overrides() {
+        use quito_syntax::parse;
+        // A top-level assignment is overridden (the override wins).
+        let prog = parse("w=10; h=20; echo(w, h);").unwrap();
+        let out = eval_program_with_params(
+            &prog,
+            &NullResolver,
+            ".",
+            &[("w".to_string(), Value::Number(30.0))],
+        )
+        .unwrap();
+        assert_eq!(out.echoes, vec!["ECHO: 30, 20"]);
+
+        // Overrides only touch main-file top-level vars — not a `let` local of
+        // the same name inside a function.
+        let prog2 = parse("function f()=let(w=5) w; w=1; echo(f(), w);").unwrap();
+        let out2 = eval_program_with_params(
+            &prog2,
+            &NullResolver,
+            ".",
+            &[("w".to_string(), Value::Number(99.0))],
+        )
+        .unwrap();
+        assert_eq!(out2.echoes, vec!["ECHO: 5, 99"]);
+    }
+
     #[test]
     fn vm_recursion_and_tce() {
         // Non-tail recursion (factorial).

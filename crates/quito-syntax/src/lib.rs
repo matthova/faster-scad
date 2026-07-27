@@ -4,6 +4,7 @@
 //! observation of the OpenSCAD CLI. No OpenSCAD (GPL) source is consulted.
 
 pub mod ast;
+pub mod customizer;
 pub mod lexer;
 pub mod parser;
 
