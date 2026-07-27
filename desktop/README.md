@@ -35,4 +35,8 @@ cd desktop && npm run build                    # bundle installers
 ```
 
 `npm run dev`/`build` build the `web/` frontend first (see `beforeBuildCommand`
-in `src-tauri/tauri.conf.json`).
+in `src-tauri/tauri.conf.json`). On macOS, `npm run build` produces
+`src-tauri/target/release/bundle/macos/Quito.app` and a
+`…/dmg/Quito_<ver>_aarch64.dmg` installer (ad-hoc signed — for distribution
+you'd add an Apple Developer signing identity + notarization). Windows/Linux
+bundles come from running the same command on those platforms.
