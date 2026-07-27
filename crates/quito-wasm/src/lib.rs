@@ -132,7 +132,7 @@ impl RenderResult {
 /// (`{"params":[…]}`). The playground renders a control panel from this.
 #[wasm_bindgen]
 pub fn parameters(source: &str) -> String {
-    customizer_json(&quito_syntax::customizer::extract(source))
+    quito_syntax::customizer::extract(source).to_json()
 }
 
 /// Run the full pipeline on a source string.
@@ -249,106 +249,6 @@ pub fn render_with_files(
     }
 }
 
-// ===================================================================
-// Customizer schema → JSON (small, fixed-shape; no serde dependency)
-// ===================================================================
-
-use quito_syntax::customizer::{Control, Customizer, ParamValue};
-
-fn json_str(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\t' => out.push_str("\\t"),
-            '\r' => out.push_str("\\r"),
-            _ => out.push(c),
-        }
-    }
-    out.push('"');
-    out
-}
-
-fn json_num(n: f64) -> String {
-    if n.is_finite() {
-        format!("{n}")
-    } else {
-        "0".to_string()
-    }
-}
-
-/// JSON for a parameter value, plus its `"type"` tag.
-fn value_json(v: &ParamValue) -> (String, &'static str) {
-    match v {
-        ParamValue::Number(n) => (json_num(*n), "number"),
-        ParamValue::Bool(b) => (b.to_string(), "bool"),
-        ParamValue::Text(s) => (json_str(s), "string"),
-        ParamValue::Vector(xs) => {
-            let items: Vec<String> = xs.iter().map(|n| json_num(*n)).collect();
-            (format!("[{}]", items.join(",")), "vector")
-        }
-    }
-}
-
-fn control_json(c: &Control) -> String {
-    match c {
-        Control::Number => r#"{"kind":"number"}"#.to_string(),
-        Control::Checkbox => r#"{"kind":"checkbox"}"#.to_string(),
-        Control::Slider { min, step, max } => {
-            let step = step.map(|s| json_num(s)).unwrap_or_else(|| "null".into());
-            format!(
-                r#"{{"kind":"slider","min":{},"max":{},"step":{}}}"#,
-                json_num(*min),
-                json_num(*max),
-                step
-            )
-        }
-        Control::Text { max_length } => {
-            let ml = max_length.map(|n| n.to_string()).unwrap_or_else(|| "null".into());
-            format!(r#"{{"kind":"text","maxLength":{ml}}}"#)
-        }
-        Control::Vector { length } => format!(r#"{{"kind":"vector","length":{length}}}"#),
-        Control::Dropdown(choices) => {
-            let opts: Vec<String> = choices
-                .iter()
-                .map(|ch| {
-                    let (v, _) = value_json(&ch.value);
-                    format!(r#"{{"value":{},"label":{}}}"#, v, json_str(&ch.label))
-                })
-                .collect();
-            format!(r#"{{"kind":"dropdown","options":[{}]}}"#, opts.join(","))
-        }
-    }
-}
-
-fn customizer_json(c: &Customizer) -> String {
-    let params: Vec<String> = c
-        .params
-        .iter()
-        .map(|p| {
-            let (value, ty) = value_json(&p.value);
-            let desc = p
-                .description
-                .as_deref()
-                .map(json_str)
-                .unwrap_or_else(|| "null".into());
-            format!(
-                r#"{{"name":{},"group":{},"description":{},"type":"{}","value":{},"control":{}}}"#,
-                json_str(&p.name),
-                json_str(&p.group),
-                desc,
-                ty,
-                value,
-                control_json(&p.control),
-            )
-        })
-        .collect();
-    format!(r#"{{"params":[{}]}}"#, params.join(","))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -364,7 +264,7 @@ flag = true;
 name = \"hi\"; // 8
 v = [1, 2, 3];
 ";
-        let json = customizer_json(&quito_syntax::customizer::extract(src));
+        let json = quito_syntax::customizer::extract(src).to_json();
         // Spot-check the salient pieces (order preserved).
         assert!(json.contains(r#""name":"width""#));
         assert!(json.contains(r#""group":"Box""#));

@@ -12,6 +12,9 @@ import { CustomizerPanel } from "./CustomizerPanel";
 import { parseSchema, toLiteral, type Param, type ParamValue } from "./customizer";
 import { loadProject, saveProject, clearProject, type File } from "./project";
 import { resolveClosure } from "./library";
+import { isTauri, DesktopEngine, saveModelNative } from "./desktopEngine";
+
+const TAURI = isTauri();
 
 // Base URL for bundled libraries (public/lib/…), resolved against the page.
 const LIB_BASE = new URL("lib/", document.baseURI).href;
@@ -70,7 +73,7 @@ export function App() {
   const editorHost = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const viewerRef = useRef<Viewer | null>(null);
-  const engineRef = useRef<Engine | null>(null);
+  const engineRef = useRef<Engine | DesktopEngine | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const lastPositions = useRef<Float32Array>(new Float32Array(0));
   const debounceTimer = useRef<number | undefined>(undefined);
@@ -117,7 +120,9 @@ export function App() {
     const viewer = new Viewer(canvasRef.current);
     viewerRef.current = viewer;
 
-    const engine = new Engine((r: RenderResponse) => onResult(r));
+    const engine = TAURI
+      ? new DesktopEngine((r: RenderResponse) => onResult(r))
+      : new Engine((r: RenderResponse) => onResult(r));
     engineRef.current = engine;
 
     const renderNow = async () => {
@@ -125,14 +130,27 @@ export function App() {
       const ov = overridesRef.current;
       const names = Object.keys(ov);
       const values = names.map((n) => toLiteral(ov[n]));
-      // Resolve the include/use closure (fetching libraries as needed), then
-      // render with the full file set.
-      const { names: fileNames, contents: fileContents } = await resolveClosure(
-        fs[0].content,
-        fs.slice(1),
-        LIB_BASE,
-      );
-      engine.render(fs[0].content, names, values, fileNames, fileContents);
+      const libs = fs.slice(1);
+      if (TAURI) {
+        // Native engine resolves include/use from disk (OPENSCADPATH) + the
+        // in-memory tabs; no CDN fetch needed.
+        engine.render(
+          fs[0].content,
+          names,
+          values,
+          libs.map((f) => f.name),
+          libs.map((f) => f.content),
+        );
+      } else {
+        // Browser: resolve the include/use closure (fetching libraries), then
+        // render with the full file set.
+        const { names: fileNames, contents: fileContents } = await resolveClosure(
+          fs[0].content,
+          libs,
+          LIB_BASE,
+        );
+        engine.render(fs[0].content, names, values, fileNames, fileContents);
+      }
     };
     const requestRender = () => {
       window.clearTimeout(debounceTimer.current);
@@ -310,6 +328,24 @@ export function App() {
   }
 
   function onDownload(format: "stl" | "off" | "obj") {
+    if (status.triangleCount === 0) return;
+    if (TAURI) {
+      // Native: re-render on the native engine and write via a save dialog, so
+      // the exported mesh is welded/exact (not derived from the render soup).
+      const fs = filesRef.current;
+      const ov = overridesRef.current;
+      const names = Object.keys(ov);
+      const libs = fs.slice(1);
+      void saveModelNative(
+        format,
+        fs[0].content,
+        names,
+        names.map((n) => toLiteral(ov[n])),
+        libs.map((f) => f.name),
+        libs.map((f) => f.content),
+      );
+      return;
+    }
     const pos = lastPositions.current;
     if (pos.length === 0) return;
     const data =
