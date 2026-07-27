@@ -1,0 +1,866 @@
+//! Tree-walk evaluator: AST -> CSG tree ([`quito_ir::Node`]).
+//!
+//! This is the M0 interpreter. It uses a dynamic scope stack (simple and
+//! correct enough for the M0 subset); lexical slot resolution, proper
+//! two-phase hoisting, and `$`-variable dynamic scoping with `children()`
+//! land in M2 alongside the echo oracle.
+
+mod value;
+
+pub use value::{format_number, Value};
+
+use quito_ir::{FragmentSpec, Node, Vec3};
+use quito_syntax::ast::*;
+use std::collections::HashMap;
+
+const MAX_RANGE_ITERS: usize = 10_000_000;
+const MAX_CALL_DEPTH: usize = 20_000;
+
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("{0}")]
+pub struct EvalError(pub String);
+
+type EResult<T> = Result<T, EvalError>;
+
+fn err<T>(msg: impl Into<String>) -> EResult<T> {
+    Err(EvalError(msg.into()))
+}
+
+#[derive(Clone)]
+struct FnDef {
+    params: Vec<Param>,
+    body: Expr,
+}
+
+#[derive(Clone)]
+struct ModDef {
+    params: Vec<Param>,
+    body: Vec<Stmt>,
+}
+
+#[derive(Default)]
+struct Scope {
+    vars: HashMap<String, Value>,
+    funcs: HashMap<String, FnDef>,
+    modules: HashMap<String, ModDef>,
+}
+
+/// The output of evaluating a program.
+pub struct EvalOutput {
+    pub node: Node,
+    pub echoes: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+struct Interp {
+    scopes: Vec<Scope>,
+    echoes: Vec<String>,
+    warnings: Vec<String>,
+    root: Option<Node>,
+    depth: usize,
+}
+
+/// Evaluate a parsed program into a CSG tree plus console output.
+pub fn eval_program(prog: &Program) -> EResult<EvalOutput> {
+    let mut base = Scope::default();
+    base.vars.insert("PI".into(), Value::Number(std::f64::consts::PI));
+    base.vars.insert("$fn".into(), Value::Number(0.0));
+    base.vars.insert("$fa".into(), Value::Number(12.0));
+    base.vars.insert("$fs".into(), Value::Number(2.0));
+    base.vars.insert("$t".into(), Value::Number(0.0));
+    base.vars.insert("$preview".into(), Value::Bool(true));
+
+    let mut interp = Interp {
+        scopes: vec![base],
+        echoes: Vec::new(),
+        warnings: Vec::new(),
+        root: None,
+        depth: 0,
+    };
+
+    let nodes = interp.eval_stmts(prog)?;
+    let node = interp.root.take().unwrap_or_else(|| Node::group(nodes));
+    Ok(EvalOutput {
+        node,
+        echoes: interp.echoes,
+        warnings: interp.warnings,
+    })
+}
+
+impl Interp {
+    // ---- scope helpers -------------------------------------------------
+
+    fn push_scope(&mut self) {
+        self.scopes.push(Scope::default());
+    }
+
+    fn pop_scope(&mut self) {
+        self.scopes.pop();
+    }
+
+    fn set_var(&mut self, name: &str, val: Value) {
+        self.scopes.last_mut().unwrap().vars.insert(name.to_string(), val);
+    }
+
+    fn lookup_var(&self, name: &str) -> Value {
+        for scope in self.scopes.iter().rev() {
+            if let Some(v) = scope.vars.get(name) {
+                return v.clone();
+            }
+        }
+        Value::Undef
+    }
+
+    fn lookup_func(&self, name: &str) -> Option<FnDef> {
+        for scope in self.scopes.iter().rev() {
+            if let Some(f) = scope.funcs.get(name) {
+                return Some(f.clone());
+            }
+        }
+        None
+    }
+
+    fn lookup_module(&self, name: &str) -> Option<ModDef> {
+        for scope in self.scopes.iter().rev() {
+            if let Some(m) = scope.modules.get(name) {
+                return Some(m.clone());
+            }
+        }
+        None
+    }
+
+    // ---- statements ----------------------------------------------------
+
+    fn eval_stmts(&mut self, stmts: &[Stmt]) -> EResult<Vec<Node>> {
+        // Phase 1: hoist definitions.
+        for s in stmts {
+            match s {
+                Stmt::FunctionDef { name, params, body } => {
+                    self.scopes.last_mut().unwrap().funcs.insert(
+                        name.clone(),
+                        FnDef {
+                            params: params.clone(),
+                            body: body.clone(),
+                        },
+                    );
+                }
+                Stmt::ModuleDef { name, params, body } => {
+                    self.scopes.last_mut().unwrap().modules.insert(
+                        name.clone(),
+                        ModDef {
+                            params: params.clone(),
+                            body: body.clone(),
+                        },
+                    );
+                }
+                _ => {}
+            }
+        }
+        // Phase 2: hoist assignments (source order, last write wins).
+        for s in stmts {
+            if let Stmt::Assign { name, value } = s {
+                let v = self.eval_expr(value)?;
+                self.set_var(name, v);
+            }
+        }
+        // Phase 3: geometry.
+        let mut out = Vec::new();
+        for s in stmts {
+            match s {
+                Stmt::Assign { .. } | Stmt::FunctionDef { .. } | Stmt::ModuleDef { .. } => {}
+                _ => out.extend(self.eval_geom(s)?),
+            }
+        }
+        Ok(out)
+    }
+
+    fn eval_geom(&mut self, stmt: &Stmt) -> EResult<Vec<Node>> {
+        match stmt {
+            Stmt::Block(stmts) => {
+                self.push_scope();
+                let r = self.eval_stmts(stmts);
+                self.pop_scope();
+                r
+            }
+            Stmt::If { cond, then, els } => {
+                let c = self.eval_expr(cond)?;
+                let branch = if c.truthy() { then } else { els };
+                self.push_scope();
+                let r = self.eval_stmts(branch);
+                self.pop_scope();
+                r
+            }
+            Stmt::For { bindings, body } => self.eval_for(bindings, body),
+            Stmt::ModuleCall {
+                modifier,
+                name,
+                args,
+                children,
+            } => self.eval_module_call(*modifier, name, args, children),
+            _ => Ok(Vec::new()),
+        }
+    }
+
+    fn eval_for(&mut self, bindings: &[(String, Expr)], body: &[Stmt]) -> EResult<Vec<Node>> {
+        let mut out = Vec::new();
+        self.eval_for_rec(bindings, body, &mut out)?;
+        Ok(out)
+    }
+
+    fn eval_for_rec(
+        &mut self,
+        bindings: &[(String, Expr)],
+        body: &[Stmt],
+        out: &mut Vec<Node>,
+    ) -> EResult<()> {
+        if bindings.is_empty() {
+            self.push_scope();
+            let r = self.eval_stmts(body);
+            self.pop_scope();
+            out.extend(r?);
+            return Ok(());
+        }
+        let (name, expr) = &bindings[0];
+        let iter = self.eval_expr(expr)?;
+        let values = iter_values(&iter)?;
+        for v in values {
+            self.push_scope();
+            self.set_var(name, v);
+            let r = self.eval_for_rec(&bindings[1..], body, out);
+            self.pop_scope();
+            r?;
+        }
+        Ok(())
+    }
+
+    fn eval_module_call(
+        &mut self,
+        modifier: Option<Modifier>,
+        name: &str,
+        args: &[Arg],
+        children: &[Stmt],
+    ) -> EResult<Vec<Node>> {
+        if modifier == Some(Modifier::Disable) {
+            return Ok(Vec::new());
+        }
+
+        let node = self.dispatch_module(name, args, children)?;
+
+        if modifier == Some(Modifier::Root) {
+            self.root = Some(node.clone());
+        }
+        // `#` highlight and `%` background are visual-only; passed through in M0.
+        if matches!(node, Node::Empty) {
+            Ok(Vec::new())
+        } else {
+            Ok(vec![node])
+        }
+    }
+
+    fn dispatch_module(&mut self, name: &str, args: &[Arg], children: &[Stmt]) -> EResult<Node> {
+        match name {
+            "cube" => self.b_cube(args),
+            "sphere" => self.b_sphere(args),
+            "cylinder" => self.b_cylinder(args),
+            "translate" => self.transform(args, children, TransformKind::Translate),
+            "rotate" => self.transform(args, children, TransformKind::Rotate),
+            "scale" => self.transform(args, children, TransformKind::Scale),
+            "union" => Ok(Node::Union(self.eval_children(children)?)),
+            "difference" => Ok(Node::Difference(self.eval_children(children)?)),
+            "intersection" => Ok(Node::Intersection(self.eval_children(children)?)),
+            "group" => Ok(Node::group(self.eval_children(children)?)),
+            "echo" => self.b_echo(args, children),
+            "assert" => self.b_assert(args, children),
+            _ => {
+                if let Some(def) = self.lookup_module(name) {
+                    self.instantiate_module(&def, args)
+                } else {
+                    self.warnings
+                        .push(format!("Ignoring unknown module '{name}'"));
+                    Ok(Node::Empty)
+                }
+            }
+        }
+    }
+
+    fn eval_children(&mut self, children: &[Stmt]) -> EResult<Vec<Node>> {
+        self.push_scope();
+        let r = self.eval_stmts(children);
+        self.pop_scope();
+        r
+    }
+
+    fn instantiate_module(&mut self, def: &ModDef, args: &[Arg]) -> EResult<Node> {
+        let bound = self.bind_params(&def.params, args)?;
+        self.push_scope();
+        for (k, v) in bound {
+            self.set_var(&k, v);
+        }
+        let r = self.eval_stmts(&def.body);
+        self.pop_scope();
+        Ok(Node::group(r?))
+    }
+
+    // ---- builtin modules ----------------------------------------------
+
+    fn b_cube(&mut self, args: &[Arg]) -> EResult<Node> {
+        let m = self.bind_named(&["size", "center"], args)?;
+        let size = match m.get("size") {
+            Some(Value::Number(n)) => [*n, *n, *n],
+            Some(v @ Value::Vector(_)) => v.as_vec3().unwrap_or([1.0, 1.0, 1.0]),
+            _ => [1.0, 1.0, 1.0],
+        };
+        let center = m.get("center").map(Value::truthy).unwrap_or(false);
+        Ok(Node::Cube { size, center })
+    }
+
+    fn b_sphere(&mut self, args: &[Arg]) -> EResult<Node> {
+        let m = self.bind_named(&["r"], args)?;
+        let r = if let Some(d) = m.get("d").and_then(Value::as_number) {
+            d / 2.0
+        } else {
+            m.get("r").and_then(Value::as_number).unwrap_or(1.0)
+        };
+        Ok(Node::Sphere {
+            r,
+            frags: self.frag_spec(&m),
+        })
+    }
+
+    fn b_cylinder(&mut self, args: &[Arg]) -> EResult<Node> {
+        let m = self.bind_named(&["h", "r1", "r2"], args)?;
+        let h = m.get("h").and_then(Value::as_number).unwrap_or(1.0);
+
+        // r / d apply to both ends; r1/r2/d1/d2 override per end.
+        let base_r = m
+            .get("d")
+            .and_then(Value::as_number)
+            .map(|d| d / 2.0)
+            .or_else(|| m.get("r").and_then(Value::as_number));
+
+        let r1 = m
+            .get("d1")
+            .and_then(Value::as_number)
+            .map(|d| d / 2.0)
+            .or_else(|| m.get("r1").and_then(Value::as_number))
+            .or(base_r)
+            .unwrap_or(1.0);
+        let r2 = m
+            .get("d2")
+            .and_then(Value::as_number)
+            .map(|d| d / 2.0)
+            .or_else(|| m.get("r2").and_then(Value::as_number))
+            .or(base_r)
+            .unwrap_or(1.0);
+
+        let center = m.get("center").map(Value::truthy).unwrap_or(false);
+        Ok(Node::Cylinder {
+            h,
+            r1,
+            r2,
+            center,
+            frags: self.frag_spec(&m),
+        })
+    }
+
+    /// Resolve the fragment spec from call-site `$fn/$fa/$fs` args, falling back
+    /// to the ambient special variables.
+    fn frag_spec(&self, m: &HashMap<String, Value>) -> FragmentSpec {
+        let pick = |key: &str, default: f64| -> f64 {
+            m.get(key)
+                .and_then(Value::as_number)
+                .unwrap_or_else(|| self.lookup_var(key).as_number().unwrap_or(default))
+        };
+        FragmentSpec {
+            fn_: pick("$fn", 0.0),
+            fa: pick("$fa", 12.0),
+            fs: pick("$fs", 2.0),
+        }
+    }
+
+    fn transform(
+        &mut self,
+        args: &[Arg],
+        children: &[Stmt],
+        kind: TransformKind,
+    ) -> EResult<Node> {
+        let child = Node::group(self.eval_children(children)?);
+        if matches!(child, Node::Empty) {
+            return Ok(Node::Empty);
+        }
+        let v = self.first_positional(args)?;
+        let node = match kind {
+            TransformKind::Translate => Node::Translate {
+                v: v.as_vec3().unwrap_or([0.0, 0.0, 0.0]),
+                child: Box::new(child),
+            },
+            TransformKind::Rotate => {
+                let deg = match &v {
+                    Value::Number(n) => [0.0, 0.0, *n],
+                    _ => v.as_vec3().unwrap_or([0.0, 0.0, 0.0]),
+                };
+                Node::Rotate {
+                    deg,
+                    child: Box::new(child),
+                }
+            }
+            TransformKind::Scale => {
+                let s = scale_vec3(&v);
+                Node::Scale {
+                    v: s,
+                    child: Box::new(child),
+                }
+            }
+        };
+        Ok(node)
+    }
+
+    fn b_echo(&mut self, args: &[Arg], children: &[Stmt]) -> EResult<Node> {
+        let mut parts = Vec::new();
+        for a in args {
+            let v = self.eval_expr(&a.value)?;
+            match &a.name {
+                Some(n) => parts.push(format!("{} = {}", n, v.to_echo_string())),
+                None => parts.push(v.to_echo_string()),
+            }
+        }
+        self.echoes.push(format!("ECHO: {}", parts.join(", ")));
+        Ok(Node::group(self.eval_children(children)?))
+    }
+
+    fn b_assert(&mut self, args: &[Arg], children: &[Stmt]) -> EResult<Node> {
+        let cond = self
+            .first_positional(args)
+            .unwrap_or(Value::Undef)
+            .truthy();
+        if !cond {
+            let msg = args
+                .iter()
+                .nth(1)
+                .map(|a| self.eval_expr(&a.value))
+                .transpose()?
+                .map(|v| v.to_echo_string())
+                .unwrap_or_default();
+            return err(format!("Assertion failed: {msg}"));
+        }
+        Ok(Node::group(self.eval_children(children)?))
+    }
+
+    // ---- argument binding ---------------------------------------------
+
+    /// Bind arguments by the given positional parameter names, honoring named
+    /// args (including out-of-band `$fn`-style and `d`/`r1` overrides).
+    fn bind_named(&mut self, positional: &[&str], args: &[Arg]) -> EResult<HashMap<String, Value>> {
+        let mut map = HashMap::new();
+        let mut pos = 0;
+        for a in args {
+            let v = self.eval_expr(&a.value)?;
+            match &a.name {
+                Some(n) => {
+                    map.insert(n.clone(), v);
+                }
+                None => {
+                    if let Some(name) = positional.get(pos) {
+                        map.insert((*name).to_string(), v);
+                    }
+                    pos += 1;
+                }
+            }
+        }
+        Ok(map)
+    }
+
+    fn bind_params(&mut self, params: &[Param], args: &[Arg]) -> EResult<HashMap<String, Value>> {
+        let mut map = HashMap::new();
+        for p in params {
+            if let Some(d) = &p.default {
+                let v = self.eval_expr(d)?;
+                map.insert(p.name.clone(), v);
+            }
+        }
+        let mut pos = 0;
+        for a in args {
+            let v = self.eval_expr(&a.value)?;
+            match &a.name {
+                Some(n) => {
+                    map.insert(n.clone(), v);
+                }
+                None => {
+                    if let Some(p) = params.get(pos) {
+                        map.insert(p.name.clone(), v);
+                    }
+                    pos += 1;
+                }
+            }
+        }
+        Ok(map)
+    }
+
+    fn first_positional(&mut self, args: &[Arg]) -> EResult<Value> {
+        for a in args {
+            if a.name.is_none() {
+                return self.eval_expr(&a.value);
+            }
+        }
+        Ok(Value::Undef)
+    }
+
+    // ---- expressions ---------------------------------------------------
+
+    fn eval_expr(&mut self, expr: &Expr) -> EResult<Value> {
+        match expr {
+            Expr::Number(n) => Ok(Value::Number(*n)),
+            Expr::Bool(b) => Ok(Value::Bool(*b)),
+            Expr::Str(s) => Ok(Value::Str(s.clone())),
+            Expr::Undef => Ok(Value::Undef),
+            Expr::Ident(name) => Ok(self.lookup_var(name)),
+            Expr::Vector(elems) => {
+                let mut out = Vec::with_capacity(elems.len());
+                for e in elems {
+                    out.push(self.eval_expr(e)?);
+                }
+                Ok(Value::Vector(out))
+            }
+            Expr::Range { start, step, end } => {
+                let s = self.eval_expr(start)?.as_number().unwrap_or(f64::NAN);
+                let e = self.eval_expr(end)?.as_number().unwrap_or(f64::NAN);
+                let st = match step {
+                    Some(x) => self.eval_expr(x)?.as_number().unwrap_or(1.0),
+                    None => 1.0,
+                };
+                Ok(Value::Range {
+                    start: s,
+                    step: st,
+                    end: e,
+                })
+            }
+            Expr::Unary { op, expr } => {
+                let v = self.eval_expr(expr)?;
+                Ok(value::unary(*op, v))
+            }
+            Expr::Binary { op, lhs, rhs } => {
+                let l = self.eval_expr(lhs)?;
+                let r = self.eval_expr(rhs)?;
+                Ok(value::binary(*op, l, r))
+            }
+            Expr::Ternary { cond, then, els } => {
+                if self.eval_expr(cond)?.truthy() {
+                    self.eval_expr(then)
+                } else {
+                    self.eval_expr(els)
+                }
+            }
+            Expr::Index { base, index } => {
+                let b = self.eval_expr(base)?;
+                let i = self.eval_expr(index)?;
+                Ok(index_value(&b, &i))
+            }
+            Expr::Member { base, field } => {
+                let b = self.eval_expr(base)?;
+                let idx = match field.as_str() {
+                    "x" => 0,
+                    "y" => 1,
+                    "z" => 2,
+                    _ => return Ok(Value::Undef),
+                };
+                Ok(index_value(&b, &Value::Number(idx as f64)))
+            }
+            Expr::Let { bindings, body } => {
+                self.push_scope();
+                for (n, e) in bindings {
+                    let v = self.eval_expr(e)?;
+                    self.set_var(n, v);
+                }
+                let r = self.eval_expr(body);
+                self.pop_scope();
+                r
+            }
+            Expr::Call { name, args } => self.eval_call(name, args),
+        }
+    }
+
+    fn eval_call(&mut self, name: &str, args: &[Arg]) -> EResult<Value> {
+        // User-defined function?
+        if let Some(def) = self.lookup_func(name) {
+            if self.depth >= MAX_CALL_DEPTH {
+                return err("maximum call depth exceeded");
+            }
+            let bound = self.bind_params(&def.params, args)?;
+            self.depth += 1;
+            self.push_scope();
+            for (k, v) in bound {
+                self.set_var(&k, v);
+            }
+            let r = self.eval_expr(&def.body);
+            self.pop_scope();
+            self.depth -= 1;
+            return r;
+        }
+        // Builtins.
+        let vals: Vec<Value> = args
+            .iter()
+            .map(|a| self.eval_expr(&a.value))
+            .collect::<EResult<_>>()?;
+        Ok(builtin_fn(name, &vals, &mut self.warnings))
+    }
+}
+
+enum TransformKind {
+    Translate,
+    Rotate,
+    Scale,
+}
+
+fn scale_vec3(v: &Value) -> Vec3 {
+    match v {
+        Value::Number(n) => [*n, *n, *n],
+        Value::Vector(xs) => {
+            let get = |i: usize| xs.get(i).and_then(Value::as_number).unwrap_or(1.0);
+            [get(0), get(1), get(2)]
+        }
+        _ => [1.0, 1.0, 1.0],
+    }
+}
+
+fn index_value(base: &Value, index: &Value) -> Value {
+    match (base, index) {
+        (Value::Vector(v), Value::Number(n)) => {
+            let i = *n as isize;
+            if i >= 0 && (i as usize) < v.len() {
+                v[i as usize].clone()
+            } else {
+                Value::Undef
+            }
+        }
+        _ => Value::Undef,
+    }
+}
+
+/// Expand a value into the sequence a `for`/comprehension iterates over.
+fn iter_values(v: &Value) -> EResult<Vec<Value>> {
+    match v {
+        Value::Vector(xs) => Ok(xs.clone()),
+        Value::Range { start, step, end } => {
+            let mut out = Vec::new();
+            let (start, step, end) = (*start, *step, *end);
+            if step == 0.0 || start.is_nan() || end.is_nan() || step.is_nan() {
+                return Ok(out);
+            }
+            let mut i = 0usize;
+            if step > 0.0 {
+                let mut x = start;
+                while x <= end + 1e-12 {
+                    out.push(Value::Number(x));
+                    i += 1;
+                    if i > MAX_RANGE_ITERS {
+                        return err("range too large");
+                    }
+                    x = start + step * i as f64;
+                }
+            } else {
+                let mut x = start;
+                while x >= end - 1e-12 {
+                    out.push(Value::Number(x));
+                    i += 1;
+                    if i > MAX_RANGE_ITERS {
+                        return err("range too large");
+                    }
+                    x = start + step * i as f64;
+                }
+            }
+            Ok(out)
+        }
+        // A scalar iterates once.
+        other => Ok(vec![other.clone()]),
+    }
+}
+
+/// Built-in expression functions.
+fn builtin_fn(name: &str, args: &[Value], warnings: &mut Vec<String>) -> Value {
+    let num = |i: usize| args.get(i).and_then(Value::as_number);
+    let one = |f: fn(f64) -> f64| num(0).map(|x| Value::Number(f(x))).unwrap_or(Value::Undef);
+
+    match name {
+        "abs" => one(f64::abs),
+        "sign" => one(f64::signum),
+        "floor" => one(f64::floor),
+        "ceil" => one(f64::ceil),
+        "round" => one(f64::round),
+        "sqrt" => one(f64::sqrt),
+        "exp" => one(f64::exp),
+        "ln" => one(f64::ln),
+        "log" => one(f64::log10),
+        "sin" => one(|x| x.to_radians().sin()),
+        "cos" => one(|x| x.to_radians().cos()),
+        "tan" => one(|x| x.to_radians().tan()),
+        "asin" => one(|x| x.asin().to_degrees()),
+        "acos" => one(|x| x.acos().to_degrees()),
+        "atan" => one(|x| x.atan().to_degrees()),
+        "atan2" => match (num(0), num(1)) {
+            (Some(y), Some(x)) => Value::Number(y.atan2(x).to_degrees()),
+            _ => Value::Undef,
+        },
+        "pow" => match (num(0), num(1)) {
+            (Some(b), Some(e)) => Value::Number(b.powf(e)),
+            _ => Value::Undef,
+        },
+        "max" => reduce_num(args, f64::max),
+        "min" => reduce_num(args, f64::min),
+        "len" => match args.first() {
+            Some(Value::Vector(v)) => Value::Number(v.len() as f64),
+            Some(Value::Str(s)) => Value::Number(s.chars().count() as f64),
+            _ => Value::Undef,
+        },
+        "norm" => match args.first() {
+            Some(Value::Vector(v)) => {
+                let sum: f64 = v.iter().filter_map(Value::as_number).map(|x| x * x).sum();
+                Value::Number(sum.sqrt())
+            }
+            _ => Value::Undef,
+        },
+        "cross" => cross(args),
+        "concat" => {
+            let mut out = Vec::new();
+            for a in args {
+                match a {
+                    Value::Vector(v) => out.extend(v.iter().cloned()),
+                    other => out.push(other.clone()),
+                }
+            }
+            Value::Vector(out)
+        }
+        "str" => {
+            let mut s = String::new();
+            for a in args {
+                s.push_str(&a.to_echo_string());
+            }
+            Value::Str(s)
+        }
+        _ => {
+            warnings.push(format!("Ignoring unknown function '{name}'"));
+            Value::Undef
+        }
+    }
+}
+
+fn reduce_num(args: &[Value], f: fn(f64, f64) -> f64) -> Value {
+    // max(v) over a single vector, or max(a,b,c,...) over scalars.
+    let nums: Vec<f64> = if let [Value::Vector(v)] = args {
+        v.iter().filter_map(Value::as_number).collect()
+    } else {
+        args.iter().filter_map(Value::as_number).collect()
+    };
+    match nums.split_first() {
+        Some((first, rest)) => Value::Number(rest.iter().fold(*first, |a, b| f(a, *b))),
+        None => Value::Undef,
+    }
+}
+
+fn cross(args: &[Value]) -> Value {
+    if let (Some(Value::Vector(a)), Some(Value::Vector(b))) = (args.first(), args.get(1)) {
+        let g = |v: &[Value], i: usize| v.get(i).and_then(Value::as_number).unwrap_or(f64::NAN);
+        let (a0, a1, a2) = (g(a, 0), g(a, 1), g(a, 2));
+        let (b0, b1, b2) = (g(b, 0), g(b, 1), g(b, 2));
+        Value::Vector(vec![
+            Value::Number(a1 * b2 - a2 * b1),
+            Value::Number(a2 * b0 - a0 * b2),
+            Value::Number(a0 * b1 - a1 * b0),
+        ])
+    } else {
+        Value::Undef
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use quito_syntax::parse;
+
+    fn eval(src: &str) -> EvalOutput {
+        eval_program(&parse(src).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn single_cube() {
+        let out = eval("cube(10);");
+        assert_eq!(out.node, Node::Cube { size: [10.0, 10.0, 10.0], center: false });
+    }
+
+    #[test]
+    fn difference_tree() {
+        let out = eval("difference() { cube(10, center=true); sphere(6); }");
+        match out.node {
+            Node::Difference(children) => assert_eq!(children.len(), 2),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn for_loop_produces_group() {
+        let out = eval("for (i = [0:2]) translate([i*10, 0, 0]) cube(1);");
+        match out.node {
+            Node::Group(children) => assert_eq!(children.len(), 3),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn last_assignment_wins() {
+        // x is hoisted: cube should see x = 2.
+        let out = eval("x = 1; cube(x); x = 2;");
+        assert_eq!(out.node, Node::Cube { size: [2.0, 2.0, 2.0], center: false });
+    }
+
+    #[test]
+    fn user_function() {
+        let out = eval("function sq(a) = a * a; cube(sq(3));");
+        assert_eq!(out.node, Node::Cube { size: [9.0, 9.0, 9.0], center: false });
+    }
+
+    #[test]
+    fn user_module() {
+        let out = eval("module box(s) { cube(s, center=true); } box(4);");
+        assert_eq!(out.node, Node::Cube { size: [4.0, 4.0, 4.0], center: true });
+    }
+
+    #[test]
+    fn echo_collected() {
+        let out = eval("echo(\"hello\", 1 + 2);");
+        assert_eq!(out.echoes, vec!["ECHO: hello, 3".to_string()]);
+    }
+
+    #[test]
+    fn recursion() {
+        let out = eval("function fib(n) = n < 2 ? n : fib(n-1) + fib(n-2); cube(fib(10));");
+        assert_eq!(out.node, Node::Cube { size: [55.0, 55.0, 55.0], center: false });
+    }
+
+    #[test]
+    fn if_else() {
+        let out = eval("if (1 > 2) cube(1); else sphere(3);");
+        assert!(matches!(out.node, Node::Sphere { .. }));
+    }
+
+    #[test]
+    fn cylinder_d_and_center() {
+        let out = eval("cylinder(h=10, d=8, center=true);");
+        match out.node {
+            Node::Cylinder { h, r1, r2, center, .. } => {
+                assert_eq!(h, 10.0);
+                assert_eq!(r1, 4.0);
+                assert_eq!(r2, 4.0);
+                assert!(center);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn disable_modifier() {
+        let out = eval("union() { cube(1); *sphere(5); }");
+        match out.node {
+            Node::Union(children) => assert_eq!(children.len(), 1),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+}

@@ -1,0 +1,32 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/quito-syntax",
+    "crates/quito-ir",
+    "crates/quito-eval",
+    "crates/quito-geom",
+    "crates/quito-cli",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/quito-cad/quito"
+rust-version = "1.85"
+
+[workspace.dependencies]
+quito-syntax = { path = "crates/quito-syntax" }
+quito-ir = { path = "crates/quito-ir" }
+quito-eval = { path = "crates/quito-eval" }
+quito-geom = { path = "crates/quito-geom" }
+
+logos = "0.15"
+thiserror = "2"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

@@ -1,0 +1,10 @@
+/target
+**/*.rs.bk
+Cargo.lock.orig
+*.stl
+!benches/**/*.stl
+.DS_Store
+
+# node / web (later milestones)
+node_modules/
+dist/
