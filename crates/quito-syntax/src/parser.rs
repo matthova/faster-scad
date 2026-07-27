@@ -527,10 +527,28 @@ impl Parser {
             Some(Token::For) => {
                 self.advance();
                 self.expect(&Token::LParen)?;
-                let bindings = self.parse_bindings()?;
-                self.expect(&Token::RParen)?;
-                let body = Box::new(self.parse_list_element()?);
-                Ok(ListElem::For { bindings, body })
+                let init = self.parse_bindings()?;
+                if self.eat(&Token::Semi) {
+                    // C-style: for (init; cond; update) body
+                    let cond = self.parse_expr()?;
+                    self.expect(&Token::Semi)?;
+                    let update = self.parse_bindings()?;
+                    self.expect(&Token::RParen)?;
+                    let body = Box::new(self.parse_list_element()?);
+                    Ok(ListElem::CFor {
+                        init,
+                        cond,
+                        update,
+                        body,
+                    })
+                } else {
+                    self.expect(&Token::RParen)?;
+                    let body = Box::new(self.parse_list_element()?);
+                    Ok(ListElem::For {
+                        bindings: init,
+                        body,
+                    })
+                }
             }
             Some(Token::Let) => {
                 self.advance();

@@ -266,6 +266,7 @@ impl Interp {
             "cube" => self.b_cube(args),
             "sphere" => self.b_sphere(args),
             "cylinder" => self.b_cylinder(args),
+            "polyhedron" => self.b_polyhedron(args),
             "translate" => self.transform(args, children, TransformKind::Translate),
             "rotate" => self.transform(args, children, TransformKind::Rotate),
             "scale" => self.transform(args, children, TransformKind::Scale),
@@ -409,6 +410,21 @@ impl Interp {
             center,
             frags: self.frag_spec(&m),
         })
+    }
+
+    fn b_polyhedron(&mut self, args: &[Arg]) -> EResult<Node> {
+        let m = self.bind_named(&["points", "faces", "convexity"], args)?;
+        let points: Vec<Vec3> = match m.get("points") {
+            Some(Value::Vector(v)) => v.iter().map(value_to_point3).collect(),
+            _ => Vec::new(),
+        };
+        // `faces` (current) or `triangles` (legacy).
+        let faces_val = m.get("faces").or_else(|| m.get("triangles"));
+        let faces: Vec<Vec<u32>> = match faces_val {
+            Some(Value::Vector(v)) => v.iter().map(value_to_face).collect(),
+            _ => Vec::new(),
+        };
+        Ok(Node::Polyhedron { points, faces })
     }
 
     /// Resolve the fragment spec from call-site `$fn/$fa/$fs` args, falling back
@@ -567,7 +583,7 @@ impl Interp {
                 for e in elems {
                     self.eval_list_elem(e, &mut out)?;
                 }
-                Ok(Value::Vector(out))
+                Ok(value::vector(out))
             }
             Expr::Range { start, step, end } => {
                 let s = self.eval_expr(start)?.as_number().unwrap_or(f64::NAN);
@@ -663,7 +679,7 @@ impl Interp {
             ListElem::Each(e) => {
                 let v = self.eval_expr(e)?;
                 match v {
-                    Value::Vector(xs) => out.extend(xs),
+                    Value::Vector(xs) => out.extend(xs.iter().cloned()),
                     Value::Range { .. } => out.extend(iter_values(&v)?),
                     Value::Undef => {}
                     other => out.push(other),
@@ -671,6 +687,37 @@ impl Interp {
             }
             ListElem::For { bindings, body } => {
                 self.lc_for_rec(bindings, body, out)?;
+            }
+            ListElem::CFor {
+                init,
+                cond,
+                update,
+                body,
+            } => {
+                self.push_scope();
+                for (n, e) in init {
+                    let v = self.eval_expr(e)?;
+                    self.set_var(n, v);
+                }
+                let mut iters = 0usize;
+                loop {
+                    if !self.eval_expr(cond)?.truthy() {
+                        break;
+                    }
+                    self.eval_list_elem(body, out)?;
+                    // Updates are applied sequentially, each seeing prior updates
+                    // in the same clause (matches OpenSCAD's accumulator form).
+                    for (n, e) in update {
+                        let v = self.eval_expr(e)?;
+                        self.set_var(n, v);
+                    }
+                    iters += 1;
+                    if iters > MAX_RANGE_ITERS {
+                        self.pop_scope();
+                        return err("C-style for exceeded iteration limit");
+                    }
+                }
+                self.pop_scope();
             }
             ListElem::Let { bindings, body } => {
                 self.push_scope();
@@ -761,6 +808,27 @@ fn scale_vec3(v: &Value) -> Vec3 {
     }
 }
 
+fn value_to_point3(v: &Value) -> Vec3 {
+    match v {
+        Value::Vector(c) => {
+            let g = |i: usize| c.get(i).and_then(Value::as_number).unwrap_or(0.0);
+            [g(0), g(1), g(2)]
+        }
+        _ => [0.0, 0.0, 0.0],
+    }
+}
+
+fn value_to_face(v: &Value) -> Vec<u32> {
+    match v {
+        Value::Vector(idx) => idx
+            .iter()
+            .filter_map(Value::as_number)
+            .map(|n| n as u32)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 fn index_value(base: &Value, index: &Value) -> Value {
     match (base, index) {
         (Value::Vector(v), Value::Number(n)) => {
@@ -799,7 +867,7 @@ fn chr(args: &[Value]) -> Value {
         Some(Value::Number(n)) => Value::Str(one(*n)),
         Some(Value::Vector(v)) => {
             let mut s = String::new();
-            for e in v {
+            for e in v.iter() {
                 if let Some(n) = e.as_number() {
                     s.push_str(&one(n));
                 }
@@ -824,7 +892,7 @@ fn chr(args: &[Value]) -> Value {
 /// Expand a value into the sequence a `for`/comprehension iterates over.
 fn iter_values(v: &Value) -> EResult<Vec<Value>> {
     match v {
-        Value::Vector(xs) => Ok(xs.clone()),
+        Value::Vector(xs) => Ok(xs.to_vec()),
         Value::Range { start, step, end } => {
             let mut out = Vec::new();
             let (start, step, end) = (*start, *step, *end);
@@ -920,7 +988,7 @@ fn builtin_fn(name: &str, args: &[Value], warnings: &mut Vec<String>) -> Value {
                     other => out.push(other.clone()),
                 }
             }
-            Value::Vector(out)
+            value::vector(out)
         }
         "is_undef" => Value::Bool(matches!(args.first(), Some(Value::Undef) | None)),
         "is_num" => Value::Bool(matches!(args.first(), Some(Value::Number(_)))),
@@ -1020,7 +1088,7 @@ fn search(args: &[Value]) -> Value {
     let index = args.get(3).and_then(Value::as_number).unwrap_or(0.0) as usize;
 
     let entries: Vec<Value> = match list {
-        Value::Vector(v) => v.clone(),
+        Value::Vector(v) => v.to_vec(),
         Value::Str(s) => s.chars().map(|c| Value::Str(c.to_string())).collect(),
         _ => return Value::Undef,
     };
@@ -1049,29 +1117,29 @@ fn search(args: &[Value]) -> Value {
         if num_returns == 1 {
             match idxs.first() {
                 Some(i) => Value::Number(*i as f64),
-                None => Value::Vector(Vec::new()),
+                None => value::vector(Vec::new()),
             }
         } else {
-            Value::Vector(idxs.into_iter().map(|i| Value::Number(i as f64)).collect())
+            value::vector(idxs.into_iter().map(|i| Value::Number(i as f64)).collect())
         }
     };
 
     match find {
         // A single scalar returns a flat list of indices.
-        Value::Number(_) | Value::Bool(_) => Value::Vector(
+        Value::Number(_) | Value::Bool(_) => value::vector(
             match_indices(find)
                 .into_iter()
                 .map(|i| Value::Number(i as f64))
                 .collect(),
         ),
         // A string searches per character; a list searches per element.
-        Value::Str(s) => Value::Vector(
+        Value::Str(s) => value::vector(
             s.chars()
                 .map(|c| pack(match_indices(&Value::Str(c.to_string()))))
                 .collect(),
         ),
         Value::Vector(vs) => {
-            Value::Vector(vs.iter().map(|n| pack(match_indices(n))).collect())
+            value::vector(vs.iter().map(|n| pack(match_indices(n))).collect())
         }
         _ => Value::Undef,
     }
@@ -1082,7 +1150,7 @@ fn cross(args: &[Value]) -> Value {
         let g = |v: &[Value], i: usize| v.get(i).and_then(Value::as_number).unwrap_or(f64::NAN);
         let (a0, a1, a2) = (g(a, 0), g(a, 1), g(a, 2));
         let (b0, b1, b2) = (g(b, 0), g(b, 1), g(b, 2));
-        Value::Vector(vec![
+        value::vector(vec![
             Value::Number(a1 * b2 - a2 * b1),
             Value::Number(a2 * b0 - a0 * b2),
             Value::Number(a0 * b1 - a1 * b0),
@@ -1226,6 +1294,34 @@ mod tests {
             echoes("h = function(n) n<=1 ? 1 : n*h(n-1); echo(h(5));"),
             vec!["ECHO: 120"]
         );
+    }
+
+    #[test]
+    fn cstyle_for() {
+        assert_eq!(
+            echoes("echo([for(k=0,s=0;k<=3;k=k+1,s=s+k) s]);"),
+            vec!["ECHO: [0, 1, 3, 6]"]
+        );
+        assert_eq!(
+            echoes("echo([for(a=1,b=1;a<=5;a=a+1,b=b*a) b]);"),
+            vec!["ECHO: [1, 2, 6, 24, 120]"]
+        );
+    }
+
+    #[test]
+    fn polyhedron_node() {
+        let out = eval(
+            "polyhedron(points=[[0,0,0],[1,0,0],[0,1,0],[0,0,1]], \
+             faces=[[0,1,2],[0,1,3],[1,2,3],[0,2,3]]);",
+        );
+        match out.node {
+            Node::Polyhedron { points, faces } => {
+                assert_eq!(points.len(), 4);
+                assert_eq!(faces.len(), 4);
+                assert_eq!(points[1], [1.0, 0.0, 0.0]);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
     }
 
     #[test]

@@ -52,6 +52,11 @@ pub enum Node {
         center: bool,
         frags: FragmentSpec,
     },
+    /// A user-specified mesh: explicit points and (possibly polygonal) faces.
+    Polyhedron {
+        points: Vec<Vec3>,
+        faces: Vec<Vec<u32>>,
+    },
 
     // --- transforms ---
     Translate {

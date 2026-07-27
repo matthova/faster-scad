@@ -98,9 +98,16 @@ pub enum ListElem {
     Item(Expr),
     /// `each expr` — splice a list's elements in place.
     Each(Expr),
-    /// `for (bindings) body`
+    /// `for (bindings) body` — range/cartesian form.
     For {
         bindings: Vec<(String, Expr)>,
+        body: Box<ListElem>,
+    },
+    /// C-style `for (init; cond; update) body` (2019.05 accumulator form).
+    CFor {
+        init: Vec<(String, Expr)>,
+        cond: Expr,
+        update: Vec<(String, Expr)>,
         body: Box<ListElem>,
     },
     /// `if (cond) then [else els]`

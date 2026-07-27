@@ -10,12 +10,19 @@ pub enum Value {
     Bool(bool),
     Number(f64),
     Str(String),
-    Vector(Vec<Value>),
+    /// A list. `Rc`-backed so cloning a value (e.g. a variable lookup of a
+    /// large array) is O(1) — critical for mesh-generating scripts.
+    Vector(Rc<Vec<Value>>),
     /// A numeric range `[start : step : end]`.
     Range { start: f64, step: f64, end: f64 },
     /// An anonymous function value (parameters + body). Called via
     /// dynamic scoping in M2; lexical capture is a later refinement.
     Function(Rc<(Vec<Param>, Expr)>),
+}
+
+/// Construct a list value from an owned `Vec`.
+pub fn vector(v: Vec<Value>) -> Value {
+    Value::Vector(Rc::new(v))
 }
 
 impl Value {
@@ -156,7 +163,9 @@ pub fn unary(op: UnOp, v: Value) -> Value {
         UnOp::Pos => v,
         UnOp::Neg => match v {
             Value::Number(n) => Value::Number(-n),
-            Value::Vector(xs) => Value::Vector(xs.into_iter().map(|e| unary(UnOp::Neg, e)).collect()),
+            Value::Vector(xs) => {
+                vector(xs.iter().map(|e| unary(UnOp::Neg, e.clone())).collect())
+            }
             _ => Value::Undef,
         },
         UnOp::Not => Value::Bool(!v.truthy()),
@@ -186,15 +195,15 @@ pub fn binary(op: BinOp, l: Value, r: Value) -> Value {
 
         // vector +/- vector (elementwise, equal length)
         (BinOp::Add, Vector(a), Vector(b)) if a.len() == b.len() => {
-            Vector(zip_map(a, b, BinOp::Add))
+            vector(zip_map(&a, &b, BinOp::Add))
         }
         (BinOp::Sub, Vector(a), Vector(b)) if a.len() == b.len() => {
-            Vector(zip_map(a, b, BinOp::Sub))
+            vector(zip_map(&a, &b, BinOp::Sub))
         }
 
         // scalar * vector, vector * scalar
         (BinOp::Mul, Number(s), Vector(v)) | (BinOp::Mul, Vector(v), Number(s)) => {
-            Vector(v.into_iter().map(|e| binary(BinOp::Mul, Number(s), e)).collect())
+            vector(v.iter().map(|e| binary(BinOp::Mul, Number(s), e.clone())).collect())
         }
         // vector * vector -> dot product
         (BinOp::Mul, Vector(a), Vector(b)) if a.len() == b.len() => {
@@ -209,15 +218,18 @@ pub fn binary(op: BinOp, l: Value, r: Value) -> Value {
         }
         // vector / scalar
         (BinOp::Div, Vector(v), Number(s)) => {
-            Vector(v.into_iter().map(|e| binary(BinOp::Div, e, Number(s))).collect())
+            vector(v.iter().map(|e| binary(BinOp::Div, e.clone(), Number(s))).collect())
         }
 
         _ => Undef,
     }
 }
 
-fn zip_map(a: Vec<Value>, b: Vec<Value>, op: BinOp) -> Vec<Value> {
-    a.into_iter().zip(b).map(|(x, y)| binary(op, x, y)).collect()
+fn zip_map(a: &[Value], b: &[Value], op: BinOp) -> Vec<Value> {
+    a.iter()
+        .zip(b)
+        .map(|(x, y)| binary(op, x.clone(), y.clone()))
+        .collect()
 }
 
 pub fn value_eq(a: &Value, b: &Value) -> bool {
@@ -227,7 +239,7 @@ pub fn value_eq(a: &Value, b: &Value) -> bool {
         (Value::Str(x), Value::Str(y)) => x == y,
         (Value::Undef, Value::Undef) => true,
         (Value::Vector(x), Value::Vector(y)) => {
-            x.len() == y.len() && x.iter().zip(y).all(|(p, q)| value_eq(p, q))
+            x.len() == y.len() && x.iter().zip(y.iter()).all(|(p, q)| value_eq(p, q))
         }
         (Value::Function(x), Value::Function(y)) => Rc::ptr_eq(x, y),
         _ => false,

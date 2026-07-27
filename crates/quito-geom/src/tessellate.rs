@@ -30,6 +30,24 @@ fn circle_point(r: f64, i: u32, n: u32) -> [f64; 2] {
     [r * phi.cos(), r * phi.sin()]
 }
 
+/// Build a mesh from explicit points and (possibly polygonal) faces by
+/// fan-triangulating each face. OpenSCAD orders face vertices clockwise as seen
+/// from outside; our mesh convention is counter-clockwise (outward normal by
+/// the right-hand rule), so each face is reversed during triangulation.
+pub fn polyhedron(points: &[[f64; 3]], faces: &[Vec<u32>]) -> Mesh {
+    let verts = points.to_vec();
+    let mut tris = Vec::new();
+    for face in faces {
+        if face.len() < 3 {
+            continue;
+        }
+        for k in 1..face.len() - 1 {
+            tris.push([face[0], face[k + 1], face[k]]);
+        }
+    }
+    Mesh { verts, tris }
+}
+
 /// Axis-aligned box.
 pub fn cube(size: [f64; 3], center: bool) -> Mesh {
     let (lo, hi) = if center {
@@ -246,6 +264,15 @@ mod tests {
         let analytic = PI * 25.0 * 10.0;
         let rel = (m.volume() - analytic).abs() / analytic;
         assert!(rel < 0.01, "cylinder volume off by {rel}");
+    }
+
+    #[test]
+    fn polyhedron_fan_triangulation() {
+        let pts = vec![[0., 0., 0.], [1., 0., 0.], [1., 1., 0.], [0., 1., 0.]];
+        let faces = vec![vec![0u32, 1, 2, 3]]; // one quad -> 2 triangles
+        let m = polyhedron(&pts, &faces);
+        assert_eq!(m.tris.len(), 2);
+        assert_eq!(m.verts.len(), 4);
     }
 
     #[test]

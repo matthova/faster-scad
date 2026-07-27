@@ -9,7 +9,7 @@ pub use kernel::{BoolmeshKernel, Kernel};
 #[cfg(not(target_arch = "wasm32"))]
 pub use kernel::ManifoldKernel;
 pub use mesh::Mesh;
-pub use tessellate::{cube, cylinder, fragments, sphere};
+pub use tessellate::{cube, cylinder, fragments, polyhedron, sphere};
 
 use quito_ir::{Node, Vec3};
 
@@ -48,6 +48,7 @@ pub fn render_with(node: &Node, kernel: &dyn Kernel) -> Result<Mesh, GeomError> 
             center,
             frags,
         } => Ok(cylinder(*h, *r1, *r2, *center, *frags)),
+        Node::Polyhedron { points, faces } => Ok(polyhedron(points, faces)),
 
         Node::Group(children) => {
             let meshes = render_all(children, kernel)?;
