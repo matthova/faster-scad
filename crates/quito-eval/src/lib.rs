@@ -1,0 +1,2799 @@
+//! Tree-walk evaluator: AST -> CSG tree ([`quito_ir::Node`]).
+//!
+//! Scoping matches OpenSCAD: ordinary variables, functions, and modules are
+//! lexically scoped (closures capture the scope chain at definition time),
+//! while `$` special variables are dynamically scoped (a separate frame stack
+//! that mirrors execution nesting). Function values and module `children()`
+//! both close over their definition / call-site environments.
+
+mod text;
+mod value;
+mod vm;
+
+pub use value::{format_number, Value};
+
+use quito_ir::{FragmentSpec, Node, Vec3};
+use quito_syntax::ast::*;
+use std::collections::HashSet;
+
+/// Fast hash map for the interpreter's hot maps (scopes, params, specials).
+/// Variable names are short strings hashed on every lookup/insert; FxHash is
+/// far faster than the default SipHash and deterministic (no per-run seed).
+type FastMap<K, V> = rustc_hash::FxHashMap<K, V>;
+
+/// A file loaded by an `include`/`use` resolver.
+pub struct LoadedFile {
+    /// A canonical key identifying the file (for cycle detection).
+    pub key: String,
+    pub source: String,
+    /// Directory of the loaded file (base for its own relative includes).
+    pub dir: String,
+}
+
+/// Resolves `include`/`use` paths to source. Native builds read from disk;
+/// the browser can supply an in-memory map.
+pub trait FileResolver {
+    fn load(&self, path: &str, from_dir: &str) -> Option<LoadedFile>;
+    /// Load raw bytes (for `import()` of binary meshes). Defaults to none.
+    fn load_bytes(&self, path: &str, from_dir: &str) -> Option<Vec<u8>> {
+        let _ = (path, from_dir);
+        None
+    }
+}
+
+/// A resolver that never finds anything (include/use become warnings).
+pub struct NullResolver;
+impl FileResolver for NullResolver {
+    fn load(&self, _path: &str, _from_dir: &str) -> Option<LoadedFile> {
+        None
+    }
+}
+
+const MAX_RANGE_ITERS: usize = 10_000_000;
+/// Max function/module call nesting before erroring — a graceful error instead
+/// of a native stack overflow. Each release frame is ~1.6 KiB, so 6000 fits the
+/// CLI's 256 MiB worker thread with wide margin; callers must run eval on an
+/// ample stack (the CLI does). In the browser, V8's own wasm call-frame limit
+/// trips first and is caught by the engine wrapper (the tab never crashes);
+/// deep *tail* recursion is turned into a loop by TCE and is unbounded. Sits
+/// just above OpenSCAD's own limit (it accepts ~5000-deep recursion).
+const MAX_CALL_DEPTH: usize = 6_000;
+
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("{0}")]
+pub struct EvalError(pub String);
+
+type EResult<T> = Result<T, EvalError>;
+
+fn err<T>(msg: impl Into<String>) -> EResult<T> {
+    Err(EvalError(msg.into()))
+}
+
+/// Resolve `path` against directory `dir`, normalizing `.`/`..` segments. Used
+/// to make a `use` path inside an included file resolvable later (when the
+/// evaluator's current directory is no longer that file's). Absolute paths and
+/// an empty `dir` are returned unchanged.
+fn join_dir(dir: &str, path: &str) -> String {
+    if dir.is_empty() || path.starts_with('/') {
+        return path.to_string();
+    }
+    let mut parts: Vec<&str> = Vec::new();
+    for seg in dir.split('/').chain(path.split('/')) {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            s => parts.push(s),
+        }
+    }
+    // Preserve a leading '/' from an absolute `dir`.
+    let joined = parts.join("/");
+    if dir.starts_with('/') {
+        format!("/{joined}")
+    } else {
+        joined
+    }
+}
+
+use std::cell::{OnceCell, RefCell};
+use std::rc::Rc;
+
+type ScopeRef = Rc<RefCell<Scope>>;
+
+/// A function value: parameters, body, and the lexical environment (scope
+/// chain) captured at definition time.
+pub struct FnClosure {
+    params: Vec<Param>,
+    body: Expr,
+    env: Vec<ScopeRef>,
+    /// The defining name (for named `function` defs), used by the VM to detect
+    /// self-tail-calls. `None` for anonymous function literals.
+    name: Option<String>,
+    /// Lazily-compiled bytecode for the fast path; `Some(None)` means the body
+    /// isn't VM-compilable and the tree-walk is used. Computed on first call.
+    chunk: OnceCell<Option<Rc<vm::Chunk>>>,
+}
+
+/// Outcome of evaluating a function body in tail position.
+enum TailResult {
+    Value(Value),
+    /// Re-invoke the same function with these freshly-bound arguments.
+    TailCall(FastMap<String, Value>),
+}
+
+/// A module definition with its captured lexical environment.
+struct ModClosure {
+    params: Vec<Param>,
+    body: Vec<Stmt>,
+    env: Vec<ScopeRef>,
+}
+
+#[derive(Default)]
+struct Scope {
+    vars: FastMap<String, Value>,
+    funcs: FastMap<String, Rc<FnClosure>>,
+    modules: FastMap<String, Rc<ModClosure>>,
+}
+
+/// The output of evaluating a program.
+pub struct EvalOutput {
+    pub node: Node,
+    pub echoes: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+struct Interp<'a> {
+    /// Lexical scope chain (swapped to a closure's captured env during calls).
+    scopes: Vec<ScopeRef>,
+    /// Dynamic frames for `$` variables (mirrors execution nesting; NOT swapped
+    /// on calls, giving `$vars` dynamic scoping).
+    specials: Vec<FastMap<String, Value>>,
+    echoes: Vec<String>,
+    warnings: Vec<String>,
+    root: Option<Node>,
+    depth: usize,
+    /// For each active module call: the child statements plus the caller's
+    /// lexical scope chain, so `children()` evaluates them in the call site.
+    children_stack: Vec<(Vec<Stmt>, Vec<ScopeRef>)>,
+    /// `include`/`use` file resolver.
+    resolver: &'a dyn FileResolver,
+    /// Directory of the file currently being evaluated (for relative includes).
+    cur_dir: String,
+    /// Files currently being loaded, for include/use cycle detection.
+    loading: HashSet<String>,
+    /// Customizer / `-D` overrides: these replace matching *top-level*
+    /// assignments in the main file (they win, like OpenSCAD's `-D`).
+    overrides: FastMap<String, Value>,
+}
+
+/// Evaluate a parsed program into a CSG tree plus console output (no file
+/// access; `include`/`use` become warnings).
+pub fn eval_program(prog: &Program) -> EResult<EvalOutput> {
+    eval_program_with(prog, &NullResolver, ".")
+}
+
+/// Convert a customizer parameter value into a runtime [`Value`], for use as an
+/// override in [`eval_program_with_params`].
+pub fn value_from_param(p: &quito_syntax::customizer::ParamValue) -> Value {
+    use quito_syntax::customizer::ParamValue as P;
+    match p {
+        P::Number(n) => Value::Number(*n),
+        P::Bool(b) => Value::Bool(*b),
+        P::Text(s) => Value::Str(s.clone()),
+        P::Vector(xs) => value::vector(xs.iter().map(|n| Value::Number(*n)).collect()),
+    }
+}
+
+/// Evaluate a program with `include`/`use` support via `resolver`, resolving
+/// relative paths against `base_dir`.
+pub fn eval_program_with(
+    prog: &Program,
+    resolver: &dyn FileResolver,
+    base_dir: &str,
+) -> EResult<EvalOutput> {
+    eval_program_with_params(prog, resolver, base_dir, &[])
+}
+
+/// Like [`eval_program_with`], but with customizer / `-D`-style parameter
+/// overrides: each `(name, value)` replaces the main file's top-level
+/// assignment of `name` (the override wins, matching OpenSCAD's `-D`).
+pub fn eval_program_with_params(
+    prog: &Program,
+    resolver: &dyn FileResolver,
+    base_dir: &str,
+    overrides: &[(String, Value)],
+) -> EResult<EvalOutput> {
+    let mut base = Scope::default();
+    base.vars.insert("PI".into(), Value::Number(std::f64::consts::PI));
+
+    // `$` special variables live in the dynamic frame stack.
+    let mut globals = FastMap::default();
+    globals.insert("$fn".to_string(), Value::Number(0.0));
+    globals.insert("$fa".to_string(), Value::Number(12.0));
+    globals.insert("$fs".to_string(), Value::Number(2.0));
+    globals.insert("$t".to_string(), Value::Number(0.0));
+    globals.insert("$preview".to_string(), Value::Bool(true));
+    // A `$`-named override (e.g. `$t` for animation, `$fn`) seeds the global
+    // special-variable frame rather than a top-level assignment.
+    for (name, value) in overrides {
+        if name.starts_with('$') {
+            globals.insert(name.clone(), value.clone());
+        }
+    }
+
+    let mut interp = Interp {
+        scopes: vec![Rc::new(RefCell::new(base))],
+        specials: vec![globals],
+        echoes: Vec::new(),
+        warnings: Vec::new(),
+        root: None,
+        depth: 0,
+        children_stack: Vec::new(),
+        resolver,
+        cur_dir: base_dir.to_string(),
+        loading: HashSet::new(),
+        overrides: overrides.iter().cloned().collect(),
+    };
+
+    let nodes = interp.eval_stmts(prog)?;
+    let node = interp.root.take().unwrap_or_else(|| Node::group(nodes));
+    Ok(EvalOutput {
+        node,
+        echoes: interp.echoes,
+        warnings: interp.warnings,
+    })
+}
+
+impl Interp<'_> {
+    // ---- scope helpers -------------------------------------------------
+
+    fn push_scope(&mut self) {
+        self.scopes.push(Rc::new(RefCell::new(Scope::default())));
+        self.specials.push(FastMap::default());
+    }
+
+    fn pop_scope(&mut self) {
+        self.scopes.pop();
+        self.specials.pop();
+    }
+
+    fn set_var(&mut self, name: &str, val: Value) {
+        if name.starts_with('$') {
+            self.specials.last_mut().unwrap().insert(name.to_string(), val);
+        } else {
+            self.scopes
+                .last()
+                .unwrap()
+                .borrow_mut()
+                .vars
+                .insert(name.to_string(), val);
+        }
+    }
+
+    fn lookup_var(&self, name: &str) -> Value {
+        if name.starts_with('$') {
+            for frame in self.specials.iter().rev() {
+                if let Some(v) = frame.get(name) {
+                    return v.clone();
+                }
+            }
+        } else {
+            for scope in self.scopes.iter().rev() {
+                if let Some(v) = scope.borrow().vars.get(name) {
+                    return v.clone();
+                }
+            }
+        }
+        Value::Undef
+    }
+
+    fn lookup_func(&self, name: &str) -> Option<Rc<FnClosure>> {
+        for scope in self.scopes.iter().rev() {
+            if let Some(f) = scope.borrow().funcs.get(name) {
+                return Some(f.clone());
+            }
+        }
+        None
+    }
+
+    fn lookup_module(&self, name: &str) -> Option<Rc<ModClosure>> {
+        for scope in self.scopes.iter().rev() {
+            if let Some(m) = scope.borrow().modules.get(name) {
+                return Some(m.clone());
+            }
+        }
+        None
+    }
+
+    // ---- statements ----------------------------------------------------
+
+    fn eval_stmts(&mut self, stmts: &[Stmt]) -> EResult<Vec<Node>> {
+        // Splice `include`d files in first (only when present, to avoid cloning).
+        let expanded;
+        let effective: &[Stmt] = if stmts.iter().any(|s| matches!(s, Stmt::Include { .. })) {
+            expanded = self.expand_includes(stmts, false)?;
+            &expanded
+        } else {
+            stmts
+        };
+
+        // Phases 1 (definitions + `use` imports) and 2 (assignments).
+        self.eval_defs_and_assigns(effective)?;
+
+        // Phase 3: geometry.
+        let mut out = Vec::new();
+        for s in effective {
+            match s {
+                Stmt::Assign { .. }
+                | Stmt::FunctionDef { .. }
+                | Stmt::ModuleDef { .. }
+                | Stmt::Use { .. }
+                | Stmt::Include { .. } => {}
+                _ => out.extend(self.eval_geom(s)?),
+            }
+        }
+        Ok(out)
+    }
+
+    /// Phase 1 (hoist definitions + process `use` imports) and phase 2 (hoist
+    /// assignments, last write wins) into the current scope.
+    fn eval_defs_and_assigns(&mut self, stmts: &[Stmt]) -> EResult<()> {
+        for s in stmts {
+            match s {
+                Stmt::FunctionDef { name, params, body } => {
+                    let env = self.scopes.clone();
+                    self.scopes.last().unwrap().borrow_mut().funcs.insert(
+                        name.clone(),
+                        Rc::new(FnClosure {
+                            params: params.clone(),
+                            body: body.clone(),
+                            env,
+                            name: Some(name.clone()),
+                            chunk: OnceCell::new(),
+                        }),
+                    );
+                }
+                Stmt::ModuleDef { name, params, body } => {
+                    let env = self.scopes.clone();
+                    self.scopes.last().unwrap().borrow_mut().modules.insert(
+                        name.clone(),
+                        Rc::new(ModClosure {
+                            params: params.clone(),
+                            body: body.clone(),
+                            env,
+                        }),
+                    );
+                }
+                Stmt::Use { path } => self.import_use(path)?,
+                _ => {}
+            }
+        }
+        // Only the *main file's* top-level assignments (scope depth 1) are
+        // customizer parameters; `use`d files run deeper and modules deeper
+        // still, so their internal variables are never overridden.
+        let top_level = self.scopes.len() == 1;
+        for s in stmts {
+            if let Stmt::Assign { name, value } = s {
+                let v = match self.overrides.get(name) {
+                    Some(ov) if top_level => ov.clone(),
+                    _ => self.eval_expr(value)?,
+                };
+                self.set_var(name, v);
+            }
+        }
+        Ok(())
+    }
+
+    /// Recursively splice `include`d files' top-level statements in place.
+    ///
+    /// `in_include` is true while expanding a file reached via `include`/`use`
+    /// (i.e. not the main program). In that case a deferred `use` must remember
+    /// the file it came from — the flattened statements are later resolved
+    /// against the *main* directory, so we rewrite the `use` path to an absolute
+    /// one relative to the including file's directory. (Top-level `use`s are
+    /// left relative so they still search library paths / the CDN registry.)
+    fn expand_includes(&mut self, stmts: &[Stmt], in_include: bool) -> EResult<Vec<Stmt>> {
+        let mut out = Vec::new();
+        for s in stmts {
+            match s {
+                Stmt::Include { path } => {
+                    let Some(lf) = self.resolver.load(path, &self.cur_dir) else {
+                        self.warnings.push(format!("Can't open include file '{path}'"));
+                        continue;
+                    };
+                    if !self.loading.insert(lf.key.clone()) {
+                        continue; // cycle: already loading this file
+                    }
+                    let prog = quito_syntax::parse(&lf.source).map_err(|e| {
+                        EvalError(format!("in include '{path}': {}", e.message))
+                    })?;
+                    let prev = std::mem::replace(&mut self.cur_dir, lf.dir.clone());
+                    let expanded = self.expand_includes(&prog, true);
+                    self.cur_dir = prev;
+                    self.loading.remove(&lf.key);
+                    out.extend(expanded?);
+                }
+                Stmt::Use { path } if in_include => {
+                    out.push(Stmt::Use { path: join_dir(&self.cur_dir, path) });
+                }
+                other => out.push(other.clone()),
+            }
+        }
+        Ok(out)
+    }
+
+    /// Import a `use`d file's module/function definitions (only) into the
+    /// current scope. The file is evaluated in isolation; its definitions close
+    /// over its own top-level scope so they can use its helpers/constants.
+    fn import_use(&mut self, path: &str) -> EResult<()> {
+        let Some(lf) = self.resolver.load(path, &self.cur_dir) else {
+            self.warnings.push(format!("Can't open 'use' file '{path}'"));
+            return Ok(());
+        };
+        if !self.loading.insert(lf.key.clone()) {
+            return Ok(()); // cycle
+        }
+        let prog = quito_syntax::parse(&lf.source)
+            .map_err(|e| EvalError(format!("in use '{path}': {}", e.message)))?;
+
+        let file_scope: ScopeRef = Rc::new(RefCell::new(Scope::default()));
+        let base = self.scopes[0].clone();
+        let saved = std::mem::replace(&mut self.scopes, vec![base, file_scope.clone()]);
+        let prev_dir = std::mem::replace(&mut self.cur_dir, lf.dir.clone());
+        self.specials.push(FastMap::default());
+
+        let expanded = self.expand_includes(&prog, true);
+        let result = expanded.and_then(|eff| self.eval_defs_and_assigns(&eff));
+
+        self.specials.pop();
+        self.cur_dir = prev_dir;
+        self.scopes = saved;
+        self.loading.remove(&lf.key);
+        result?;
+
+        // Import only the definitions.
+        let fs = file_scope.borrow();
+        let target = self.scopes.last().unwrap();
+        let mut t = target.borrow_mut();
+        for (k, v) in fs.funcs.iter() {
+            t.funcs.insert(k.clone(), v.clone());
+        }
+        for (k, v) in fs.modules.iter() {
+            t.modules.insert(k.clone(), v.clone());
+        }
+        Ok(())
+    }
+
+    fn eval_geom(&mut self, stmt: &Stmt) -> EResult<Vec<Node>> {
+        match stmt {
+            Stmt::Block(stmts) => {
+                self.push_scope();
+                let r = self.eval_stmts(stmts);
+                self.pop_scope();
+                r
+            }
+            Stmt::If { cond, then, els } => {
+                let c = self.eval_expr(cond)?;
+                let branch = if c.truthy() { then } else { els };
+                self.push_scope();
+                let r = self.eval_stmts(branch);
+                self.pop_scope();
+                r
+            }
+            Stmt::For { bindings, body } => self.eval_for(bindings, body),
+            Stmt::Let { bindings, body } => {
+                self.push_scope();
+                for (n, e) in bindings {
+                    let v = self.eval_expr(e)?;
+                    self.set_var(n, v);
+                }
+                let r = self.eval_stmts(body);
+                self.pop_scope();
+                r
+            }
+            Stmt::ModuleCall {
+                modifier,
+                name,
+                args,
+                children,
+            } => self.eval_module_call(*modifier, name, args, children),
+            _ => Ok(Vec::new()),
+        }
+    }
+
+    fn eval_for(&mut self, bindings: &[(String, Expr)], body: &[Stmt]) -> EResult<Vec<Node>> {
+        let mut out = Vec::new();
+        self.eval_for_rec(bindings, body, &mut out)?;
+        Ok(out)
+    }
+
+    fn eval_for_rec(
+        &mut self,
+        bindings: &[(String, Expr)],
+        body: &[Stmt],
+        out: &mut Vec<Node>,
+    ) -> EResult<()> {
+        if bindings.is_empty() {
+            self.push_scope();
+            let r = self.eval_stmts(body);
+            self.pop_scope();
+            out.extend(r?);
+            return Ok(());
+        }
+        let (name, expr) = &bindings[0];
+        let iter = self.eval_expr(expr)?;
+        let values = iter_values(&iter)?;
+        for v in values {
+            self.push_scope();
+            self.set_var(name, v);
+            let r = self.eval_for_rec(&bindings[1..], body, out);
+            self.pop_scope();
+            r?;
+        }
+        Ok(())
+    }
+
+    fn eval_module_call(
+        &mut self,
+        modifier: Option<Modifier>,
+        name: &str,
+        args: &[Arg],
+        children: &[Stmt],
+    ) -> EResult<Vec<Node>> {
+        if modifier == Some(Modifier::Disable) {
+            return Ok(Vec::new());
+        }
+
+        let node = self.dispatch_module(name, args, children)?;
+
+        if modifier == Some(Modifier::Root) {
+            self.root = Some(node.clone());
+        }
+        // `#` highlight and `%` background are visual-only; passed through in M0.
+        if matches!(node, Node::Empty) {
+            Ok(Vec::new())
+        } else {
+            Ok(vec![node])
+        }
+    }
+
+    fn dispatch_module(&mut self, name: &str, args: &[Arg], children: &[Stmt]) -> EResult<Node> {
+        match name {
+            "cube" => self.b_cube(args),
+            "sphere" => self.b_sphere(args),
+            "cylinder" => self.b_cylinder(args),
+            "polyhedron" => self.b_polyhedron(args),
+            "square" => self.b_square(args),
+            "circle" => self.b_circle(args),
+            "polygon" => self.b_polygon(args),
+            "text" => self.b_text(args),
+            "linear_extrude" => self.b_linear_extrude(args, children),
+            "rotate_extrude" => self.b_rotate_extrude(args, children),
+            "offset" => self.b_offset(args, children),
+            "projection" => {
+                let m = self.bind_named(&["cut"], args)?;
+                let cut = m.get("cut").map(Value::truthy).unwrap_or(false);
+                Ok(Node::Projection {
+                    cut,
+                    child: Box::new(Node::group(self.eval_children(children)?)),
+                })
+            }
+            "translate" => self.transform(args, children, TransformKind::Translate),
+            "rotate" => self.transform(args, children, TransformKind::Rotate),
+            "scale" => self.transform(args, children, TransformKind::Scale),
+            "mirror" => self.transform(args, children, TransformKind::Mirror),
+            "multmatrix" => self.b_multmatrix(args, children),
+            "resize" => self.b_resize(args, children),
+            // Visual-only / passthrough modules (ignored for geometry).
+            "color" | "render" => Ok(Node::group(self.eval_children(children)?)),
+            "union" => Ok(Node::Union(self.eval_children(children)?)),
+            "difference" => Ok(Node::Difference(self.eval_children(children)?)),
+            "intersection" => Ok(Node::Intersection(self.eval_children(children)?)),
+            "hull" => Ok(Node::Hull(self.eval_children(children)?)),
+            "minkowski" => Ok(Node::Minkowski(self.eval_children(children)?)),
+            "import" => self.b_import(args),
+            "surface" => self.b_surface(args),
+            "group" => Ok(Node::group(self.eval_children(children)?)),
+            "echo" => self.b_echo(args, children),
+            "assert" => self.b_assert(args, children),
+            "children" => self.b_children(args),
+            _ => {
+                if let Some(def) = self.lookup_module(name) {
+                    self.instantiate_module(&def, args, children)
+                } else {
+                    self.warnings
+                        .push(format!("Ignoring unknown module '{name}'"));
+                    Ok(Node::Empty)
+                }
+            }
+        }
+    }
+
+    fn eval_children(&mut self, children: &[Stmt]) -> EResult<Vec<Node>> {
+        self.push_scope();
+        let r = self.eval_stmts(children);
+        self.pop_scope();
+        r
+    }
+
+    fn instantiate_module(
+        &mut self,
+        def: &Rc<ModClosure>,
+        args: &[Arg],
+        children: &[Stmt],
+    ) -> EResult<Node> {
+        // Guard against unbounded module recursion (shared budget with function
+        // calls) so a runaway library errors gracefully instead of overflowing
+        // the stack and aborting the process.
+        if self.depth >= MAX_CALL_DEPTH {
+            return err("maximum module recursion depth exceeded");
+        }
+        self.depth += 1;
+        // Arguments are evaluated in the caller's scope; the body runs in the
+        // module's captured (lexical) environment.
+        let bound = self.bind_params(&def.params, args)?;
+        let caller_scopes = self.scopes.clone();
+        let saved = std::mem::replace(&mut self.scopes, def.env.clone());
+        self.push_scope();
+        for (k, v) in bound {
+            self.set_var(&k, v);
+        }
+        self.set_var("$children", Value::Number(children.len() as f64));
+        self.children_stack.push((children.to_vec(), caller_scopes));
+        let r = self.eval_stmts(&def.body);
+        self.children_stack.pop();
+        self.pop_scope();
+        self.scopes = saved;
+        self.depth -= 1;
+        Ok(Node::group(r?))
+    }
+
+    /// `children()` / `children(i)` / `children([indices|range])`. Children are
+    /// evaluated in the caller's lexical scope (where they were written).
+    fn b_children(&mut self, args: &[Arg]) -> EResult<Node> {
+        // Pop our own frame while evaluating the children: a `children()` call
+        // *inside* those children must resolve to the grandparent's children
+        // (one level up), matching OpenSCAD — and preventing infinite recursion
+        // when a module forwards `children()` through another module's children.
+        let Some(frame) = self.children_stack.pop() else {
+            return Ok(Node::Empty);
+        };
+        let (kids, caller_scopes) = frame.clone();
+        let result = self.eval_children_frame(&kids, caller_scopes, args);
+        self.children_stack.push(frame);
+        result
+    }
+
+    fn eval_children_frame(
+        &mut self,
+        kids: &[Stmt],
+        caller_scopes: Vec<ScopeRef>,
+        args: &[Arg],
+    ) -> EResult<Node> {
+        let kids = kids.to_vec();
+        // The index selector is evaluated in the module's scope.
+        let idxs: Option<Vec<usize>> = if args.is_empty() {
+            None
+        } else {
+            let sel = self.first_positional(args)?;
+            Some(match sel {
+                Value::Number(n) => vec![n as usize],
+                Value::Vector(ref v) => {
+                    v.iter().filter_map(Value::as_number).map(|n| n as usize).collect()
+                }
+                Value::Range { .. } => iter_values(&sel)?
+                    .iter()
+                    .filter_map(Value::as_number)
+                    .map(|n| n as usize)
+                    .collect(),
+                _ => Vec::new(),
+            })
+        };
+        // Evaluate the child geometry in the caller's lexical environment.
+        let saved = std::mem::replace(&mut self.scopes, caller_scopes);
+        self.push_scope();
+        let result = (|| -> EResult<Node> {
+            match idxs {
+                None => Ok(Node::group(self.eval_stmts(&kids)?)),
+                Some(idxs) => {
+                    let mut out = Vec::new();
+                    for i in idxs {
+                        if let Some(stmt) = kids.get(i) {
+                            out.extend(self.eval_geom(stmt)?);
+                        }
+                    }
+                    Ok(Node::group(out))
+                }
+            }
+        })();
+        self.pop_scope();
+        self.scopes = saved;
+        result
+    }
+
+    // ---- builtin modules ----------------------------------------------
+
+    fn b_cube(&mut self, args: &[Arg]) -> EResult<Node> {
+        let m = self.bind_named(&["size", "center"], args)?;
+        let size = match m.get("size") {
+            Some(Value::Number(n)) => [*n, *n, *n],
+            Some(v @ Value::Vector(_)) => v.as_vec3().unwrap_or([1.0, 1.0, 1.0]),
+            _ => [1.0, 1.0, 1.0],
+        };
+        let center = m.get("center").map(Value::truthy).unwrap_or(false);
+        Ok(Node::Cube { size, center })
+    }
+
+    fn b_sphere(&mut self, args: &[Arg]) -> EResult<Node> {
+        let m = self.bind_named(&["r"], args)?;
+        let r = if let Some(d) = m.get("d").and_then(Value::as_number) {
+            d / 2.0
+        } else {
+            m.get("r").and_then(Value::as_number).unwrap_or(1.0)
+        };
+        Ok(Node::Sphere {
+            r,
+            frags: self.frag_spec(&m),
+        })
+    }
+
+    fn b_cylinder(&mut self, args: &[Arg]) -> EResult<Node> {
+        let m = self.bind_named(&["h", "r1", "r2"], args)?;
+        let h = m.get("h").and_then(Value::as_number).unwrap_or(1.0);
+
+        // r / d apply to both ends; r1/r2/d1/d2 override per end.
+        let base_r = m
+            .get("d")
+            .and_then(Value::as_number)
+            .map(|d| d / 2.0)
+            .or_else(|| m.get("r").and_then(Value::as_number));
+
+        let r1 = m
+            .get("d1")
+            .and_then(Value::as_number)
+            .map(|d| d / 2.0)
+            .or_else(|| m.get("r1").and_then(Value::as_number))
+            .or(base_r)
+            .unwrap_or(1.0);
+        let r2 = m
+            .get("d2")
+            .and_then(Value::as_number)
+            .map(|d| d / 2.0)
+            .or_else(|| m.get("r2").and_then(Value::as_number))
+            .or(base_r)
+            .unwrap_or(1.0);
+
+        let center = m.get("center").map(Value::truthy).unwrap_or(false);
+        Ok(Node::Cylinder {
+            h,
+            r1,
+            r2,
+            center,
+            frags: self.frag_spec(&m),
+        })
+    }
+
+    fn b_import(&mut self, args: &[Arg]) -> EResult<Node> {
+        let m = self.bind_named(&["file"], args)?;
+        let path = match m.get("file") {
+            Some(Value::Str(s)) => s.clone(),
+            _ => return Ok(Node::Empty),
+        };
+        let format = path
+            .rsplit('.')
+            .next()
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        match self.resolver.load_bytes(&path, &self.cur_dir) {
+            Some(data) => Ok(Node::Import { data, format }),
+            None => {
+                self.warnings.push(format!("Can't open import file '{path}'"));
+                Ok(Node::Empty)
+            }
+        }
+    }
+
+    fn b_surface(&mut self, args: &[Arg]) -> EResult<Node> {
+        let m = self.bind_named(&["file", "center", "convexity", "invert"], args)?;
+        let path = match m.get("file") {
+            Some(Value::Str(s)) => s.clone(),
+            _ => return Ok(Node::Empty),
+        };
+        let center = m.get("center").map(Value::truthy).unwrap_or(false);
+        let invert = m.get("invert").map(Value::truthy).unwrap_or(false);
+        let is_png = path.to_ascii_lowercase().ends_with(".png");
+        let rows = if is_png {
+            let Some(bytes) = self.resolver.load_bytes(&path, &self.cur_dir) else {
+                self.warnings.push(format!("Can't open surface file '{path}'"));
+                return Ok(Node::Empty);
+            };
+            match png_heightmap(&bytes, invert) {
+                Ok(rows) => rows,
+                Err(e) => {
+                    self.warnings.push(format!("surface(): {e} in '{path}'"));
+                    return Ok(Node::Empty);
+                }
+            }
+        } else {
+            let Some(lf) = self.resolver.load(&path, &self.cur_dir) else {
+                self.warnings.push(format!("Can't open surface file '{path}'"));
+                return Ok(Node::Empty);
+            };
+            // Whitespace-separated rows of z-values; `#` lines are comments.
+            lf.source
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                .map(|l| l.split_whitespace().filter_map(|s| s.parse::<f64>().ok()).collect())
+                .filter(|r: &Vec<f64>| !r.is_empty())
+                .collect()
+        };
+        Ok(surface_polyhedron(&rows, center, is_png))
+    }
+
+    fn b_polyhedron(&mut self, args: &[Arg]) -> EResult<Node> {
+        let m = self.bind_named(&["points", "faces", "convexity"], args)?;
+        let points: Vec<Vec3> = match m.get("points") {
+            Some(Value::Vector(v)) => v.iter().map(value_to_point3).collect(),
+            _ => Vec::new(),
+        };
+        // `faces` (current) or `triangles` (legacy).
+        let faces_val = m.get("faces").or_else(|| m.get("triangles"));
+        let faces: Vec<Vec<u32>> = match faces_val {
+            Some(Value::Vector(v)) => v.iter().map(value_to_face).collect(),
+            _ => Vec::new(),
+        };
+        Ok(Node::Polyhedron { points, faces })
+    }
+
+    fn b_square(&mut self, args: &[Arg]) -> EResult<Node> {
+        let m = self.bind_named(&["size", "center"], args)?;
+        let size = match m.get("size") {
+            Some(Value::Number(n)) => [*n, *n],
+            Some(Value::Vector(v)) => {
+                let g = |i: usize| v.get(i).and_then(Value::as_number).unwrap_or(0.0);
+                [g(0), g(1)]
+            }
+            _ => [1.0, 1.0],
+        };
+        let center = m.get("center").map(Value::truthy).unwrap_or(false);
+        Ok(Node::Square { size, center })
+    }
+
+    fn b_circle(&mut self, args: &[Arg]) -> EResult<Node> {
+        let m = self.bind_named(&["r"], args)?;
+        let r = if let Some(d) = m.get("d").and_then(Value::as_number) {
+            d / 2.0
+        } else {
+            m.get("r").and_then(Value::as_number).unwrap_or(1.0)
+        };
+        Ok(Node::Circle {
+            r,
+            frags: self.frag_spec(&m),
+        })
+    }
+
+    fn b_text(&mut self, args: &[Arg]) -> EResult<Node> {
+        let m = self.bind_named(&["text", "size", "font"], args)?;
+        let text = m.get("text").map(Value::to_str).unwrap_or_default();
+        let size = m.get("size").and_then(Value::as_number).unwrap_or(10.0);
+        let sopt = |k: &str, d: &str| m.get(k).map(Value::to_str).unwrap_or_else(|| d.to_string());
+        let halign = sopt("halign", "left");
+        let valign = sopt("valign", "baseline");
+        let spacing = m.get("spacing").and_then(Value::as_number).unwrap_or(1.0);
+        let direction = sopt("direction", "ltr");
+        // Curve resolution follows `$fn` (like other curved primitives).
+        let fn_ = self.lookup_var("$fn").as_number().unwrap_or(0.0);
+        let segments = if fn_ >= 3.0 { ((fn_ / 4.0).ceil() as usize).max(2) } else { 8 };
+
+        let (points, paths) = text::text_contours(&text::TextOpts {
+            text: &text,
+            size,
+            halign: &halign,
+            valign: &valign,
+            spacing,
+            direction: &direction,
+            segments,
+        });
+        Ok(Node::Polygon { points, paths: Some(paths) })
+    }
+
+    fn b_polygon(&mut self, args: &[Arg]) -> EResult<Node> {
+        let m = self.bind_named(&["points", "paths"], args)?;
+        let points: Vec<[f64; 2]> = match m.get("points") {
+            Some(Value::Vector(v)) => v
+                .iter()
+                .map(|p| {
+                    if let Value::Vector(c) = p {
+                        let g = |i: usize| c.get(i).and_then(Value::as_number).unwrap_or(0.0);
+                        [g(0), g(1)]
+                    } else {
+                        [0.0, 0.0]
+                    }
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        let paths = match m.get("paths") {
+            Some(Value::Vector(v)) => Some(
+                v.iter()
+                    .map(|p| match p {
+                        Value::Vector(idx) => idx
+                            .iter()
+                            .filter_map(Value::as_number)
+                            .map(|n| n as u32)
+                            .collect(),
+                        _ => Vec::new(),
+                    })
+                    .collect(),
+            ),
+            _ => None,
+        };
+        Ok(Node::Polygon { points, paths })
+    }
+
+    fn b_linear_extrude(&mut self, args: &[Arg], children: &[Stmt]) -> EResult<Node> {
+        let m = self.bind_named(&["height"], args)?;
+        let height = m
+            .get("height")
+            .or_else(|| m.get("h"))
+            .and_then(Value::as_number)
+            .unwrap_or(100.0);
+        let center = m.get("center").map(Value::truthy).unwrap_or(false);
+        let twist = m.get("twist").and_then(Value::as_number).unwrap_or(0.0);
+        let scale = match m.get("scale") {
+            Some(Value::Number(n)) => [*n, *n],
+            Some(Value::Vector(v)) => {
+                let g = |i: usize| v.get(i).and_then(Value::as_number).unwrap_or(1.0);
+                [g(0), g(1)]
+            }
+            _ => [1.0, 1.0],
+        };
+        let slices = m
+            .get("slices")
+            .and_then(Value::as_number)
+            .map(|s| s as u32)
+            .unwrap_or_else(|| {
+                if twist == 0.0 {
+                    1
+                } else {
+                    (twist.abs() / 15.0).ceil().max(1.0) as u32
+                }
+            })
+            .max(1);
+        let child = Box::new(Node::group(self.eval_children(children)?));
+        Ok(Node::LinearExtrude {
+            height,
+            center,
+            twist,
+            scale,
+            slices,
+            child,
+        })
+    }
+
+    fn b_offset(&mut self, args: &[Arg], children: &[Stmt]) -> EResult<Node> {
+        let m = self.bind_named(&["r", "delta"], args)?;
+        let r = m.get("r").and_then(Value::as_number);
+        let delta = m.get("delta").and_then(Value::as_number);
+        let chamfer = m.get("chamfer").map(Value::truthy).unwrap_or(false);
+        // `r` takes precedence; default to r=1 if neither given.
+        let (r, delta) = match (r, delta) {
+            (Some(r), _) => (r, 0.0),
+            (None, Some(d)) => (0.0, d),
+            (None, None) => (1.0, 0.0),
+        };
+        let child = Box::new(Node::group(self.eval_children(children)?));
+        Ok(Node::Offset {
+            r,
+            delta,
+            chamfer,
+            frags: self.frag_spec(&m),
+            child,
+        })
+    }
+
+    fn b_rotate_extrude(&mut self, args: &[Arg], children: &[Stmt]) -> EResult<Node> {
+        let m = self.bind_named(&["angle"], args)?;
+        let angle = m.get("angle").and_then(Value::as_number).unwrap_or(360.0);
+        let child = Box::new(Node::group(self.eval_children(children)?));
+        Ok(Node::RotateExtrude {
+            angle,
+            frags: self.frag_spec(&m),
+            child,
+        })
+    }
+
+    /// Resolve the fragment spec from call-site `$fn/$fa/$fs` args, falling back
+    /// to the ambient special variables.
+    fn frag_spec(&self, m: &FastMap<String, Value>) -> FragmentSpec {
+        let pick = |key: &str, default: f64| -> f64 {
+            m.get(key)
+                .and_then(Value::as_number)
+                .unwrap_or_else(|| self.lookup_var(key).as_number().unwrap_or(default))
+        };
+        FragmentSpec {
+            fn_: pick("$fn", 0.0),
+            fa: pick("$fa", 12.0),
+            fs: pick("$fs", 2.0),
+        }
+    }
+
+    fn transform(
+        &mut self,
+        args: &[Arg],
+        children: &[Stmt],
+        kind: TransformKind,
+    ) -> EResult<Node> {
+        let child = Node::group(self.eval_children(children)?);
+        if matches!(child, Node::Empty) {
+            return Ok(Node::Empty);
+        }
+        let v = self.first_positional(args)?;
+        let node = match kind {
+            TransformKind::Translate => Node::Translate {
+                v: v.as_vec3().unwrap_or([0.0, 0.0, 0.0]),
+                child: Box::new(child),
+            },
+            TransformKind::Rotate => {
+                let deg = match &v {
+                    Value::Number(n) => [0.0, 0.0, *n],
+                    _ => v.as_vec3().unwrap_or([0.0, 0.0, 0.0]),
+                };
+                Node::Rotate {
+                    deg,
+                    child: Box::new(child),
+                }
+            }
+            TransformKind::Scale => {
+                let s = scale_vec3(&v);
+                Node::Scale {
+                    v: s,
+                    child: Box::new(child),
+                }
+            }
+            TransformKind::Mirror => Node::Mirror {
+                v: v.as_vec3().unwrap_or([1.0, 0.0, 0.0]),
+                child: Box::new(child),
+            },
+        };
+        Ok(node)
+    }
+
+    fn b_multmatrix(&mut self, args: &[Arg], children: &[Stmt]) -> EResult<Node> {
+        let child = Node::group(self.eval_children(children)?);
+        if matches!(child, Node::Empty) {
+            return Ok(Node::Empty);
+        }
+        let m = matrix_from_value(&self.first_positional(args)?);
+        Ok(Node::MultMatrix {
+            m,
+            child: Box::new(child),
+        })
+    }
+
+    fn b_resize(&mut self, args: &[Arg], children: &[Stmt]) -> EResult<Node> {
+        let child = Node::group(self.eval_children(children)?);
+        if matches!(child, Node::Empty) {
+            return Ok(Node::Empty);
+        }
+        let m = self.bind_named(&["newsize", "auto"], args)?;
+        let new = m
+            .get("newsize")
+            .and_then(Value::as_vec3)
+            .unwrap_or([0.0, 0.0, 0.0]);
+        let auto = match m.get("auto") {
+            Some(Value::Bool(b)) => [*b, *b, *b],
+            Some(Value::Vector(v)) => {
+                let g = |i: usize| v.get(i).map(Value::truthy).unwrap_or(false);
+                [g(0), g(1), g(2)]
+            }
+            _ => [false, false, false],
+        };
+        Ok(Node::Resize {
+            new,
+            auto,
+            child: Box::new(child),
+        })
+    }
+
+    /// Format and record an `echo(...)`; shared by the module and expression forms.
+    fn do_echo(&mut self, args: &[Arg]) -> EResult<()> {
+        let mut parts = Vec::new();
+        for a in args {
+            let v = self.eval_expr(&a.value)?;
+            match &a.name {
+                Some(n) => parts.push(format!("{} = {}", n, v.repr())),
+                None => parts.push(v.repr()),
+            }
+        }
+        self.echoes.push(format!("ECHO: {}", parts.join(", ")));
+        Ok(())
+    }
+
+    fn b_echo(&mut self, args: &[Arg], children: &[Stmt]) -> EResult<Node> {
+        self.do_echo(args)?;
+        Ok(Node::group(self.eval_children(children)?))
+    }
+
+    /// Assert semantics shared by the module and expression forms; returns
+    /// whether the assertion passed (errors on failure).
+    fn do_assert(&mut self, args: &[Arg]) -> EResult<()> {
+        let cond = self
+            .first_positional(args)
+            .unwrap_or(Value::Undef)
+            .truthy();
+        if !cond {
+            let msg = args
+                .iter()
+                .nth(1)
+                .map(|a| self.eval_expr(&a.value))
+                .transpose()?
+                .map(|v| v.to_str())
+                .unwrap_or_default();
+            return err(format!("Assertion failed: {msg}"));
+        }
+        Ok(())
+    }
+
+    fn b_assert(&mut self, args: &[Arg], children: &[Stmt]) -> EResult<Node> {
+        self.do_assert(args)?;
+        Ok(Node::group(self.eval_children(children)?))
+    }
+
+    // ---- argument binding ---------------------------------------------
+
+    /// Bind arguments by the given positional parameter names, honoring named
+    /// args (including out-of-band `$fn`-style and `d`/`r1` overrides).
+    fn bind_named(&mut self, positional: &[&str], args: &[Arg]) -> EResult<FastMap<String, Value>> {
+        let mut map = FastMap::default();
+        let mut pos = 0;
+        for a in args {
+            let v = self.eval_expr(&a.value)?;
+            match &a.name {
+                Some(n) => {
+                    map.insert(n.clone(), v);
+                }
+                None => {
+                    if let Some(name) = positional.get(pos) {
+                        map.insert((*name).to_string(), v);
+                    }
+                    pos += 1;
+                }
+            }
+        }
+        Ok(map)
+    }
+
+    fn bind_params(&mut self, params: &[Param], args: &[Arg]) -> EResult<FastMap<String, Value>> {
+        let mut map = FastMap::default();
+        for p in params {
+            if let Some(d) = &p.default {
+                let v = self.eval_expr(d)?;
+                map.insert(p.name.clone(), v);
+            }
+        }
+        let mut pos = 0;
+        for a in args {
+            let v = self.eval_expr(&a.value)?;
+            match &a.name {
+                Some(n) => {
+                    map.insert(n.clone(), v);
+                }
+                None => {
+                    if let Some(p) = params.get(pos) {
+                        map.insert(p.name.clone(), v);
+                    }
+                    pos += 1;
+                }
+            }
+        }
+        Ok(map)
+    }
+
+    fn first_positional(&mut self, args: &[Arg]) -> EResult<Value> {
+        for a in args {
+            if a.name.is_none() {
+                return self.eval_expr(&a.value);
+            }
+        }
+        Ok(Value::Undef)
+    }
+
+    // ---- expressions ---------------------------------------------------
+
+    fn eval_expr(&mut self, expr: &Expr) -> EResult<Value> {
+        match expr {
+            Expr::Number(n) => Ok(Value::Number(*n)),
+            Expr::Bool(b) => Ok(Value::Bool(*b)),
+            Expr::Str(s) => Ok(Value::Str(s.clone())),
+            Expr::Undef => Ok(Value::Undef),
+            Expr::Ident(name) => Ok(self.lookup_var(name)),
+            Expr::Vector(elems) => {
+                let mut out = Vec::with_capacity(elems.len());
+                for e in elems {
+                    self.eval_list_elem(e, &mut out)?;
+                }
+                Ok(value::vector(out))
+            }
+            Expr::Range { start, step, end } => {
+                let s = self.eval_expr(start)?.as_number().unwrap_or(f64::NAN);
+                let e = self.eval_expr(end)?.as_number().unwrap_or(f64::NAN);
+                match step {
+                    // 3-arg range: kept as written (empty if step direction
+                    // contradicts start/end).
+                    Some(x) => {
+                        let st = self.eval_expr(x)?.as_number().unwrap_or(1.0);
+                        Ok(Value::Range { start: s, step: st, end: e })
+                    }
+                    // 2-arg range: OpenSCAD normalizes to ascending, step 1
+                    // (so `[5:2]` becomes `[2:1:5]`).
+                    None => {
+                        let (lo, hi) = if s <= e { (s, e) } else { (e, s) };
+                        Ok(Value::Range { start: lo, step: 1.0, end: hi })
+                    }
+                }
+            }
+            Expr::Unary { op, expr } => {
+                let v = self.eval_expr(expr)?;
+                Ok(value::unary(*op, v))
+            }
+            // `&&` / `||` short-circuit (the right side may assert or error).
+            Expr::Binary { op: BinOp::And, lhs, rhs } => {
+                if !self.eval_expr(lhs)?.truthy() {
+                    Ok(Value::Bool(false))
+                } else {
+                    Ok(Value::Bool(self.eval_expr(rhs)?.truthy()))
+                }
+            }
+            Expr::Binary { op: BinOp::Or, lhs, rhs } => {
+                if self.eval_expr(lhs)?.truthy() {
+                    Ok(Value::Bool(true))
+                } else {
+                    Ok(Value::Bool(self.eval_expr(rhs)?.truthy()))
+                }
+            }
+            Expr::Binary { op, lhs, rhs } => {
+                let l = self.eval_expr(lhs)?;
+                let r = self.eval_expr(rhs)?;
+                Ok(value::binary(*op, l, r))
+            }
+            Expr::Ternary { cond, then, els } => {
+                if self.eval_expr(cond)?.truthy() {
+                    self.eval_expr(then)
+                } else {
+                    self.eval_expr(els)
+                }
+            }
+            Expr::Index { base, index } => {
+                let b = self.eval_expr(base)?;
+                let i = self.eval_expr(index)?;
+                Ok(index_value(&b, &i))
+            }
+            Expr::Member { base, field } => {
+                let b = self.eval_expr(base)?;
+                let idx = match field.as_str() {
+                    "x" => 0,
+                    "y" => 1,
+                    "z" => 2,
+                    _ => return Ok(Value::Undef),
+                };
+                Ok(index_value(&b, &Value::Number(idx as f64)))
+            }
+            Expr::Let { bindings, body } => {
+                self.push_scope();
+                for (n, e) in bindings {
+                    let v = self.eval_expr(e)?;
+                    self.set_var(n, v);
+                }
+                let r = self.eval_expr(body);
+                self.pop_scope();
+                r
+            }
+            Expr::Call { name, args } => self.eval_call(name, args),
+            Expr::FunctionLiteral { params, body } => Ok(Value::Function(Rc::new(FnClosure {
+                params: params.clone(),
+                body: (**body).clone(),
+                env: self.scopes.clone(),
+                name: None,
+                chunk: OnceCell::new(),
+            }))),
+            Expr::CallValue { callee, args } => {
+                let c = self.eval_expr(callee)?;
+                if let Value::Function(f) = c {
+                    self.call_function(&f, args)
+                } else {
+                    Ok(Value::Undef)
+                }
+            }
+            Expr::Echo { args, body } => {
+                self.do_echo(args)?;
+                self.eval_expr(body)
+            }
+            Expr::Assert { args, body } => {
+                self.do_assert(args)?;
+                self.eval_expr(body)
+            }
+        }
+    }
+
+    /// Call a function closure: arguments are bound in the caller's scope, then
+    /// the body runs in the closure's captured lexical environment.
+    ///
+    /// Self-tail-calls are eliminated: when the body reduces (through ternaries
+    /// and `let`s) to a call of the same function in tail position, the frame is
+    /// reused in a loop instead of recursing, so accumulator-style recursion
+    /// runs to arbitrary depth without overflowing the (small, on wasm) stack.
+    fn call_function(&mut self, f: &Rc<FnClosure>, args: &[Arg]) -> EResult<Value> {
+        // Positional fast path for compiled functions: evaluate arguments
+        // straight into the VM's local frame, skipping the per-call binding map.
+        if args.iter().all(|a| a.name.is_none()) && args.len() <= f.params.len() {
+            if let Some(chunk) = f.chunk.get_or_init(|| vm::compile_fn(f).map(Rc::new)).clone() {
+                let mut locals = vec![Value::Undef; chunk.n_locals()];
+                // Defaults first (in caller scope), then positional overrides —
+                // matching `bind_params`' evaluation order.
+                for (i, p) in f.params.iter().enumerate() {
+                    if let Some(d) = &p.default {
+                        locals[i] = self.eval_expr(d)?;
+                    }
+                }
+                for (i, a) in args.iter().enumerate() {
+                    locals[i] = self.eval_expr(&a.value)?;
+                }
+                return self.run_chunk(f, chunk, locals);
+            }
+        }
+        let bound = self.bind_params(&f.params, args)?;
+        self.run_bound(f, bound)
+    }
+
+    /// Run a compiled chunk with a prepared local frame (depth guard + scope
+    /// swap to the closure's captured environment).
+    fn run_chunk(
+        &mut self,
+        f: &Rc<FnClosure>,
+        chunk: Rc<vm::Chunk>,
+        locals: Vec<Value>,
+    ) -> EResult<Value> {
+        if self.depth >= MAX_CALL_DEPTH {
+            return err("maximum call depth exceeded");
+        }
+        self.depth += 1;
+        let saved = std::mem::replace(&mut self.scopes, f.env.clone());
+        let r = vm::run(self, &chunk, locals, f);
+        self.scopes = saved;
+        self.depth -= 1;
+        r
+    }
+
+    /// Call a function with already-evaluated positional argument values
+    /// (used by the bytecode VM). Named args and defaults are handled by binding
+    /// positionally against the parameter list.
+    fn call_function_values(&mut self, f: &Rc<FnClosure>, argv: Vec<Value>) -> EResult<Value> {
+        let mut bound = FastMap::default();
+        for p in &f.params {
+            if let Some(d) = &p.default {
+                let v = self.eval_expr(d)?;
+                bound.insert(p.name.clone(), v);
+            }
+        }
+        for (i, v) in argv.into_iter().enumerate() {
+            if let Some(p) = f.params.get(i) {
+                bound.insert(p.name.clone(), v);
+            }
+        }
+        self.run_bound(f, bound)
+    }
+
+    /// Resolve a name to a user function / function-valued variable / builtin
+    /// and call it with pre-evaluated positional values (VM call path). Mirrors
+    /// [`Self::eval_call`] but with values instead of argument expressions.
+    fn call_named_values(&mut self, name: &str, argv: Vec<Value>) -> EResult<Value> {
+        if let Some(def) = self.lookup_func(name) {
+            return self.call_function_values(&def, argv);
+        }
+        if let Value::Function(f) = self.lookup_var(name) {
+            return self.call_function_values(&f, argv);
+        }
+        Ok(builtin_fn(name, &argv, &mut self.warnings))
+    }
+
+    /// Run a function whose parameters are already bound (by name → value),
+    /// dispatching to the bytecode VM when the body compiled, else the tree-walk
+    /// (which also handles tail-call elimination). Shared by all call paths.
+    fn run_bound(&mut self, f: &Rc<FnClosure>, mut bound: FastMap<String, Value>) -> EResult<Value> {
+        // Fast path: a compiled chunk uses slot-based locals (no per-call maps).
+        let compiled = f.chunk.get_or_init(|| vm::compile_fn(f).map(Rc::new)).clone();
+        if let Some(chunk) = compiled {
+            let mut locals = vec![Value::Undef; chunk.n_locals()];
+            for (i, p) in f.params.iter().enumerate() {
+                if let Some(v) = bound.remove(&p.name) {
+                    locals[i] = v;
+                }
+            }
+            return self.run_chunk(f, chunk, locals);
+        }
+
+        // Tree-walk fallback with self-tail-call elimination.
+        if self.depth >= MAX_CALL_DEPTH {
+            return err("maximum call depth exceeded");
+        }
+        self.depth += 1;
+        let mut iters = 0usize;
+        let result = loop {
+            let saved = std::mem::replace(&mut self.scopes, f.env.clone());
+            self.push_scope();
+            for (k, v) in bound.drain() {
+                self.set_var(&k, v);
+            }
+            let tail = self.eval_tail(&f.body, f);
+            self.pop_scope();
+            self.scopes = saved;
+            match tail {
+                Err(e) => break Err(e),
+                Ok(TailResult::Value(v)) => break Ok(v),
+                Ok(TailResult::TailCall(next)) => {
+                    bound = next;
+                    iters += 1;
+                    if iters > MAX_RANGE_ITERS {
+                        break err("tail recursion exceeded iteration limit");
+                    }
+                }
+            }
+        };
+        self.depth -= 1;
+        result
+    }
+
+    /// Evaluate `expr` in tail position relative to function `f`. Returns either
+    /// a final value or a request to tail-call `f` with fresh arguments (already
+    /// evaluated in the current frame).
+    fn eval_tail(&mut self, expr: &Expr, f: &Rc<FnClosure>) -> EResult<TailResult> {
+        match expr {
+            Expr::Ternary { cond, then, els } => {
+                let branch = if self.eval_expr(cond)?.truthy() { then } else { els };
+                self.eval_tail(branch, f)
+            }
+            Expr::Let { bindings, body } => {
+                self.push_scope();
+                for (n, e) in bindings {
+                    let v = self.eval_expr(e)?;
+                    self.set_var(n, v);
+                }
+                let r = self.eval_tail(body, f);
+                self.pop_scope();
+                r
+            }
+            Expr::Echo { args, body } => {
+                self.do_echo(args)?;
+                self.eval_tail(body, f)
+            }
+            Expr::Assert { args, body } => {
+                self.do_assert(args)?;
+                self.eval_tail(body, f)
+            }
+            Expr::Call { name, args } => {
+                // A self-call in tail position becomes a loop iteration.
+                if let Some(g) = self.lookup_func(name) {
+                    if Rc::ptr_eq(&g, f) {
+                        let next = self.bind_params(&f.params, args)?;
+                        return Ok(TailResult::TailCall(next));
+                    }
+                }
+                Ok(TailResult::Value(self.eval_expr(expr)?))
+            }
+            _ => Ok(TailResult::Value(self.eval_expr(expr)?)),
+        }
+    }
+
+    fn eval_list_elem(&mut self, el: &ListElem, out: &mut Vec<Value>) -> EResult<()> {
+        match el {
+            ListElem::Item(e) => {
+                out.push(self.eval_expr(e)?);
+            }
+            ListElem::Each(inner) => {
+                // Evaluate the operand element, then splice each produced value.
+                let mut temp = Vec::new();
+                self.eval_list_elem(inner, &mut temp)?;
+                for v in temp {
+                    match v {
+                        Value::Vector(xs) => out.extend(xs.iter().cloned()),
+                        r @ Value::Range { .. } => out.extend(iter_values(&r)?),
+                        Value::Undef => {}
+                        other => out.push(other),
+                    }
+                }
+            }
+            ListElem::For { bindings, body } => {
+                self.lc_for_rec(bindings, body, out)?;
+            }
+            ListElem::CFor {
+                init,
+                cond,
+                update,
+                body,
+            } => {
+                self.push_scope();
+                for (n, e) in init {
+                    let v = self.eval_expr(e)?;
+                    self.set_var(n, v);
+                }
+                let mut iters = 0usize;
+                loop {
+                    if !self.eval_expr(cond)?.truthy() {
+                        break;
+                    }
+                    self.eval_list_elem(body, out)?;
+                    // Updates are applied sequentially, each seeing prior updates
+                    // in the same clause (matches OpenSCAD's accumulator form).
+                    for (n, e) in update {
+                        let v = self.eval_expr(e)?;
+                        self.set_var(n, v);
+                    }
+                    iters += 1;
+                    if iters > MAX_RANGE_ITERS {
+                        self.pop_scope();
+                        return err("C-style for exceeded iteration limit");
+                    }
+                }
+                self.pop_scope();
+            }
+            ListElem::Let { bindings, body } => {
+                self.push_scope();
+                for (n, e) in bindings {
+                    let val = self.eval_expr(e)?;
+                    self.set_var(n, val);
+                }
+                let r = self.eval_list_elem(body, out);
+                self.pop_scope();
+                r?;
+            }
+            ListElem::If { cond, then, els } => {
+                if self.eval_expr(cond)?.truthy() {
+                    self.eval_list_elem(then, out)?;
+                } else if let Some(e) = els {
+                    self.eval_list_elem(e, out)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn lc_for_rec(
+        &mut self,
+        bindings: &[(String, Expr)],
+        body: &ListElem,
+        out: &mut Vec<Value>,
+    ) -> EResult<()> {
+        if bindings.is_empty() {
+            return self.eval_list_elem(body, out);
+        }
+        let (name, expr) = &bindings[0];
+        let vals = iter_values(&self.eval_expr(expr)?)?;
+        for v in vals {
+            self.push_scope();
+            self.set_var(name, v);
+            let r = self.lc_for_rec(&bindings[1..], body, out);
+            self.pop_scope();
+            r?;
+        }
+        Ok(())
+    }
+
+    fn eval_call(&mut self, name: &str, args: &[Arg]) -> EResult<Value> {
+        // User-defined function?
+        if let Some(def) = self.lookup_func(name) {
+            return self.call_function(&def, args);
+        }
+        // A variable holding a function value?
+        if let Value::Function(f) = self.lookup_var(name) {
+            return self.call_function(&f, args);
+        }
+        // Builtins.
+        let vals: Vec<Value> = args
+            .iter()
+            .map(|a| self.eval_expr(&a.value))
+            .collect::<EResult<_>>()?;
+        Ok(builtin_fn(name, &vals, &mut self.warnings))
+    }
+}
+
+enum TransformKind {
+    Translate,
+    Rotate,
+    Scale,
+    Mirror,
+}
+
+/// Build a 4x4 affine matrix from a value (list of rows), padding from identity.
+fn matrix_from_value(v: &Value) -> [[f64; 4]; 4] {
+    let mut m = [[0.0; 4]; 4];
+    for (i, row) in m.iter_mut().enumerate() {
+        row[i] = 1.0;
+    }
+    if let Value::Vector(rows) = v {
+        for (i, row) in rows.iter().enumerate().take(4) {
+            if let Value::Vector(cols) = row {
+                for (j, c) in cols.iter().enumerate().take(4) {
+                    if let Some(n) = c.as_number() {
+                        m[i][j] = n;
+                    }
+                }
+            }
+        }
+    }
+    m
+}
+
+fn scale_vec3(v: &Value) -> Vec3 {
+    match v {
+        Value::Number(n) => [*n, *n, *n],
+        Value::Vector(xs) => {
+            let get = |i: usize| xs.get(i).and_then(Value::as_number).unwrap_or(1.0);
+            [get(0), get(1), get(2)]
+        }
+        _ => [1.0, 1.0, 1.0],
+    }
+}
+
+fn value_to_point3(v: &Value) -> Vec3 {
+    match v {
+        Value::Vector(c) => {
+            let g = |i: usize| c.get(i).and_then(Value::as_number).unwrap_or(0.0);
+            [g(0), g(1), g(2)]
+        }
+        _ => [0.0, 0.0, 0.0],
+    }
+}
+
+fn value_to_face(v: &Value) -> Vec<u32> {
+    match v {
+        Value::Vector(idx) => idx
+            .iter()
+            .filter_map(Value::as_number)
+            .map(|n| n as u32)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Push a triangle `(a,b,c)` to a polyhedron face list, oriented so its normal
+/// points along `out`. `polyhedron()` reverses each face on triangulation, so we
+/// emit `[v0, v2, v1]` where `(v0,v1,v2)` is the outward-facing order.
+fn surf_face(faces: &mut Vec<Vec<u32>>, pts: &[Vec3], a: u32, b: u32, c: u32, out: Vec3) {
+    let (pa, pb, pc) = (pts[a as usize], pts[b as usize], pts[c as usize]);
+    let e1 = [pb[0] - pa[0], pb[1] - pa[1], pb[2] - pa[2]];
+    let e2 = [pc[0] - pa[0], pc[1] - pa[1], pc[2] - pa[2]];
+    let n = [
+        e1[1] * e2[2] - e1[2] * e2[1],
+        e1[2] * e2[0] - e1[0] * e2[2],
+        e1[0] * e2[1] - e1[1] * e2[0],
+    ];
+    // Degenerate (zero-area) triangle — e.g. a wall where the height is 0.
+    if n[0] * n[0] + n[1] * n[1] + n[2] * n[2] < 1e-18 {
+        return;
+    }
+    let dot = n[0] * out[0] + n[1] * out[1] + n[2] * out[2];
+    let (v0, v1, v2) = if dot >= 0.0 { (a, b, c) } else { (a, c, b) };
+    faces.push(vec![v0, v2, v1]);
+}
+
+/// Decode a PNG into a heightmap grid for `surface()`. Each pixel's height is
+/// its Rec.709 luma scaled to 0..100 (white = 100), matching OpenSCAD; `invert`
+/// flips brightness (height → 100 - height). Rows are returned bottom-to-top so
+/// they feed `surface_polyhedron`'s row-r→y=r convention (OpenSCAD places the
+/// image's top row at the maximum Y).
+fn png_heightmap(bytes: &[u8], invert: bool) -> Result<Vec<Vec<f64>>, String> {
+    let decoder = png::Decoder::new(bytes);
+    let mut reader = decoder.read_info().map_err(|e| e.to_string())?;
+    let mut buf = vec![0u8; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buf).map_err(|e| e.to_string())?;
+    let (w, h) = (info.width as usize, info.height as usize);
+    let chans = info.color_type.samples();
+    let bytes_per_sample = match info.bit_depth {
+        png::BitDepth::Sixteen => 2,
+        _ => 1,
+    };
+    let sample = |base: usize| -> f64 {
+        // Read one channel sample as 0..255. 16-bit samples are reduced to 8-bit
+        // by their most-significant byte (libpng's strip_16), matching OpenSCAD.
+        let i = base * bytes_per_sample;
+        buf[i] as f64
+    };
+    let stride = w * chans;
+    let mut rows: Vec<Vec<f64>> = Vec::with_capacity(h);
+    for y in 0..h {
+        let mut row = Vec::with_capacity(w);
+        for x in 0..w {
+            let base = y * stride + x * chans;
+            // Grayscale (1-2 chans) uses the single value; RGB(A) uses Rec.709.
+            let luma = if chans <= 2 {
+                sample(base)
+            } else {
+                0.2126 * sample(base) + 0.7152 * sample(base + 1) + 0.0722 * sample(base + 2)
+            };
+            let mut z = luma / 2.55; // 0..255 -> 0..100
+            if invert {
+                z = 100.0 - z;
+            }
+            row.push(z);
+        }
+        rows.push(row);
+    }
+    rows.reverse(); // image top row -> largest y
+    Ok(rows)
+}
+
+/// Build the `surface()` solid from a heightmap grid: the top follows the
+/// heights, the bottom is flat at z=0, joined by vertical walls. Matches
+/// OpenSCAD (row r → y=r, col c → x=c; `center` shifts to the origin).
+fn surface_polyhedron(rows: &[Vec<f64>], center: bool, png: bool) -> Node {
+    let nr = rows.len();
+    let nc = rows.iter().map(Vec::len).max().unwrap_or(0);
+    if nr < 2 || nc < 2 {
+        return Node::Empty;
+    }
+    let h = |r: usize, c: usize| rows[r].get(c).copied().unwrap_or(0.0);
+    let ox = if center { (nc - 1) as f64 / 2.0 } else { 0.0 };
+    let oy = if center { (nr - 1) as f64 / 2.0 } else { 0.0 };
+    // Bottom plane. OpenSCAD's two source paths differ: a text (.dat) surface
+    // uses z=0 when all heights ≥1 (else min−1), while a PNG surface always
+    // drops the base to min−1.
+    let min_h = (0..nr)
+        .flat_map(|r| (0..nc).map(move |c| (r, c)))
+        .map(|(r, c)| h(r, c))
+        .fold(f64::INFINITY, f64::min);
+    let bottom_z = if png { min_h - 1.0 } else { (min_h - 1.0).min(0.0) };
+
+    let mut points: Vec<Vec3> = Vec::with_capacity(nr * nc * 2 + (nr - 1) * (nc - 1));
+    for r in 0..nr {
+        for c in 0..nc {
+            points.push([c as f64 - ox, r as f64 - oy, h(r, c)]);
+        }
+    }
+    for r in 0..nr {
+        for c in 0..nc {
+            points.push([c as f64 - ox, r as f64 - oy, bottom_z]);
+        }
+    }
+    // A center vertex per top cell (average height): OpenSCAD fan-triangulates
+    // each cell around it, so a non-planar cell's volume is exact.
+    let cbase = 2 * nr * nc;
+    for r in 0..nr - 1 {
+        for c in 0..nc - 1 {
+            let z = (h(r, c) + h(r, c + 1) + h(r + 1, c) + h(r + 1, c + 1)) / 4.0;
+            points.push([c as f64 + 0.5 - ox, r as f64 + 0.5 - oy, z]);
+        }
+    }
+    let top = |r: usize, c: usize| (r * nc + c) as u32;
+    let bot = |r: usize, c: usize| (nr * nc + r * nc + c) as u32;
+    let mid = |r: usize, c: usize| (cbase + r * (nc - 1) + c) as u32;
+    let mut faces: Vec<Vec<u32>> = Vec::new();
+
+    for r in 0..nr - 1 {
+        for c in 0..nc - 1 {
+            // Top: fan the 4 cell edges around the center vertex.
+            let m = mid(r, c);
+            surf_face(&mut faces, &points, top(r, c), top(r, c + 1), m, [0.0, 0.0, 1.0]);
+            surf_face(&mut faces, &points, top(r, c + 1), top(r + 1, c + 1), m, [0.0, 0.0, 1.0]);
+            surf_face(&mut faces, &points, top(r + 1, c + 1), top(r + 1, c), m, [0.0, 0.0, 1.0]);
+            surf_face(&mut faces, &points, top(r + 1, c), top(r, c), m, [0.0, 0.0, 1.0]);
+            // Bottom stays a flat quad (z=0 → volume-neutral either way).
+            surf_face(&mut faces, &points, bot(r, c), bot(r, c + 1), bot(r + 1, c + 1), [0.0, 0.0, -1.0]);
+            surf_face(&mut faces, &points, bot(r, c), bot(r + 1, c + 1), bot(r + 1, c), [0.0, 0.0, -1.0]);
+        }
+    }
+    // Front (y=0) and back (y=max) walls.
+    for c in 0..nc - 1 {
+        surf_face(&mut faces, &points, top(0, c), top(0, c + 1), bot(0, c + 1), [0.0, -1.0, 0.0]);
+        surf_face(&mut faces, &points, top(0, c), bot(0, c + 1), bot(0, c), [0.0, -1.0, 0.0]);
+        surf_face(&mut faces, &points, top(nr - 1, c), top(nr - 1, c + 1), bot(nr - 1, c + 1), [0.0, 1.0, 0.0]);
+        surf_face(&mut faces, &points, top(nr - 1, c), bot(nr - 1, c + 1), bot(nr - 1, c), [0.0, 1.0, 0.0]);
+    }
+    // Left (x=0) and right (x=max) walls.
+    for r in 0..nr - 1 {
+        surf_face(&mut faces, &points, top(r, 0), top(r + 1, 0), bot(r + 1, 0), [-1.0, 0.0, 0.0]);
+        surf_face(&mut faces, &points, top(r, 0), bot(r + 1, 0), bot(r, 0), [-1.0, 0.0, 0.0]);
+        surf_face(&mut faces, &points, top(r, nc - 1), top(r + 1, nc - 1), bot(r + 1, nc - 1), [1.0, 0.0, 0.0]);
+        surf_face(&mut faces, &points, top(r, nc - 1), bot(r + 1, nc - 1), bot(r, nc - 1), [1.0, 0.0, 0.0]);
+    }
+    Node::Polyhedron { points, faces }
+}
+
+fn index_value(base: &Value, index: &Value) -> Value {
+    match (base, index) {
+        (Value::Vector(v), Value::Number(n)) => {
+            let i = *n as isize;
+            if i >= 0 && (i as usize) < v.len() {
+                v[i as usize].clone()
+            } else {
+                Value::Undef
+            }
+        }
+        (Value::Str(s), Value::Number(n)) => {
+            let i = *n as isize;
+            if i >= 0 {
+                s.chars()
+                    .nth(i as usize)
+                    .map(|c| Value::Str(c.to_string()))
+                    .unwrap_or(Value::Undef)
+            } else {
+                Value::Undef
+            }
+        }
+        // A range indexes as [start, step, end] (OpenSCAD); BOSL2's is_range()
+        // relies on this.
+        (Value::Range { start, step, end }, Value::Number(n)) => match *n as isize {
+            0 => Value::Number(*start),
+            1 => Value::Number(*step),
+            2 => Value::Number(*end),
+            _ => Value::Undef,
+        },
+        _ => Value::Undef,
+    }
+}
+
+/// `chr()` — turn code point(s) into a string.
+fn chr(args: &[Value]) -> Value {
+    fn one(n: f64) -> String {
+        u32::try_from(n as i64)
+            .ok()
+            .filter(|&c| c != 0) // OpenSCAD ignores code point 0
+            .and_then(char::from_u32)
+            .map(|c| c.to_string())
+            .unwrap_or_default()
+    }
+    match args.first() {
+        Some(Value::Number(n)) => Value::Str(one(*n)),
+        Some(Value::Vector(v)) => {
+            let mut s = String::new();
+            for e in v.iter() {
+                if let Some(n) = e.as_number() {
+                    s.push_str(&one(n));
+                }
+            }
+            Value::Str(s)
+        }
+        Some(r @ Value::Range { .. }) => {
+            let mut s = String::new();
+            if let Ok(vals) = iter_values(r) {
+                for e in vals {
+                    if let Some(n) = e.as_number() {
+                        s.push_str(&one(n));
+                    }
+                }
+            }
+            Value::Str(s)
+        }
+        _ => Value::Str(String::new()),
+    }
+}
+
+/// Expand a value into the sequence a `for`/comprehension iterates over.
+fn iter_values(v: &Value) -> EResult<Vec<Value>> {
+    match v {
+        Value::Vector(xs) => Ok(xs.to_vec()),
+        // Iterating a string yields its characters (OpenSCAD semantics).
+        Value::Str(s) => Ok(s.chars().map(|c| Value::Str(c.to_string())).collect()),
+        Value::Range { start, step, end } => {
+            let mut out = Vec::new();
+            let (start, step, end) = (*start, *step, *end);
+            if step == 0.0 || start.is_nan() || end.is_nan() || step.is_nan() {
+                return Ok(out);
+            }
+            let mut i = 0usize;
+            if step > 0.0 {
+                let mut x = start;
+                while x <= end + 1e-12 {
+                    out.push(Value::Number(x));
+                    i += 1;
+                    if i > MAX_RANGE_ITERS {
+                        return err("range too large");
+                    }
+                    x = start + step * i as f64;
+                }
+            } else {
+                let mut x = start;
+                while x >= end - 1e-12 {
+                    out.push(Value::Number(x));
+                    i += 1;
+                    if i > MAX_RANGE_ITERS {
+                        return err("range too large");
+                    }
+                    x = start + step * i as f64;
+                }
+            }
+            Ok(out)
+        }
+        // A scalar iterates once.
+        other => Ok(vec![other.clone()]),
+    }
+}
+
+/// Built-in expression functions.
+fn builtin_fn(name: &str, args: &[Value], warnings: &mut Vec<String>) -> Value {
+    let num = |i: usize| args.get(i).and_then(Value::as_number);
+    let one = |f: fn(f64) -> f64| num(0).map(|x| Value::Number(f(x))).unwrap_or(Value::Undef);
+
+    match name {
+        "abs" => one(f64::abs),
+        "sign" => one(|x| {
+            if x > 0.0 {
+                1.0
+            } else if x < 0.0 {
+                -1.0
+            } else {
+                0.0
+            }
+        }),
+        "floor" => one(f64::floor),
+        "ceil" => one(f64::ceil),
+        "round" => one(f64::round),
+        "sqrt" => one(f64::sqrt),
+        "exp" => one(f64::exp),
+        "ln" => one(f64::ln),
+        "log" => one(f64::log10),
+        "sin" => one(sin_deg),
+        "cos" => one(cos_deg),
+        "tan" => one(tan_deg),
+        "asin" => one(|x| x.asin().to_degrees()),
+        "acos" => one(|x| x.acos().to_degrees()),
+        "atan" => one(|x| x.atan().to_degrees()),
+        "atan2" => match (num(0), num(1)) {
+            (Some(y), Some(x)) => Value::Number(y.atan2(x).to_degrees()),
+            _ => Value::Undef,
+        },
+        "pow" => match (num(0), num(1)) {
+            (Some(b), Some(e)) => Value::Number(b.powf(e)),
+            _ => Value::Undef,
+        },
+        "max" => reduce_num(args, f64::max),
+        "min" => reduce_num(args, f64::min),
+        "len" => match args.first() {
+            Some(Value::Vector(v)) => Value::Number(v.len() as f64),
+            Some(Value::Str(s)) => Value::Number(s.chars().count() as f64),
+            _ => Value::Undef,
+        },
+        "norm" => match args.first() {
+            Some(Value::Vector(v)) => {
+                let sum: f64 = v.iter().filter_map(Value::as_number).map(|x| x * x).sum();
+                Value::Number(sum.sqrt())
+            }
+            _ => Value::Undef,
+        },
+        "cross" => cross(args),
+        "concat" => {
+            let mut out = Vec::new();
+            for a in args {
+                match a {
+                    Value::Vector(v) => out.extend(v.iter().cloned()),
+                    other => out.push(other.clone()),
+                }
+            }
+            value::vector(out)
+        }
+        "is_undef" => Value::Bool(matches!(args.first(), Some(Value::Undef) | None)),
+        "is_num" => Value::Bool(matches!(args.first(), Some(Value::Number(_)))),
+        "is_bool" => Value::Bool(matches!(args.first(), Some(Value::Bool(_)))),
+        "is_string" => Value::Bool(matches!(args.first(), Some(Value::Str(_)))),
+        "is_list" => Value::Bool(matches!(args.first(), Some(Value::Vector(_)))),
+        "is_function" => Value::Bool(matches!(args.first(), Some(Value::Function(_)))),
+        "is_range" => Value::Bool(matches!(args.first(), Some(Value::Range { .. }))),
+        "rands" => rands_fn(args),
+        "version" => value::vector(vec![
+            Value::Number(2021.0),
+            Value::Number(1.0),
+            Value::Number(0.0),
+        ]),
+        "version_num" => Value::Number(20210100.0),
+        "lookup" => lookup(args),
+        "search" => search(args),
+        "str" => {
+            let mut s = String::new();
+            for a in args {
+                s.push_str(&a.to_str());
+            }
+            Value::Str(s)
+        }
+        "chr" => chr(args),
+        "ord" => match args.first() {
+            Some(Value::Str(s)) => match s.chars().next() {
+                Some(c) => Value::Number(c as u32 as f64),
+                None => Value::Undef,
+            },
+            _ => Value::Undef,
+        },
+        _ => {
+            warnings.push(format!("Ignoring unknown function '{name}'"));
+            Value::Undef
+        }
+    }
+}
+
+thread_local! {
+    /// The global unseeded-`rands` PRNG state. Advances across calls (like
+    /// OpenSCAD's global generator) so two `rands(a,b,n)` calls yield different
+    /// sequences; starts from a fixed value each process, so runs are still
+    /// reproducible. A `rands(...,seed)` call reseeds it, matching OpenSCAD.
+    static RNG_STATE: std::cell::Cell<u64> = const { std::cell::Cell::new(0x9E37_79B9_7F4A_7C15) };
+}
+
+/// `rands(min, max, count, seed=undef)` — a list of pseudo-random numbers.
+/// Uses an xorshift PRNG. Values won't match OpenSCAD's PRNG bit-for-bit, but
+/// range/distribution are correct and, crucially, consecutive unseeded calls
+/// differ (BOSL2's geometry tests rely on that). Deterministic per process.
+fn rands_fn(args: &[Value]) -> Value {
+    let min = args.first().and_then(Value::as_number).unwrap_or(0.0);
+    let max = args.get(1).and_then(Value::as_number).unwrap_or(1.0);
+    let count = args.get(2).and_then(Value::as_number).unwrap_or(1.0).max(0.0) as usize;
+    let count = count.min(1_000_000);
+    let seed = args.get(3).and_then(Value::as_number);
+    // Seeded: reset the global generator; unseeded: continue from where it left.
+    let mut state: u64 = match seed {
+        Some(s) => s.to_bits() ^ 0x2545_F491_4F6C_DD1D,
+        None => RNG_STATE.with(|c| c.get()),
+    };
+    if state == 0 {
+        state = 1;
+    }
+    let mut out = Vec::with_capacity(count);
+    for _ in 0..count {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        let u = (state >> 11) as f64 / (1u64 << 53) as f64; // [0, 1)
+        out.push(Value::Number(min + u * (max - min)));
+    }
+    RNG_STATE.with(|c| c.set(state)); // persist so the next call advances
+    value::vector(out)
+}
+
+/// Degree trig that returns exact 0/±1 at multiples of 90°, matching OpenSCAD.
+fn norm_deg(x: f64) -> f64 {
+    let a = x % 360.0;
+    if a < 0.0 {
+        a + 360.0
+    } else {
+        a
+    }
+}
+fn sin_deg(x: f64) -> f64 {
+    match norm_deg(x) {
+        0.0 | 180.0 => 0.0,
+        90.0 => 1.0,
+        270.0 => -1.0,
+        a => a.to_radians().sin(),
+    }
+}
+fn cos_deg(x: f64) -> f64 {
+    match norm_deg(x) {
+        0.0 => 1.0,
+        90.0 | 270.0 => 0.0,
+        180.0 => -1.0,
+        a => a.to_radians().cos(),
+    }
+}
+fn tan_deg(x: f64) -> f64 {
+    match norm_deg(x) {
+        0.0 | 180.0 => 0.0,
+        a => a.to_radians().tan(),
+    }
+}
+
+fn reduce_num(args: &[Value], f: fn(f64, f64) -> f64) -> Value {
+    // max(v) over a single vector, or max(a,b,c,...) over scalars.
+    let nums: Vec<f64> = if let [Value::Vector(v)] = args {
+        v.iter().filter_map(Value::as_number).collect()
+    } else {
+        args.iter().filter_map(Value::as_number).collect()
+    };
+    match nums.split_first() {
+        Some((first, rest)) => Value::Number(rest.iter().fold(*first, |a, b| f(a, *b))),
+        None => Value::Undef,
+    }
+}
+
+/// `lookup(key, table)` — linear interpolation over a `[[k, v], ...]` table.
+fn lookup(args: &[Value]) -> Value {
+    let Some(key) = args.first().and_then(Value::as_number) else {
+        return Value::Undef;
+    };
+    let Some(Value::Vector(table)) = args.get(1) else {
+        return Value::Undef;
+    };
+    let mut pairs: Vec<(f64, f64)> = table
+        .iter()
+        .filter_map(|e| {
+            if let Value::Vector(p) = e {
+                Some((p.first()?.as_number()?, p.get(1)?.as_number()?))
+            } else {
+                None
+            }
+        })
+        .collect();
+    if pairs.is_empty() {
+        return Value::Undef;
+    }
+    pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    if key <= pairs[0].0 {
+        return Value::Number(pairs[0].1);
+    }
+    let last = *pairs.last().unwrap();
+    if key >= last.0 {
+        return Value::Number(last.1);
+    }
+    for w in pairs.windows(2) {
+        let (k0, v0) = w[0];
+        let (k1, v1) = w[1];
+        if key >= k0 && key <= k1 {
+            if k1 == k0 {
+                return Value::Number(v0);
+            }
+            let t = (key - k0) / (k1 - k0);
+            return Value::Number(v0 + t * (v1 - v0));
+        }
+    }
+    Value::Undef
+}
+
+/// `search(find, list, num_returns=1, index=0)`.
+fn search(args: &[Value]) -> Value {
+    let Some(find) = args.first() else {
+        return Value::Undef;
+    };
+    let Some(list) = args.get(1) else {
+        return Value::Undef;
+    };
+    let num_returns = args.get(2).and_then(Value::as_number).unwrap_or(1.0) as usize;
+    let index = args.get(3).and_then(Value::as_number).unwrap_or(0.0) as usize;
+    // An explicitly-passed `undef` counts as "not given" (OpenSCAD semantics),
+    // so only a real numeric column index forces column matching.
+    let index_given = args.get(3).and_then(Value::as_number).is_some();
+
+    let entries: Vec<Value> = match list {
+        Value::Vector(v) => v.to_vec(),
+        Value::Str(s) => s.chars().map(|c| Value::Str(c.to_string())).collect(),
+        _ => return Value::Undef,
+    };
+    let compare_val = |entry: &Value| -> Value {
+        match entry {
+            Value::Vector(row) => row.get(index).cloned().unwrap_or(Value::Undef),
+            other => other.clone(),
+        }
+    };
+    let match_indices = |needle: &Value| -> Vec<usize> {
+        // OpenSCAD: with no explicit `index_col_num`, a *list* needle is matched
+        // against the whole row (finding a vector in a list of vectors), while a
+        // scalar needle matches against column 0. An explicit index always
+        // matches against that column.
+        let whole_row = !index_given && matches!(needle, Value::Vector(_));
+        let mut out = Vec::new();
+        for (i, e) in entries.iter().enumerate() {
+            let target = if whole_row { e.clone() } else { compare_val(e) };
+            if value::value_eq(&target, needle) {
+                out.push(i);
+                if num_returns != 0 && out.len() >= num_returns {
+                    break;
+                }
+            }
+        }
+        out
+    };
+    // With the default num_returns == 1, OpenSCAD collapses each per-element
+    // result to a single index (or an empty list when there is no match);
+    // otherwise each result is the full list of indices.
+    let pack = |idxs: Vec<usize>| -> Value {
+        if num_returns == 1 {
+            match idxs.first() {
+                Some(i) => Value::Number(*i as f64),
+                None => value::vector(Vec::new()),
+            }
+        } else {
+            value::vector(idxs.into_iter().map(|i| Value::Number(i as f64)).collect())
+        }
+    };
+
+    match find {
+        // A single scalar returns a flat list of indices.
+        Value::Number(_) | Value::Bool(_) => value::vector(
+            match_indices(find)
+                .into_iter()
+                .map(|i| Value::Number(i as f64))
+                .collect(),
+        ),
+        // A string searches per character; a list searches per element.
+        Value::Str(s) => value::vector(
+            s.chars()
+                .map(|c| pack(match_indices(&Value::Str(c.to_string()))))
+                .collect(),
+        ),
+        Value::Vector(vs) => {
+            value::vector(vs.iter().map(|n| pack(match_indices(n))).collect())
+        }
+        _ => Value::Undef,
+    }
+}
+
+fn cross(args: &[Value]) -> Value {
+    // OpenSCAD: cross of two 3-vectors is a 3-vector; cross of two 2-vectors is
+    // the scalar z-component; anything else (mismatched lengths, non-numeric
+    // elements) is undef.
+    let (Some(Value::Vector(a)), Some(Value::Vector(b))) = (args.first(), args.get(1)) else {
+        return Value::Undef;
+    };
+    let nums = |v: &[Value]| -> Option<Vec<f64>> { v.iter().map(Value::as_number).collect() };
+    let (Some(a), Some(b)) = (nums(a), nums(b)) else {
+        return Value::Undef;
+    };
+    match (a.len(), b.len()) {
+        (3, 3) => value::vector(vec![
+            Value::Number(a[1] * b[2] - a[2] * b[1]),
+            Value::Number(a[2] * b[0] - a[0] * b[2]),
+            Value::Number(a[0] * b[1] - a[1] * b[0]),
+        ]),
+        (2, 2) => Value::Number(a[0] * b[1] - a[1] * b[0]),
+        _ => Value::Undef,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use quito_syntax::parse;
+
+    /// Malformed and adversarial inputs must fail gracefully (parse error or
+    /// eval error), never panic or overflow the stack — this is what keeps the
+    /// browser engine from taking down the tab. Guards against regressions.
+    #[test]
+    fn adversarial_inputs_never_panic() {
+        let deep_open = "(".repeat(3000);
+        let deep_list = format!("echo({}1{});", "[".repeat(1500), "]".repeat(1500));
+        let cases: Vec<String> = vec![
+            "x=1e999999; echo(x);".into(),
+            "echo(1/0); echo(0/0); echo(5%0);".into(),
+            "function f(x)=f(x); echo(f(1));".into(),        // infinite tail recursion
+            "function g(n)=n<=0?0:1+g(n-1); echo(g(100000));".into(), // deep non-tail
+            "a=[]; echo(a[999999999999]);".into(),
+            "echo(chr(-1), chr(1114112)); echo(\"abc\"[-5]);".into(),
+            "echo([for(i=[0:1:1e9]) i]);".into(),           // huge range (capped)
+            "echo(2^2^2^2^2);".into(),
+            "echo(\"日本語\"[1]); echo(len(\"🎉\"));".into(),
+            "polygon([[0,0]]); linear_extrude(-5) square(10);".into(),
+            "echo(concat(), str(), lookup(5,[]));".into(),
+            "for(i=[0:-1:10]) cube(1);".into(),
+            deep_open,       // unbalanced parens
+            deep_list,       // deeply nested list
+            "".into(),       // empty
+            "\u{0}\u{1}garbage \" unterminated".into(),
+        ];
+        // Run on a production-sized stack (the CLI uses 256 MiB, wasm 64 MiB);
+        // the default 2 MiB test thread is smaller than any real deployment.
+        std::thread::Builder::new()
+            .stack_size(256 << 20)
+            .spawn(move || {
+                for src in &cases {
+                    // parse may Err; if it parses, eval may Err — neither panics.
+                    if let Ok(prog) = parse(src) {
+                        let _ = eval_program(&prog);
+                    }
+                }
+            })
+            .unwrap()
+            .join()
+            .expect("adversarial inputs must not panic or overflow the stack");
+    }
+
+    fn eval(src: &str) -> EvalOutput {
+        eval_program(&parse(src).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn single_cube() {
+        let out = eval("cube(10);");
+        assert_eq!(out.node, Node::Cube { size: [10.0, 10.0, 10.0], center: false });
+    }
+
+    #[test]
+    fn difference_tree() {
+        let out = eval("difference() { cube(10, center=true); sphere(6); }");
+        match out.node {
+            Node::Difference(children) => assert_eq!(children.len(), 2),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn for_loop_produces_group() {
+        let out = eval("for (i = [0:2]) translate([i*10, 0, 0]) cube(1);");
+        match out.node {
+            Node::Group(children) => assert_eq!(children.len(), 3),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn last_assignment_wins() {
+        // x is hoisted: cube should see x = 2.
+        let out = eval("x = 1; cube(x); x = 2;");
+        assert_eq!(out.node, Node::Cube { size: [2.0, 2.0, 2.0], center: false });
+    }
+
+    #[test]
+    fn user_function() {
+        let out = eval("function sq(a) = a * a; cube(sq(3));");
+        assert_eq!(out.node, Node::Cube { size: [9.0, 9.0, 9.0], center: false });
+    }
+
+    #[test]
+    fn user_module() {
+        let out = eval("module box(s) { cube(s, center=true); } box(4);");
+        assert_eq!(out.node, Node::Cube { size: [4.0, 4.0, 4.0], center: true });
+    }
+
+    #[test]
+    fn echo_collected() {
+        let out = eval("echo(\"hello\", 1 + 2);");
+        assert_eq!(out.echoes, vec!["ECHO: \"hello\", 3".to_string()]);
+    }
+
+    #[test]
+    fn recursion() {
+        let out = eval("function fib(n) = n < 2 ? n : fib(n-1) + fib(n-2); cube(fib(10));");
+        assert_eq!(out.node, Node::Cube { size: [55.0, 55.0, 55.0], center: false });
+    }
+
+    #[test]
+    fn if_else() {
+        let out = eval("if (1 > 2) cube(1); else sphere(3);");
+        assert!(matches!(out.node, Node::Sphere { .. }));
+    }
+
+    #[test]
+    fn cylinder_d_and_center() {
+        let out = eval("cylinder(h=10, d=8, center=true);");
+        match out.node {
+            Node::Cylinder { h, r1, r2, center, .. } => {
+                assert_eq!(h, 10.0);
+                assert_eq!(r1, 4.0);
+                assert_eq!(r2, 4.0);
+                assert!(center);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    fn echoes(src: &str) -> Vec<String> {
+        eval(src).echoes
+    }
+
+    #[test]
+    fn bare_assert_is_undef_not_unknown_function() {
+        // `assert(cond)` in value position (no trailing expression) checks the
+        // condition and yields undef — BOSL2 relies on this. Must not warn.
+        let out = eval("y = assert(1 < 2, \"ok\"); echo(y);");
+        assert_eq!(out.echoes, vec!["ECHO: undef"]);
+        assert!(out.warnings.is_empty(), "unexpected warnings: {:?}", out.warnings);
+        // A failing bare assert still aborts.
+        let prog = parse("z = assert(1 > 2); echo(z);").unwrap();
+        assert!(eval_program(&prog).is_err(), "failing assert should error");
+    }
+
+    #[test]
+    fn cross_2d_is_scalar_3d_is_vector() {
+        // OpenSCAD: 2D cross -> scalar z, 3D cross -> vector, mismatch -> undef.
+        assert_eq!(echoes("echo(cross([1,2],[3,4]));"), vec!["ECHO: -2"]);
+        assert_eq!(echoes("echo(cross([2,3,4],[5,6,7]));"), vec!["ECHO: [-3, 6, -3]"]);
+        assert_eq!(echoes("echo(cross([1,2],[3,4,5]));"), vec!["ECHO: undef"]);
+    }
+
+    #[test]
+    fn unseeded_rands_advances() {
+        // Two consecutive unseeded rands() calls must differ (BOSL2 geometry
+        // tests build distinct random points this way).
+        let out = echoes("a=rands(0,1,3); b=rands(0,1,3); echo(a==b);");
+        assert_eq!(out, vec!["ECHO: false"]);
+        // A seeded call is reproducible.
+        assert_eq!(
+            echoes("echo(rands(0,1,2,42)==rands(0,1,2,42));"),
+            vec!["ECHO: true"]
+        );
+    }
+
+    #[test]
+    fn comprehensions() {
+        assert_eq!(echoes("echo([for(i=[0:4]) i*i]);"), vec!["ECHO: [0, 1, 4, 9, 16]"]);
+        assert_eq!(echoes("echo([for(i=[0:5]) if(i%2==0) i]);"), vec!["ECHO: [0, 2, 4]"]);
+        assert_eq!(echoes("echo([for(i=[1:3]) let(sq=i*i) sq]);"), vec!["ECHO: [1, 4, 9]"]);
+        assert_eq!(echoes("echo([each [1,2], each [3,4]]);"), vec!["ECHO: [1, 2, 3, 4]"]);
+        assert_eq!(
+            echoes("echo([for(i=[0:2], j=[0:2]) i*10+j]);"),
+            vec!["ECHO: [0, 1, 2, 10, 11, 12, 20, 21, 22]"]
+        );
+    }
+
+    // The bytecode VM is a transparent fast path: these assert it produces the
+    // same results as the tree-walk across the constructs it compiles, and that
+    // unsupported constructs (comprehensions/closures in a body) fall back
+    // correctly.
+    #[test]
+    fn parameter_overrides() {
+        use quito_syntax::parse;
+        // A top-level assignment is overridden (the override wins).
+        let prog = parse("w=10; h=20; echo(w, h);").unwrap();
+        let out = eval_program_with_params(
+            &prog,
+            &NullResolver,
+            ".",
+            &[("w".to_string(), Value::Number(30.0))],
+        )
+        .unwrap();
+        assert_eq!(out.echoes, vec!["ECHO: 30, 20"]);
+
+        // Overrides only touch main-file top-level vars — not a `let` local of
+        // the same name inside a function.
+        let prog2 = parse("function f()=let(w=5) w; w=1; echo(f(), w);").unwrap();
+        let out2 = eval_program_with_params(
+            &prog2,
+            &NullResolver,
+            ".",
+            &[("w".to_string(), Value::Number(99.0))],
+        )
+        .unwrap();
+        assert_eq!(out2.echoes, vec!["ECHO: 5, 99"]);
+    }
+
+    #[test]
+    fn vm_recursion_and_tce() {
+        // Non-tail recursion (factorial).
+        assert_eq!(
+            echoes("function f(n)=n<2?1:n*f(n-1); echo(f(6));"),
+            vec!["ECHO: 720"]
+        );
+        // Tail-recursive accumulator to large depth must not overflow.
+        assert_eq!(
+            echoes("function s(n,a=0)=n==0?a:s(n-1,a+n); echo(s(100000));"),
+            vec!["ECHO: 5.00005e+9"]
+        );
+        // Mutual (non-self) recursion: g calls h and vice versa.
+        assert_eq!(
+            echoes(
+                "function h(n)=n==0?0:g(n-1); function g(n)=n==0?1:h(n-1); echo(g(7), h(7));"
+            ),
+            vec!["ECHO: 0, 1"]
+        );
+    }
+
+    #[test]
+    fn vm_let_shadowing_and_free_vars() {
+        // let bindings, sequential visibility, and shadowing a parameter.
+        assert_eq!(
+            echoes("function f(x)=let(a=x+1,b=a*2) let(x=b) x+a; echo(f(3));"),
+            vec!["ECHO: 12"] // a=4, b=8, inner x=8 -> 8+4
+        );
+        // A function reads a module-level (free) variable and a $ special.
+        assert_eq!(
+            echoes("K=10; function f(x)=x+K; echo(f(5));"),
+            vec!["ECHO: 15"]
+        );
+        assert_eq!(
+            echoes("$q=7; function f(x)=x+$q; echo(f(1));"),
+            vec!["ECHO: 8"]
+        );
+    }
+
+    #[test]
+    fn vm_vectors_ranges_index() {
+        assert_eq!(
+            echoes("function f(v)=v[0]+v.y+v[2]; echo(f([1,2,3]));"),
+            vec!["ECHO: 6"]
+        );
+        assert_eq!(
+            echoes("function mk(a,b)=[a,b,a+b]; echo(mk(2,3));"),
+            vec!["ECHO: [2, 3, 5]"]
+        );
+        // A range built inside a function, consumed by a comprehension outside.
+        assert_eq!(
+            echoes("function r(n)=[0:n]; echo([for(i=r(3)) i]);"),
+            vec!["ECHO: [0, 1, 2, 3]"]
+        );
+    }
+
+    #[test]
+    fn vm_falls_back_for_unsupported_bodies() {
+        // Comprehension in a function body: compiler bails, tree-walk handles it.
+        assert_eq!(
+            echoes("function sq(n)=[for(i=[1:n]) i*i]; echo(sq(4));"),
+            vec!["ECHO: [1, 4, 9, 16]"]
+        );
+        // A function literal captured inside a body: bail + correct closure.
+        assert_eq!(
+            echoes("function adder(k)=function(x) x+k; echo(adder(10)(5));"),
+            vec!["ECHO: 15"]
+        );
+        // Short-circuit && / || inside a compiled body.
+        assert_eq!(
+            echoes("function t(a,b)=a && b; echo(t(true,false), t(true,true));"),
+            vec!["ECHO: false, true"]
+        );
+    }
+
+    #[test]
+    fn use_inside_included_file_resolves_relative() {
+        // main includes lib/a.scad, which `use`s a sibling b.scad. The `use`
+        // must resolve relative to a.scad's directory (`lib/`), not the main
+        // file's — the bug that kept BOSL2's builtins.scad from loading.
+        struct R;
+        impl FileResolver for R {
+            fn load(&self, path: &str, from: &str) -> Option<LoadedFile> {
+                let files = [
+                    ("lib/a.scad", "use <b.scad>\nfunction val() = sz();"),
+                    ("lib/b.scad", "function sz() = 7;"),
+                ];
+                let full = if from.is_empty() || from == "." {
+                    path.to_string()
+                } else {
+                    format!("{from}/{path}")
+                };
+                files.iter().find(|(k, _)| *k == full || *k == path).map(|(k, v)| {
+                    let dir = k.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default();
+                    LoadedFile { key: k.to_string(), source: v.to_string(), dir }
+                })
+            }
+        }
+        let prog = quito_syntax::parse("include <lib/a.scad>\necho(val());").unwrap();
+        let out = eval_program_with(&prog, &R, ".").unwrap();
+        assert_eq!(out.echoes, vec!["ECHO: 7"]);
+    }
+
+    #[test]
+    fn nested_children_forwarding() {
+        // `children()` used inside a module's own children must forward to the
+        // grandparent's children, not re-read the same frame (which would loop
+        // forever). BOSL2's attachment system relies on this.
+        let out = eval(
+            "module outer() { children(); }\n\
+             module wrap() { outer() children(); }\n\
+             wrap() cube(2);",
+        );
+        assert_ne!(out.node, Node::Empty, "forwarded cube was lost");
+    }
+
+    #[test]
+    fn text_glyph_outline() {
+        // text() produces a polygon whose bbox matches OpenSCAD's (same font,
+        // same 100/72 scale): "A" at size 10 is ~9.21 × 9.55 mm.
+        let out = eval("text(\"A\", size = 10);");
+        let Node::Polygon { points, paths } = out.node else {
+            panic!("expected polygon, got {:?}", out.node);
+        };
+        assert!(!paths.unwrap().is_empty());
+        let (mut x0, mut x1, mut y0, mut y1) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+        for p in &points {
+            x0 = x0.min(p[0]);
+            x1 = x1.max(p[0]);
+            y0 = y0.min(p[1]);
+            y1 = y1.max(p[1]);
+        }
+        assert!((x1 - x0 - 9.21).abs() < 0.1, "width {}", x1 - x0);
+        assert!((y1 - y0 - 9.55).abs() < 0.1, "height {}", y1 - y0);
+        assert!(y0.abs() < 0.01, "baseline should be y=0, got {y0}");
+    }
+
+    #[test]
+    fn range_indexing() {
+        // A range indexes as [start, step, end] (BOSL2's is_range relies on it).
+        assert_eq!(echoes("r=[1:2:9]; echo(r[0], r[1], r[2], r[3]);"), vec!["ECHO: 1, 2, 9, undef"]);
+        // 2-arg range normalizes to step 1.
+        assert_eq!(echoes("r=[3:7]; echo(r[0], r[1], r[2]);"), vec!["ECHO: 3, 1, 7"]);
+    }
+
+    #[test]
+    fn matrix_multiplication() {
+        // OpenSCAD linear-algebra `*`: dot, matrix·vector, vector·matrix, matrix·matrix.
+        assert_eq!(echoes("echo([1,2,3]*[4,5,6]);"), vec!["ECHO: 32"]);
+        assert_eq!(echoes("echo([[1,2],[3,4]]*[5,6]);"), vec!["ECHO: [17, 39]"]);
+        assert_eq!(echoes("echo([1,2]*[[5,6],[7,8]]);"), vec!["ECHO: [19, 22]"]);
+        assert_eq!(
+            echoes("echo([[1,2],[3,4]]*[[5,6],[7,8]]);"),
+            vec!["ECHO: [[19, 22], [43, 50]]"]
+        );
+        // Dimension mismatch → undef.
+        assert_eq!(echoes("echo([1,2,3]*[[1,2],[3,4]]);"), vec!["ECHO: undef"]);
+    }
+
+    #[test]
+    fn search_vector_needle_and_undef_index() {
+        // A list needle with no index matches the whole row (find a vector in a
+        // list of vectors) — the case BOSL2's in_list relies on.
+        assert_eq!(
+            echoes("echo(search([[0,0,1]],[[0,0,1],[1,0,0],[0,1,0]],num_returns_per_match=1));"),
+            vec!["ECHO: [0]"]
+        );
+        // An explicitly-passed undef index behaves like no index.
+        assert_eq!(
+            echoes("echo(search([[1,0,0]],[[0,0,1],[1,0,0]],1,undef));"),
+            vec!["ECHO: [1]"]
+        );
+        // A scalar needle still matches column 0 of a table.
+        assert_eq!(echoes("echo(search([3],[[0,3],[1,4]]));"), vec!["ECHO: [[]]"]);
+    }
+
+    #[test]
+    fn string_repr_and_builtins() {
+        assert_eq!(echoes("echo(\"hi\");"), vec!["ECHO: \"hi\""]);
+        assert_eq!(echoes("echo(chr(65), ord(\"A\"));"), vec!["ECHO: \"A\", 65"]);
+        assert_eq!(echoes("echo(str(\"n=\", 5, true));"), vec!["ECHO: \"n=5true\""]);
+        assert_eq!(echoes("echo([\"a\", \"b\"]);"), vec!["ECHO: [\"a\", \"b\"]"]);
+        assert_eq!(echoes("s=\"abc\"; echo(s[1]);"), vec!["ECHO: \"b\""]);
+    }
+
+    #[test]
+    fn number_formatting() {
+        assert_eq!(
+            echoes("echo(1/3, 1e10, 1000000, 3.0, 0);"),
+            vec!["ECHO: 0.333333, 1e+10, 1e+6, 3, 0"]
+        );
+        assert_eq!(echoes("echo(sign(-4), sign(0), sign(4));"), vec!["ECHO: -1, 0, 1"]);
+    }
+
+    #[test]
+    fn function_literals() {
+        assert_eq!(echoes("f = function(x) x*x; echo(f(5));"), vec!["ECHO: 25"]);
+        assert_eq!(
+            echoes("g = function(a,b) a+b; echo(g(3,4), is_function(g), is_function(3));"),
+            vec!["ECHO: 7, true, false"]
+        );
+        assert_eq!(
+            echoes("f = function(x) x*x; echo([for(i=[1:4]) f(i)]);"),
+            vec!["ECHO: [1, 4, 9, 16]"]
+        );
+        // recursion through the bound name
+        assert_eq!(
+            echoes("h = function(n) n<=1 ? 1 : n*h(n-1); echo(h(5));"),
+            vec!["ECHO: 120"]
+        );
+    }
+
+    struct MapResolver(std::collections::HashMap<String, String>);
+    impl FileResolver for MapResolver {
+        fn load(&self, path: &str, _from: &str) -> Option<LoadedFile> {
+            self.0.get(path).map(|s| LoadedFile {
+                key: path.to_string(),
+                source: s.clone(),
+                dir: ".".to_string(),
+            })
+        }
+    }
+
+    #[test]
+    fn include_and_use() {
+        let mut files = std::collections::HashMap::new();
+        files.insert(
+            "lib.scad".to_string(),
+            "function sqr(x)=x*x; K=7; echo(\"libran\");".to_string(),
+        );
+        let resolver = MapResolver(files);
+
+        // `use` imports definitions only (no top-level echo, no variables).
+        let prog = quito_syntax::parse("use <lib.scad>\necho(sqr(5), is_undef(K));").unwrap();
+        let out = eval_program_with(&prog, &resolver, ".").unwrap();
+        assert_eq!(out.echoes, vec!["ECHO: 25, true"]);
+
+        // `include` splices everything (top-level echo runs; variables visible).
+        let prog = quito_syntax::parse("include <lib.scad>\necho(sqr(4), K);").unwrap();
+        let out = eval_program_with(&prog, &resolver, ".").unwrap();
+        assert_eq!(out.echoes, vec!["ECHO: \"libran\"", "ECHO: 16, 7"]);
+    }
+
+    #[test]
+    fn lexical_scoping() {
+        // A global function sees the global variable, not the caller's local.
+        assert_eq!(
+            echoes("a=10; function f()=a; module m(){a=20; echo(f(),a);} m();"),
+            vec!["ECHO: 10, 20"]
+        );
+        assert_eq!(
+            echoes("a=10; function g(x)=x+a; module n(a){echo(g(1));} n(99);"),
+            vec!["ECHO: 11"]
+        );
+        // A function literal closes over its defining scope.
+        assert_eq!(
+            echoes("x=5; lit=function() x; module m(){x=99; echo(lit());} m();"),
+            vec!["ECHO: 5"]
+        );
+        // `$` variables are dynamically scoped through module calls.
+        assert_eq!(
+            echoes("$fn=8; module r(){echo($fn);} module s(){$fn=16; r();} s(); r();"),
+            vec!["ECHO: 16", "ECHO: 8"]
+        );
+    }
+
+    #[test]
+    fn power_operator() {
+        // right-associative, binds tighter than unary and *
+        assert_eq!(
+            echoes("echo(2^10, -2^2, 2^-3, 2^3^2, 3*2^2);"),
+            vec!["ECHO: 1024, -4, 0.125, 512, 12"]
+        );
+    }
+
+    #[test]
+    fn cstyle_for() {
+        assert_eq!(
+            echoes("echo([for(k=0,s=0;k<=3;k=k+1,s=s+k) s]);"),
+            vec!["ECHO: [0, 1, 3, 6]"]
+        );
+        assert_eq!(
+            echoes("echo([for(a=1,b=1;a<=5;a=a+1,b=b*a) b]);"),
+            vec!["ECHO: [1, 2, 6, 24, 120]"]
+        );
+    }
+
+    #[test]
+    fn polyhedron_node() {
+        let out = eval(
+            "polyhedron(points=[[0,0,0],[1,0,0],[0,1,0],[0,0,1]], \
+             faces=[[0,1,2],[0,1,3],[1,2,3],[0,2,3]]);",
+        );
+        match out.node {
+            Node::Polyhedron { points, faces } => {
+                assert_eq!(points.len(), 4);
+                assert_eq!(faces.len(), 4);
+                assert_eq!(points[1], [1.0, 0.0, 0.0]);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn module_children() {
+        let out = eval("module m() { translate([1,0,0]) children(); } m() { cube(2); sphere(3); }");
+        match out.node {
+            Node::Translate { child, .. } => match *child {
+                Node::Group(c) => assert_eq!(c.len(), 2),
+                other => panic!("unexpected: {other:?}"),
+            },
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn children_count_and_index() {
+        let out = eval(
+            "module m() { echo($children); children(1); } m() { cube(1); sphere(2); cube(3); }",
+        );
+        assert_eq!(out.echoes, vec!["ECHO: 3"]);
+        assert!(matches!(out.node, Node::Sphere { .. }));
+    }
+
+    #[test]
+    fn list_builtins() {
+        assert_eq!(echoes("echo(search(3,[1,2,3,4]));"), vec!["ECHO: [2]"]);
+        assert_eq!(echoes("echo(search(\"b\",\"abcabc\"));"), vec!["ECHO: [1]"]);
+        assert_eq!(
+            echoes("echo(lookup(2.5,[[0,0],[1,10],[2,20],[3,30]]));"),
+            vec!["ECHO: 25"]
+        );
+        assert_eq!(
+            echoes("echo(is_undef(undef), is_list([1]), is_num(1), is_string(\"s\"));"),
+            vec!["ECHO: true, true, true, true"]
+        );
+    }
+
+    #[test]
+    fn color_is_passthrough() {
+        // color() must not drop its children.
+        let out = eval("color(\"red\") cube(2);");
+        assert_eq!(out.node, Node::Cube { size: [2.0, 2.0, 2.0], center: false });
+    }
+
+    #[test]
+    fn disable_modifier() {
+        let out = eval("union() { cube(1); *sphere(5); }");
+        match out.node {
+            Node::Union(children) => assert_eq!(children.len(), 1),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+}

@@ -1,0 +1,82 @@
+// Manages the engine worker with real cancellation: if a render is requested
+// while one is in flight, the worker is terminated and respawned (warm respawn),
+// giving true cancellation of the superseded render (serial-wasm strategy from
+// the plan). Results are delivered latest-wins.
+import type { RenderRequest, RenderResponse } from "./engineWorker";
+import type { Export2DRequest, Export2DResponse } from "./exportWorker";
+
+/** Render a 2D model to DXF/SVG text via a dedicated one-shot worker. */
+export function export2dBrowser(req: Export2DRequest): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const w = new Worker(new URL("./exportWorker.ts", import.meta.url), { type: "module" });
+    w.onmessage = (e: MessageEvent<Export2DResponse>) => {
+      w.terminate();
+      if (e.data.error) reject(new Error(e.data.error));
+      else resolve(e.data.data);
+    };
+    w.onerror = (e) => {
+      w.terminate();
+      reject(new Error(e.message || "export worker error"));
+    };
+    w.postMessage(req);
+  });
+}
+
+/** A pending render request: source, overrides, and extra files. */
+interface Job {
+  source: string;
+  names: string[];
+  values: string[];
+  fileNames: string[];
+  fileContents: string[];
+}
+
+export class Engine {
+  private worker!: Worker;
+  private busy = false;
+  private seq = 0;
+  private pending: Job | null = null;
+
+  constructor(private onResult: (r: RenderResponse) => void) {
+    this.spawn();
+  }
+
+  private spawn() {
+    this.worker = new Worker(new URL("./engineWorker.ts", import.meta.url), {
+      type: "module",
+    });
+    this.worker.onmessage = (e: MessageEvent<RenderResponse>) => {
+      this.busy = false;
+      this.onResult(e.data);
+      if (this.pending !== null) {
+        const job = this.pending;
+        this.pending = null;
+        this.render(job.source, job.names, job.values, job.fileNames, job.fileContents);
+      }
+    };
+  }
+
+  render(
+    source: string,
+    names: string[] = [],
+    values: string[] = [],
+    fileNames: string[] = [],
+    fileContents: string[] = [],
+  ) {
+    if (this.busy) {
+      // Cancel the in-flight render by terminating; respawn fresh.
+      this.worker.terminate();
+      this.spawn();
+    }
+    this.busy = true;
+    this.seq += 1;
+    this.worker.postMessage({
+      seq: this.seq,
+      source,
+      names,
+      values,
+      fileNames,
+      fileContents,
+    } satisfies RenderRequest);
+  }
+}

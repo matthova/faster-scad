@@ -1,0 +1,4 @@
+ECHO: "b"
+ECHO: 10
+ECHO: 1
+ECHO: "both"

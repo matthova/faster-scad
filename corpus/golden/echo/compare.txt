@@ -1,0 +1,5 @@
+ECHO: true, false, true, true
+ECHO: true, true, true, true
+ECHO: undef, undef, undef
+ECHO: true
+ECHO: "", "A", 0

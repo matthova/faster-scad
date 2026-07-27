@@ -1,0 +1,18 @@
+[package]
+name = "quito-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+quito-syntax = { workspace = true }
+quito-eval = { workspace = true }
+quito-geom = { workspace = true }
+quito-ir = { workspace = true }
+wasm-bindgen = "0.2"
+console_error_panic_hook = "0.1"

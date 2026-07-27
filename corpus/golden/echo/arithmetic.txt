@@ -1,0 +1,8 @@
+ECHO: 5, -1, 6, 3.5, 1
+ECHO: true, true, true, true, true, false
+ECHO: false, true, false
+ECHO: [4, 6]
+ECHO: 32
+ECHO: [2, 4, 6]
+ECHO: undef
+ECHO: [-1, -2, -3]

@@ -1,0 +1,24 @@
+[package]
+name = "quito-geom"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+quito-ir = { workspace = true }
+thiserror = { workspace = true }
+# Pure-Rust CSG kernel — builds on native and wasm32-unknown-unknown.
+boolmesh = "0.1"
+# Robust polygon triangulation with holes (earcut) — for text glyphs / polygons.
+earcutr = { workspace = true }
+# 2D polygon boolean ops (union/difference/intersection) — for 2D CSG,
+# projection silhouettes, etc. Pure-Rust, wasm-compatible.
+geo = { workspace = true }
+# DEFLATE decompression for 3MF import (ZIP entries are deflate-compressed).
+miniz_oxide = { workspace = true }
+
+# C++ Manifold kernel — native only (does not target wasm32-unknown-unknown).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+manifold-csg = "0.3"

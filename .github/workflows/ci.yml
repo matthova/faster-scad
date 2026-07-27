@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main, matthova/quito-v1]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-ci-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+
+      # C++ Manifold (native backend) needs cmake.
+      - name: Install cmake
+        uses: lukka/get-cmake@latest
+
+      - name: Build workspace
+        run: cargo build --workspace
+
+      - name: Test workspace
+        run: cargo test --workspace
+
+      # The echo oracle runs against committed goldens (no OpenSCAD needed).
+      - name: Echo oracle
+        run: cargo run -p xtask -- echo
+
+      # The wasm engine must keep compiling for the browser target.
+      - name: Build wasm engine target
+        run: cargo build -p quito-wasm --target wasm32-unknown-unknown

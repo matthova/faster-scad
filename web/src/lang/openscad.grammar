@@ -1,0 +1,163 @@
+@top Program { statement* }
+
+@skip { space | LineComment | BlockComment }
+
+@precedence {
+  postfix,
+  pow @right,
+  unary,
+  mult @left,
+  add @left,
+  compare @left,
+  equal @left,
+  and @left,
+  or @left,
+  ternary @right,
+  else @right
+}
+
+statement {
+  ";" |
+  Block |
+  IncludeStatement |
+  UseStatement |
+  ModuleDefinition |
+  FunctionDefinition |
+  Assignment |
+  ModuleInstantiation |
+  IfStatement |
+  ForStatement
+}
+
+Block { "{" statement* "}" }
+
+IncludeStatement { kw<"include"> IncludePath }
+UseStatement { kw<"use"> IncludePath }
+
+Assignment { VariableName "=" expression ";" }
+
+ModuleDefinition { kw<"module"> VariableName ParamList childStatement }
+
+FunctionDefinition { kw<"function"> VariableName ParamList "=" expression ";" }
+
+IfStatement {
+  kw<"if"> "(" expression ")" childStatement (!else kw<"else"> childStatement)?
+}
+
+ForStatement { kw<"for"> "(" bindingList ")" childStatement }
+
+ModuleInstantiation { Modifier* ModuleName ArgList childStatement }
+
+childStatement {
+  Block | ";" | ModuleInstantiation | IfStatement | ForStatement
+}
+
+Modifier { "!" | "#" | "%" | "*" }
+
+ParamList { "(" commaSep<Parameter>? ")" }
+Parameter { VariableName ("=" expression)? }
+
+ArgList { "(" commaSep<Argument>? ")" }
+Argument { VariableName "=" expression | expression }
+
+bindingList { commaSep<Binding> }
+Binding { VariableName "=" expression }
+
+expression {
+  Number |
+  String |
+  kw<"true"> |
+  kw<"false"> |
+  kw<"undef"> |
+  VariableName |
+  CallExpression |
+  Vector |
+  ParenExpression |
+  UnaryExpression |
+  BinaryExpression |
+  ConditionalExpression |
+  IndexExpression |
+  MemberExpression |
+  LetExpression |
+  FunctionLiteral
+}
+
+CallExpression { VariableName ArgList }
+
+FunctionLiteral { kw<"function"> ParamList expression }
+
+ParenExpression { "(" expression ")" }
+
+Vector { "[" listBody? "]" }
+
+listBody {
+  RangePart |
+  commaSep<ListElement>
+}
+
+ListElement {
+  ForComprehension |
+  IfComprehension |
+  EachComprehension |
+  expression
+}
+
+ForComprehension { kw<"for"> "(" bindingList ")" ListElement }
+IfComprehension {
+  kw<"if"> "(" expression ")" ListElement (!else kw<"else"> ListElement)?
+}
+EachComprehension { kw<"each"> expression }
+
+RangePart { expression ":" expression (":" expression)? }
+
+IndexExpression { expression !postfix "[" expression "]" }
+
+MemberExpression { expression !postfix "." VariableName }
+
+UnaryExpression { !unary ("-" | "+" | "!") expression }
+
+BinaryExpression {
+  expression !pow "^" expression |
+  expression !mult ("*" | "/" | "%") expression |
+  expression !add ("+" | "-") expression |
+  expression !compare ("<" | "<=" | ">" | ">=") expression |
+  expression !equal ("==" | "!=") expression |
+  expression !and "&&" expression |
+  expression !or "||" expression
+}
+
+ConditionalExpression { expression !ternary "?" expression ":" expression }
+
+LetExpression { kw<"let"> "(" bindingList ")" expression }
+
+VariableName { identifier | SpecialVariableName }
+ModuleName { identifier }
+
+commaSep<x> { x ("," x)* ","? }
+
+kw<term> { @specialize[@name={term}]<identifier, term> }
+
+@tokens {
+  space { @whitespace+ }
+  LineComment { "//" ![\n]* }
+  BlockComment { "/*" blockCommentRest }
+  blockCommentRest { ![*] blockCommentRest | "*" blockCommentAfterStar }
+  blockCommentAfterStar { "/" | "*" blockCommentAfterStar | ![/*] blockCommentRest }
+
+  identifier { $[a-zA-Z_] $[a-zA-Z0-9_]* }
+  SpecialVariableName { "$" $[a-zA-Z0-9_]+ }
+  IncludePath { "<" ![>\n]+ ">" }
+
+  Number {
+    (@digit+ ("." @digit*)? | "." @digit+) (("e" | "E") ("+" | "-")? @digit+)?
+  }
+
+  String { '"' (!["\\] | "\\" _)* '"' }
+
+  "(" ")" "[" "]" "{" "}"
+  "=" ";" "," ":" "." "/"
+
+  @precedence { BlockComment, LineComment, IncludePath, "/", "<", Number, "." }
+}
+
+@detectDelim

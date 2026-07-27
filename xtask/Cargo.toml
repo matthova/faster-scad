@@ -1,0 +1,11 @@
+[package]
+name = "xtask"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+quito-syntax = { workspace = true }
+quito-eval = { workspace = true }
+quito-geom = { workspace = true }

@@ -1,0 +1,6 @@
+ECHO: "m:", 10, 20
+ECHO: "global:", 10
+ECHO: "n:", 11
+ECHO: "lit:", 10
+ECHO: "fn:", 16
+ECHO: "fn:", 8

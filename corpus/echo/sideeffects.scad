@@ -1,0 +1,11 @@
+x = true || (assert(false, "no") 1);
+y = false && (assert(false, "no") 1);
+echo(x, y);
+z = echo("computing") 42;
+echo(z);
+w = assert(1<2) 99;
+echo(w);
+v = [for(i=[0:3]) each if(i%2==0) [i,i]];
+echo(v);
+p = [1, 2, if(true) 3, each [4,5]];
+echo(p);

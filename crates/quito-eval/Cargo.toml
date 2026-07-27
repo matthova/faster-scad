@@ -1,0 +1,15 @@
+[package]
+name = "quito-eval"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+quito-syntax = { workspace = true }
+quito-ir = { workspace = true }
+thiserror = { workspace = true }
+rustc-hash = { workspace = true }
+ttf-parser = { workspace = true }
+png = { workspace = true }
