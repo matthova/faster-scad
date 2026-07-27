@@ -45,7 +45,8 @@ struct Cli {
     /// Input `.scad` file.
     input: PathBuf,
 
-    /// Output file (`.stl`). If omitted, only prints model statistics.
+    /// Output file. Format by extension: 3D `.stl`/`.off`/`.obj`/`.3mf`/`.amf`,
+    /// 2D `.dxf`/`.svg`. If omitted, only prints model statistics.
     #[arg(short, long)]
     output: Option<PathBuf>,
 
@@ -187,6 +188,8 @@ fn run() -> Result<()> {
         match ext.as_str() {
             "off" => std::fs::write(path, mesh.to_off())?,
             "obj" => std::fs::write(path, mesh.to_obj())?,
+            "3mf" => std::fs::write(path, mesh.to_3mf())?,
+            "amf" => std::fs::write(path, mesh.to_amf())?,
             "stl" if matches!(cli.format, StlFormat::Ascii) => {
                 std::fs::write(path, mesh.to_ascii_stl(name))?
             }

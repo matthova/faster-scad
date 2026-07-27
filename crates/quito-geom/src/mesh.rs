@@ -144,6 +144,88 @@ impl Mesh {
         s
     }
 
+    /// The `3D/3dmodel.model` XML for a minimal (core-spec) 3MF package.
+    pub fn to_3mf_model(&self) -> String {
+        let mut s = String::from(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+             <model unit=\"millimeter\" xml:lang=\"en-US\" \
+             xmlns=\"http://schemas.microsoft.com/3dmanufacturing/core/2015/02\">\n\
+             \x20<resources>\n\
+             \x20 <object id=\"1\" type=\"model\">\n\
+             \x20  <mesh>\n\
+             \x20   <vertices>\n",
+        );
+        for v in &self.verts {
+            s.push_str(&format!(
+                "    <vertex x=\"{}\" y=\"{}\" z=\"{}\"/>\n",
+                v[0], v[1], v[2]
+            ));
+        }
+        s.push_str("    </vertices>\n    <triangles>\n");
+        for t in &self.tris {
+            s.push_str(&format!(
+                "    <triangle v1=\"{}\" v2=\"{}\" v3=\"{}\"/>\n",
+                t[0], t[1], t[2]
+            ));
+        }
+        s.push_str(
+            "    </triangles>\n\
+             \x20  </mesh>\n\
+             \x20 </object>\n\
+             \x20</resources>\n\
+             \x20<build>\n\
+             \x20 <item objectid=\"1\"/>\n\
+             \x20</build>\n\
+             </model>\n",
+        );
+        s
+    }
+
+    /// Serialize as AMF (Additive Manufacturing Format) — plain XML.
+    pub fn to_amf(&self) -> String {
+        let mut s = String::from(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+             <amf unit=\"millimeter\">\n\
+             \x20<object id=\"0\">\n\
+             \x20 <mesh>\n\
+             \x20  <vertices>\n",
+        );
+        for v in &self.verts {
+            s.push_str(&format!(
+                "   <vertex><coordinates><x>{}</x><y>{}</y><z>{}</z></coordinates></vertex>\n",
+                v[0], v[1], v[2]
+            ));
+        }
+        s.push_str("   </vertices>\n   <volume>\n");
+        for t in &self.tris {
+            s.push_str(&format!(
+                "    <triangle><v1>{}</v1><v2>{}</v2><v3>{}</v3></triangle>\n",
+                t[0], t[1], t[2]
+            ));
+        }
+        s.push_str("   </volume>\n  </mesh>\n </object>\n</amf>\n");
+        s
+    }
+
+    /// Serialize as a 3MF package (a ZIP of the model XML plus the OPC
+    /// content-types and relationships parts).
+    pub fn to_3mf(&self) -> Vec<u8> {
+        const CONTENT_TYPES: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+            <Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">\n\
+            \x20<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>\n\
+            \x20<Default Extension=\"model\" ContentType=\"application/vnd.ms-package.3dmanufacturing-3dmodel+xml\"/>\n\
+            </Types>\n";
+        const RELS: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+            <Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\n\
+            \x20<Relationship Type=\"http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel\" Target=\"/3D/3dmodel.model\" Id=\"rel0\"/>\n\
+            </Relationships>\n";
+        let mut zip = Zip::new();
+        zip.add("[Content_Types].xml", CONTENT_TYPES.as_bytes());
+        zip.add("_rels/.rels", RELS.as_bytes());
+        zip.add("3D/3dmodel.model", self.to_3mf_model().as_bytes());
+        zip.finish()
+    }
+
     /// Parse a binary or ASCII STL into an indexed mesh (welding coincident
     /// vertices at 1e-6 precision).
     pub fn from_stl(bytes: &[u8]) -> Mesh {
@@ -315,6 +397,41 @@ mod io_tests {
         let obj = Mesh::from_obj(&cube().to_obj());
         assert!((obj.volume() - 480.0).abs() < 1e-6, "obj {}", obj.volume());
     }
+
+    #[test]
+    fn amf_has_all_geometry() {
+        let m = cube();
+        let amf = m.to_amf();
+        assert_eq!(amf.matches("<vertex>").count(), m.verts.len());
+        assert_eq!(amf.matches("<triangle>").count(), m.tris.len());
+        assert!(amf.contains("<amf unit=\"millimeter\">"));
+    }
+
+    #[test]
+    fn threemf_is_a_valid_zip_with_all_parts() {
+        let m = cube();
+        let zip = m.to_3mf();
+        // Local-file-header signature at the start, EOCD signature at the end.
+        assert_eq!(&zip[0..4], b"PK\x03\x04");
+        assert!(zip.windows(4).any(|w| w == b"PK\x05\x06"), "no end-of-central-directory");
+        // All three OPC parts present as stored entries (their names appear raw).
+        for part in ["[Content_Types].xml", "_rels/.rels", "3D/3dmodel.model"] {
+            assert!(
+                zip.windows(part.len()).any(|w| w == part.as_bytes()),
+                "missing part {part}"
+            );
+        }
+        // The model XML carries every vertex/triangle.
+        let model = m.to_3mf_model();
+        assert_eq!(model.matches("<vertex ").count(), m.verts.len());
+        assert_eq!(model.matches("<triangle ").count(), m.tris.len());
+    }
+
+    /// CRC-32 of "123456789" is the well-known check value 0xCBF43926.
+    #[test]
+    fn crc32_check_value() {
+        assert_eq!(super::crc32(b"123456789"), 0xCBF4_3926);
+    }
 }
 
 pub(crate) fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
@@ -340,4 +457,102 @@ pub(crate) fn normalize(a: [f64; 3]) -> [f64; 3] {
     } else {
         [a[0] / n, a[1] / n, a[2] / n]
     }
+}
+
+// ---------------------------------------------------------------------------
+// Minimal store-only ZIP writer (for 3MF packaging). No compression, no deps,
+// so it builds identically on native and wasm.
+// ---------------------------------------------------------------------------
+
+struct Zip {
+    out: Vec<u8>,
+    entries: Vec<ZipEntry>,
+}
+
+struct ZipEntry {
+    name: String,
+    crc: u32,
+    size: u32,
+    offset: u32,
+}
+
+impl Zip {
+    fn new() -> Self {
+        Zip { out: Vec::new(), entries: Vec::new() }
+    }
+
+    /// Append a stored (uncompressed) file entry.
+    fn add(&mut self, name: &str, data: &[u8]) {
+        let crc = crc32(data);
+        let offset = self.out.len() as u32;
+        // Local file header (signature 0x04034b50).
+        self.out.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
+        self.out.extend_from_slice(&20u16.to_le_bytes()); // version needed
+        self.out.extend_from_slice(&0u16.to_le_bytes()); // flags
+        self.out.extend_from_slice(&0u16.to_le_bytes()); // method: store
+        self.out.extend_from_slice(&0u16.to_le_bytes()); // mod time
+        self.out.extend_from_slice(&0u16.to_le_bytes()); // mod date
+        self.out.extend_from_slice(&crc.to_le_bytes());
+        self.out.extend_from_slice(&(data.len() as u32).to_le_bytes()); // comp size
+        self.out.extend_from_slice(&(data.len() as u32).to_le_bytes()); // uncomp size
+        self.out.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        self.out.extend_from_slice(&0u16.to_le_bytes()); // extra len
+        self.out.extend_from_slice(name.as_bytes());
+        self.out.extend_from_slice(data);
+        self.entries.push(ZipEntry {
+            name: name.to_string(),
+            crc,
+            size: data.len() as u32,
+            offset,
+        });
+    }
+
+    /// Write the central directory + end record and return the ZIP bytes.
+    fn finish(mut self) -> Vec<u8> {
+        let cd_start = self.out.len() as u32;
+        for e in &self.entries {
+            self.out.extend_from_slice(&0x0201_4b50u32.to_le_bytes()); // central sig
+            self.out.extend_from_slice(&20u16.to_le_bytes()); // version made by
+            self.out.extend_from_slice(&20u16.to_le_bytes()); // version needed
+            self.out.extend_from_slice(&0u16.to_le_bytes()); // flags
+            self.out.extend_from_slice(&0u16.to_le_bytes()); // method: store
+            self.out.extend_from_slice(&0u16.to_le_bytes()); // mod time
+            self.out.extend_from_slice(&0u16.to_le_bytes()); // mod date
+            self.out.extend_from_slice(&e.crc.to_le_bytes());
+            self.out.extend_from_slice(&e.size.to_le_bytes()); // comp size
+            self.out.extend_from_slice(&e.size.to_le_bytes()); // uncomp size
+            self.out.extend_from_slice(&(e.name.len() as u16).to_le_bytes());
+            self.out.extend_from_slice(&0u16.to_le_bytes()); // extra len
+            self.out.extend_from_slice(&0u16.to_le_bytes()); // comment len
+            self.out.extend_from_slice(&0u16.to_le_bytes()); // disk number
+            self.out.extend_from_slice(&0u16.to_le_bytes()); // internal attrs
+            self.out.extend_from_slice(&0u32.to_le_bytes()); // external attrs
+            self.out.extend_from_slice(&e.offset.to_le_bytes()); // local header offset
+            self.out.extend_from_slice(e.name.as_bytes());
+        }
+        let cd_size = self.out.len() as u32 - cd_start;
+        // End of central directory record.
+        self.out.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
+        self.out.extend_from_slice(&0u16.to_le_bytes()); // disk number
+        self.out.extend_from_slice(&0u16.to_le_bytes()); // cd start disk
+        self.out.extend_from_slice(&(self.entries.len() as u16).to_le_bytes());
+        self.out.extend_from_slice(&(self.entries.len() as u16).to_le_bytes());
+        self.out.extend_from_slice(&cd_size.to_le_bytes());
+        self.out.extend_from_slice(&cd_start.to_le_bytes());
+        self.out.extend_from_slice(&0u16.to_le_bytes()); // comment len
+        self.out
+    }
+}
+
+/// Standard CRC-32 (IEEE 802.3, polynomial 0xEDB88320), computed on the fly.
+fn crc32(data: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for &b in data {
+        crc ^= b as u32;
+        for _ in 0..8 {
+            let mask = (crc & 1).wrapping_neg();
+            crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+        }
+    }
+    !crc
 }
