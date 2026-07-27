@@ -123,7 +123,7 @@ export async function onFileChanged(
 
 /** Native save via a Tauri save dialog + the `save_model` command. */
 export async function saveModelNative(
-  format: "stl" | "off" | "obj",
+  format: "stl" | "off" | "obj" | "3mf" | "amf",
   source: string,
   names: string[],
   values: string[],

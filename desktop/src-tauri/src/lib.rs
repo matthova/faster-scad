@@ -244,6 +244,8 @@ fn save_model(
         let bytes: Vec<u8> = match format.as_str() {
             "off" => mesh.to_off().into_bytes(),
             "obj" => mesh.to_obj().into_bytes(),
+            "3mf" => mesh.to_3mf(),
+            "amf" => mesh.to_amf().into_bytes(),
             _ => mesh.to_binary_stl(),
         };
         std::fs::write(&path, bytes).map_err(|e| format!("write {path}: {e}"))

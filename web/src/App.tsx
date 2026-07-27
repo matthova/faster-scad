@@ -7,7 +7,7 @@ import { openscad } from "./lang/openscad";
 import { Viewer } from "./viewer";
 import { Engine } from "./engine";
 import type { RenderResponse } from "./engineWorker";
-import { buildBinarySTL, buildOFF, buildOBJ, downloadBlob } from "./stl";
+import { buildBinarySTL, buildOFF, buildOBJ, build3MF, buildAMF, downloadBlob } from "./stl";
 import { CustomizerPanel } from "./CustomizerPanel";
 import { parseSchema, toLiteral, type Param, type ParamValue } from "./customizer";
 import { loadProject, saveProject, clearProject, type File } from "./project";
@@ -65,6 +65,8 @@ module rounded_box(sz, r) {
   },
 ];
 
+type ExportFmt = "stl" | "off" | "obj" | "3mf" | "amf";
+
 interface Status {
   ok: boolean;
   message: string;
@@ -113,7 +115,7 @@ export function App() {
   });
   const [version, setVersion] = useState("");
   const [consoleOpen, setConsoleOpen] = useState(false);
-  const [exportFmt, setExportFmt] = useState<"stl" | "off" | "obj">("stl");
+  const [exportFmt, setExportFmt] = useState<ExportFmt>("stl");
   const [time, setTime] = useState(0);
   const [schema, setSchema] = useState<Param[]>([]);
   const [overrides, setOverrides] = useState<Record<string, ParamValue>>(overridesRef.current);
@@ -412,7 +414,7 @@ export function App() {
     requestRenderRef.current();
   }
 
-  function onDownload(format: "stl" | "off" | "obj") {
+  function onDownload(format: ExportFmt) {
     if (status.triangleCount === 0) return;
     if (TAURI) {
       // Native: re-render on the native engine and write via a save dialog, so
@@ -434,7 +436,15 @@ export function App() {
     const pos = lastPositions.current;
     if (pos.length === 0) return;
     const data =
-      format === "off" ? buildOFF(pos) : format === "obj" ? buildOBJ(pos) : buildBinarySTL(pos);
+      format === "off"
+        ? buildOFF(pos)
+        : format === "obj"
+          ? buildOBJ(pos)
+          : format === "3mf"
+            ? build3MF(pos)
+            : format === "amf"
+              ? buildAMF(pos)
+              : buildBinarySTL(pos);
     downloadBlob(data, `quito.${format}`);
   }
 
@@ -477,11 +487,13 @@ export function App() {
             <select
               aria-label="Export format"
               value={exportFmt}
-              onChange={(e) => setExportFmt(e.target.value as "stl" | "off" | "obj")}
+              onChange={(e) => setExportFmt(e.target.value as ExportFmt)}
             >
               <option value="stl">STL</option>
               <option value="off">OFF</option>
               <option value="obj">OBJ</option>
+              <option value="3mf">3MF</option>
+              <option value="amf">AMF</option>
             </select>
           </div>
         </div>
