@@ -22,12 +22,6 @@ module `children()`/`$children`; function literals; **lexical scoping** for
 ordinary variables/functions/modules with dynamic scoping for `$` variables;
 and the `polyhedron` primitive.
 
-## Permanent divergences (decided)
-
-| Area | Quito | OpenSCAD | Rationale |
-|---|---|---|---|
-| Reversed ranges | `[5:0]` (or `[1:0]`) iterates empty; echoes as written, e.g. `[1 : 1 : 0]`. | Silently swaps bounds: `[1:0]` iterates `0,1` and echoes `[0 : 1 : 1]`. | The upstream swap is a well-known footgun. Quito treats a range whose direction contradicts its step as empty — predictable and matches the plan's "saner reversed-range handling." |
-
 ## Candidate intentional cleanups (from the plan, not yet decided)
 
 - Warn-and-keep on last-assignment-wins (footgun surfaced, behavior kept).

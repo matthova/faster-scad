@@ -808,15 +808,20 @@ impl Interp<'_> {
             Expr::Range { start, step, end } => {
                 let s = self.eval_expr(start)?.as_number().unwrap_or(f64::NAN);
                 let e = self.eval_expr(end)?.as_number().unwrap_or(f64::NAN);
-                let st = match step {
-                    Some(x) => self.eval_expr(x)?.as_number().unwrap_or(1.0),
-                    None => 1.0,
-                };
-                Ok(Value::Range {
-                    start: s,
-                    step: st,
-                    end: e,
-                })
+                match step {
+                    // 3-arg range: kept as written (empty if step direction
+                    // contradicts start/end).
+                    Some(x) => {
+                        let st = self.eval_expr(x)?.as_number().unwrap_or(1.0);
+                        Ok(Value::Range { start: s, step: st, end: e })
+                    }
+                    // 2-arg range: OpenSCAD normalizes to ascending, step 1
+                    // (so `[5:2]` becomes `[2:1:5]`).
+                    None => {
+                        let (lo, hi) = if s <= e { (s, e) } else { (e, s) };
+                        Ok(Value::Range { start: lo, step: 1.0, end: hi })
+                    }
+                }
             }
             Expr::Unary { op, expr } => {
                 let v = self.eval_expr(expr)?;
