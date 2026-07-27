@@ -4,9 +4,10 @@ A fast, greenfield reimplementation of the [OpenSCAD](https://openscad.org)
 language — same language spirit, a modern geometry kernel, one Rust core
 shipping to the browser (wasm) and desktop (Tauri).
 
-> **Status: M0 — native walking skeleton complete and oracle-verified.**
-> The full plan lives in `.context/attachments/HoR0PL/plan.md`; research
-> dossiers are in `.context/research/`.
+> **Status: M1 in progress — browser playground live; kernel bake-off resolved.**
+> M0 (native walking skeleton) is complete and oracle-verified. The full plan
+> lives in `.context/attachments/HoR0PL/plan.md`; research dossiers are in
+> `.context/research/`.
 
 ## What works today (M0 native)
 
@@ -27,9 +28,24 @@ indexing, `.x/.y/.z`), a core set of math/list builtins, `echo`, `assert`, and
 the debug modifiers `* ! # %`. Curved primitives use the bit-exact `$fn/$fa/$fs`
 fragment formula.
 
-Geometry booleans run on the C++ [Manifold](https://github.com/elalish/manifold)
-kernel via the `manifold-csg` bindings, behind a `Kernel` trait (the seam for
-the planned pure-Rust-vs-C++ kernel bake-off).
+### Kernel bake-off (resolved)
+
+Geometry booleans run behind a `Kernel` trait with two backends:
+
+- **Native:** C++ [Manifold](https://github.com/elalish/manifold) via
+  `manifold-csg` — fast and battle-tested.
+- **Browser (wasm):** pure-Rust [`boolmesh`](https://crates.io/crates/boolmesh)
+  — compiles clean to `wasm32-unknown-unknown` (no Emscripten). A differential
+  test confirms the two backends agree to within 0.5% on
+  union/difference/intersection.
+
+### Browser playground (M1)
+
+A live-editing playground runs the engine as wasm in a Web Worker with a
+three.js preview; see [`web/`](web/README.md). Verified in headless Chrome:
+non-trivial `.scad` edits re-render live in single-digit milliseconds, with
+worker-terminate cancellation and parse errors surfaced inline. `cd web && npm
+run build:wasm && npm install && npm run dev`.
 
 ### Oracle verification
 
@@ -66,16 +82,18 @@ cargo test                                                # unit + kernel tests
 | `quito-geom` | fragment formula, tessellation, `Kernel` trait, Manifold backend, STL |
 | `quito-cli` | the `quito` binary |
 
-Planned crates (`quito-text`, `quito-io`, `quito-engine`, `quito-wasm`) and the
-`web/` + `desktop/` shells arrive in later milestones.
+| `quito-wasm` | wasm-bindgen engine surface (`render(source)` → mesh + diagnostics) |
 
-## Next step
+The `web/` playground is live. Planned crates (`quito-text`, `quito-io`,
+`quito-engine`) and the `desktop/` shell arrive in later milestones.
 
-Per the roadmap, M1 is the browser playground. Its blocker is the **kernel
-bake-off**: `manifold-csg` is C++ and does not target
-`wasm32-unknown-unknown`, so the wasm build needs a pure-Rust kernel
-(`manifold-rust`) behind the same `Kernel` trait. That evaluation is the first
-M1 task.
+## Next steps
+
+- Deploy the `web/` bundle to a public URL and benchmark live-edit latency vs
+  `openscad-playground` on the same models (M1 exit criterion).
+- Lezer grammar for the editor (replacing the StreamLanguage highlighter).
+- Begin M2: full expression language, list comprehensions, `children()`/
+  `$children`, proper hoisting + lexical scoping, and the echo-oracle harness.
 
 ## License
 
