@@ -51,6 +51,11 @@ pub fn render_with(node: &Node, kernel: &dyn Kernel) -> Result<Mesh, GeomError> 
             frags,
         } => Ok(cylinder(*h, *r1, *r2, *center, *frags)),
         Node::Polyhedron { points, faces } => Ok(polyhedron(points, faces)),
+        Node::Import { data, format } => Ok(match format.as_str() {
+            "off" => Mesh::from_off(&String::from_utf8_lossy(data)),
+            "obj" => Mesh::from_obj(&String::from_utf8_lossy(data)),
+            _ => Mesh::from_stl(data), // stl (binary or ascii)
+        }),
 
         // 2D shapes rendered as a flat mesh at z=0.
         Node::Square { .. } | Node::Circle { .. } | Node::Polygon { .. } => {

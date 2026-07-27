@@ -133,6 +133,11 @@ pub enum Node {
     Hull(Vec<Node>),
     /// Minkowski sum of all children.
     Minkowski(Vec<Node>),
+    /// An imported mesh file (raw bytes + lowercase format, e.g. "stl").
+    Import {
+        data: Vec<u8>,
+        format: String,
+    },
 }
 
 impl Node {

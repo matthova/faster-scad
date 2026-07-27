@@ -30,6 +30,12 @@ impl FileResolver for DiskResolver {
         }
         None
     }
+
+    fn load_bytes(&self, path: &str, from_dir: &str) -> Option<Vec<u8>> {
+        let candidates = std::iter::once(Path::new(from_dir).join(path))
+            .chain(self.libs.iter().map(|l| l.join(path)));
+        candidates.into_iter().find_map(|c| std::fs::read(&c).ok())
+    }
 }
 
 /// A fast OpenSCAD-compatible renderer (M0 subset).
@@ -114,20 +120,23 @@ fn main() -> Result<()> {
     );
 
     if let Some(path) = &cli.output {
-        match cli.format {
-            StlFormat::Binary => {
-                std::fs::write(path, mesh.to_binary_stl())
-                    .with_context(|| format!("writing {}", path.display()))?;
+        let name = cli
+            .input
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("quito");
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("stl")
+            .to_ascii_lowercase();
+        match ext.as_str() {
+            "off" => std::fs::write(path, mesh.to_off())?,
+            "obj" => std::fs::write(path, mesh.to_obj())?,
+            "stl" if matches!(cli.format, StlFormat::Ascii) => {
+                std::fs::write(path, mesh.to_ascii_stl(name))?
             }
-            StlFormat::Ascii => {
-                let name = cli
-                    .input
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("quito");
-                std::fs::write(path, mesh.to_ascii_stl(name))
-                    .with_context(|| format!("writing {}", path.display()))?;
-            }
+            _ => std::fs::write(path, mesh.to_binary_stl())?,
         }
         eprintln!("wrote {}", path.display());
     }

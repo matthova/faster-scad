@@ -27,6 +27,11 @@ pub struct LoadedFile {
 /// the browser can supply an in-memory map.
 pub trait FileResolver {
     fn load(&self, path: &str, from_dir: &str) -> Option<LoadedFile>;
+    /// Load raw bytes (for `import()` of binary meshes). Defaults to none.
+    fn load_bytes(&self, path: &str, from_dir: &str) -> Option<Vec<u8>> {
+        let _ = (path, from_dir);
+        None
+    }
 }
 
 /// A resolver that never finds anything (include/use become warnings).
@@ -476,6 +481,7 @@ impl Interp<'_> {
             "intersection" => Ok(Node::Intersection(self.eval_children(children)?)),
             "hull" => Ok(Node::Hull(self.eval_children(children)?)),
             "minkowski" => Ok(Node::Minkowski(self.eval_children(children)?)),
+            "import" => self.b_import(args),
             "group" => Ok(Node::group(self.eval_children(children)?)),
             "echo" => self.b_echo(args, children),
             "assert" => self.b_assert(args, children),
@@ -629,6 +635,26 @@ impl Interp<'_> {
             center,
             frags: self.frag_spec(&m),
         })
+    }
+
+    fn b_import(&mut self, args: &[Arg]) -> EResult<Node> {
+        let m = self.bind_named(&["file"], args)?;
+        let path = match m.get("file") {
+            Some(Value::Str(s)) => s.clone(),
+            _ => return Ok(Node::Empty),
+        };
+        let format = path
+            .rsplit('.')
+            .next()
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        match self.resolver.load_bytes(&path, &self.cur_dir) {
+            Some(data) => Ok(Node::Import { data, format }),
+            None => {
+                self.warnings.push(format!("Can't open import file '{path}'"));
+                Ok(Node::Empty)
+            }
+        }
     }
 
     fn b_polyhedron(&mut self, args: &[Arg]) -> EResult<Node> {

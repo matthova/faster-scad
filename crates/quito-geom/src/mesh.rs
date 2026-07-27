@@ -120,6 +120,118 @@ impl Mesh {
         out
     }
 
+    /// Serialize as OFF (Object File Format).
+    pub fn to_off(&self) -> String {
+        let mut s = format!("OFF\n{} {} 0\n", self.verts.len(), self.tris.len());
+        for v in &self.verts {
+            s.push_str(&format!("{} {} {}\n", v[0], v[1], v[2]));
+        }
+        for t in &self.tris {
+            s.push_str(&format!("3 {} {} {}\n", t[0], t[1], t[2]));
+        }
+        s
+    }
+
+    /// Serialize as Wavefront OBJ (1-indexed faces).
+    pub fn to_obj(&self) -> String {
+        let mut s = String::new();
+        for v in &self.verts {
+            s.push_str(&format!("v {} {} {}\n", v[0], v[1], v[2]));
+        }
+        for t in &self.tris {
+            s.push_str(&format!("f {} {} {}\n", t[0] + 1, t[1] + 1, t[2] + 1));
+        }
+        s
+    }
+
+    /// Parse a binary or ASCII STL into an indexed mesh (welding coincident
+    /// vertices at 1e-6 precision).
+    pub fn from_stl(bytes: &[u8]) -> Mesh {
+        // ASCII if it starts with "solid" and contains "facet".
+        let is_ascii = bytes.starts_with(b"solid")
+            && bytes.windows(5).take(512).any(|w| w == b"facet");
+        let raw_tris: Vec<[[f64; 3]; 3]> = if is_ascii {
+            parse_ascii_stl(&String::from_utf8_lossy(bytes))
+        } else {
+            parse_binary_stl(bytes)
+        };
+        let mut mesh = Mesh::new();
+        let mut map: std::collections::HashMap<[i64; 3], u32> = std::collections::HashMap::new();
+        let key = |p: [f64; 3]| [
+            (p[0] * 1e6).round() as i64,
+            (p[1] * 1e6).round() as i64,
+            (p[2] * 1e6).round() as i64,
+        ];
+        for tri in raw_tris {
+            let mut idx = [0u32; 3];
+            for (k, p) in tri.iter().enumerate() {
+                let e = *map.entry(key(*p)).or_insert_with(|| {
+                    mesh.verts.push(*p);
+                    (mesh.verts.len() - 1) as u32
+                });
+                idx[k] = e;
+            }
+            mesh.tris.push(idx);
+        }
+        mesh
+    }
+
+    /// Parse an OFF file.
+    pub fn from_off(text: &str) -> Mesh {
+        let mut mesh = Mesh::new();
+        let mut nums = text
+            .lines()
+            .filter(|l| !l.trim_start().starts_with('#'))
+            .flat_map(|l| l.split_whitespace())
+            .filter(|t| *t != "OFF");
+        let nv: usize = nums.next().and_then(|t| t.parse().ok()).unwrap_or(0);
+        let nf: usize = nums.next().and_then(|t| t.parse().ok()).unwrap_or(0);
+        let _edges = nums.next();
+        for _ in 0..nv {
+            let x = nums.next().and_then(|t| t.parse().ok()).unwrap_or(0.0);
+            let y = nums.next().and_then(|t| t.parse().ok()).unwrap_or(0.0);
+            let z = nums.next().and_then(|t| t.parse().ok()).unwrap_or(0.0);
+            mesh.verts.push([x, y, z]);
+        }
+        for _ in 0..nf {
+            let k: usize = nums.next().and_then(|t| t.parse().ok()).unwrap_or(0);
+            let idx: Vec<u32> = (0..k).filter_map(|_| nums.next()?.parse().ok()).collect();
+            for j in 1..idx.len().saturating_sub(1) {
+                mesh.tris.push([idx[0], idx[j], idx[j + 1]]);
+            }
+        }
+        mesh
+    }
+
+    /// Parse a Wavefront OBJ file (vertices and triangulated faces).
+    pub fn from_obj(text: &str) -> Mesh {
+        let mut mesh = Mesh::new();
+        for line in text.lines() {
+            let mut it = line.split_whitespace();
+            match it.next() {
+                Some("v") => {
+                    let c: Vec<f64> = it.filter_map(|t| t.parse().ok()).collect();
+                    if c.len() >= 3 {
+                        mesh.verts.push([c[0], c[1], c[2]]);
+                    }
+                }
+                Some("f") => {
+                    // face indices may be `i`, `i/j`, `i//k`; take the vertex index.
+                    let idx: Vec<i64> = it
+                        .filter_map(|t| t.split('/').next()?.parse().ok())
+                        .collect();
+                    let n = mesh.verts.len() as i64;
+                    let resolve = |i: i64| if i < 0 { (n + i) as u32 } else { (i - 1) as u32 };
+                    for j in 1..idx.len().saturating_sub(1) {
+                        mesh.tris.push([resolve(idx[0]), resolve(idx[j]), resolve(idx[j + 1])]);
+                    }
+                }
+                _ => {}
+            }
+        }
+        mesh
+    }
+
     /// Serialize as ASCII STL.
     pub fn to_ascii_stl(&self, name: &str) -> String {
         let mut s = format!("solid {name}\n");
@@ -137,6 +249,71 @@ impl Mesh {
         }
         s.push_str(&format!("endsolid {name}\n"));
         s
+    }
+}
+
+fn parse_binary_stl(bytes: &[u8]) -> Vec<[[f64; 3]; 3]> {
+    if bytes.len() < 84 {
+        return Vec::new();
+    }
+    let n = u32::from_le_bytes([bytes[80], bytes[81], bytes[82], bytes[83]]) as usize;
+    let mut out = Vec::with_capacity(n);
+    let f = |b: &[u8]| f32::from_le_bytes([b[0], b[1], b[2], b[3]]) as f64;
+    for i in 0..n {
+        let o = 84 + i * 50;
+        if o + 50 > bytes.len() {
+            break;
+        }
+        let mut tri = [[0.0; 3]; 3];
+        for (k, v) in tri.iter_mut().enumerate() {
+            let vo = o + 12 + k * 12;
+            *v = [f(&bytes[vo..]), f(&bytes[vo + 4..]), f(&bytes[vo + 8..])];
+        }
+        out.push(tri);
+    }
+    out
+}
+
+fn parse_ascii_stl(s: &str) -> Vec<[[f64; 3]; 3]> {
+    let mut out = Vec::new();
+    let mut cur: Vec<[f64; 3]> = Vec::new();
+    for line in s.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("vertex ") {
+            let nums: Vec<f64> = rest.split_whitespace().filter_map(|t| t.parse().ok()).collect();
+            if nums.len() == 3 {
+                cur.push([nums[0], nums[1], nums[2]]);
+                if cur.len() == 3 {
+                    out.push([cur[0], cur[1], cur[2]]);
+                    cur.clear();
+                }
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod io_tests {
+    use super::*;
+
+    fn cube() -> Mesh {
+        crate::cube([10.0, 8.0, 6.0], false)
+    }
+
+    #[test]
+    fn stl_roundtrip() {
+        let m = Mesh::from_stl(&cube().to_binary_stl());
+        assert!((m.volume() - 480.0).abs() < 1e-6);
+        assert_eq!(m.verts.len(), 8); // welded
+    }
+
+    #[test]
+    fn off_obj_roundtrip() {
+        let off = Mesh::from_off(&cube().to_off());
+        assert!((off.volume() - 480.0).abs() < 1e-6, "off {}", off.volume());
+        let obj = Mesh::from_obj(&cube().to_obj());
+        assert!((obj.volume() - 480.0).abs() < 1e-6, "obj {}", obj.volume());
     }
 }
 
