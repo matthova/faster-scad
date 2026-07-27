@@ -80,10 +80,64 @@ body {
   min-height: 0;
 }
 
-.editor {
+.editor-col {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   border-right: 1px solid var(--border);
+}
+
+.tabs {
+  display: flex;
+  align-items: stretch;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  min-height: 30px;
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-family: ui-monospace, Menlo, monospace;
+  border-right: 1px solid var(--border);
+  cursor: pointer;
+  white-space: nowrap;
+  color: var(--muted, #999);
+}
+.tab.active {
+  background: var(--bg, #1a1a1a);
+  color: inherit;
+}
+.tab-close {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 0 2px;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.6;
+}
+.tab-close:hover {
+  opacity: 1;
+}
+.tab-add {
+  border: 0;
+  background: transparent;
+  color: var(--muted, #999);
+  font-size: 15px;
+  padding: 0 10px;
+  cursor: pointer;
+}
+
+.editor {
   overflow: hidden;
   min-height: 0;
+  flex: 1;
 }
 
 .editor .cm-editor {

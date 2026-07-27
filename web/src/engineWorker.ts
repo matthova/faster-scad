@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
 // The engine worker: initializes the wasm module once, then renders on demand.
-import init, { render_with_params, parameters, version } from "../engine/quito.js";
+import init, { render_with_files, parameters, version } from "../engine/quito.js";
 
 export interface RenderRequest {
   seq: number;
@@ -9,6 +9,9 @@ export interface RenderRequest {
   names: string[];
   /** Override values as literal strings ("30", "true", "\"hi\"", "[1,2,3]"). */
   values: string[];
+  /** Extra file names for include/use resolution, parallel to `fileContents`. */
+  fileNames: string[];
+  fileContents: string[];
 }
 
 export interface RenderResponse {
@@ -32,7 +35,7 @@ export interface RenderResponse {
 const ready = init();
 
 self.onmessage = async (e: MessageEvent<RenderRequest>) => {
-  const { seq, source, names, values } = e.data;
+  const { seq, source, names, values, fileNames, fileContents } = e.data;
   await ready;
 
   const t0 = performance.now();
@@ -45,7 +48,7 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
 
   let res;
   try {
-    res = render_with_params(source, names, values);
+    res = render_with_files(source, names, values, fileNames, fileContents);
   } catch (err) {
     postMessage({
       seq,

@@ -11,45 +11,49 @@ import { buildBinarySTL, buildOFF, buildOBJ, downloadBlob } from "./stl";
 import { CustomizerPanel } from "./CustomizerPanel";
 import { parseSchema, toLiteral, type Param, type ParamValue } from "./customizer";
 
-const DEFAULT_SOURCE = `// Quito playground — edits re-render live.
-// Drag the parameters on the right (they come from these annotated variables).
+interface File {
+  name: string;
+  content: string;
+}
+
+// The first file is always the rendered "main"; the rest are libraries that
+// main can `use`/`include`.
+const DEFAULT_FILES: File[] = [
+  {
+    name: "main.scad",
+    content: `// Quito playground — edits re-render live.
+// main.scad uses helpers.scad (see the tab); tweak the parameters at right.
+use <helpers.scad>
 $fn = 48;
 
-/* [Bracket] */
-// outer width
-width = 40;   // [20:80]
-// outer depth
-depth = 30;   // [20:80]
-height = 20;  // [10:40]
-// wall thickness
-wall = 3;     // [1:0.5:6]
+/* [Box] */
+size = 30;    // [10:60]
+radius = 4;   // [1:12]
 
-/* [Boss] */
-boss = true;
-boss_h = 8;   // [0:20]
+/* [Lid] */
+lid = true;
+lid_gap = 1;  // [0:0.5:4]
 
-module bracket(w, d, h, t) {
-  difference() {
-    cube([w, d, h], center = true);
-    cube([w - 2*t, d - 2*t, h + 1], center = true);
+rounded_box([size, size, size], radius);
+if (lid)
+  translate([0, 0, size/2 + lid_gap + radius])
+    rounded_box([size, size, 4], radius);
+
+echo("box size", size, "radius", radius);
+`,
+  },
+  {
+    name: "helpers.scad",
+    content: `// A tiny helper library, used by main.scad.
+module rounded_box(sz, r) {
+  minkowski() {
+    cube([sz[0] - 2*r, sz[1] - 2*r, sz[2] - 2*r], center = true);
+    sphere(r);
   }
 }
-
-difference() {
-  union() {
-    bracket(width, depth, height, wall);
-    if (boss)
-      translate([0, 0, height/2])
-        cylinder(h = boss_h, r1 = 9, r2 = 6);
-  }
-  for (dx = [-width/2 + 8, width/2 - 8], dy = [-depth/2 + 8, depth/2 - 8])
-    translate([dx, dy, -height])
-      cylinder(h = 2*height, r = 2.5);
-  cylinder(h = 3*height, r = 4, center = true);
-}
-
-echo("bounding box", width, depth, height);
-`;
+`,
+  },
+];
 
 interface Status {
   ok: boolean;
@@ -67,16 +71,21 @@ export function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const viewerRef = useRef<Viewer | null>(null);
   const engineRef = useRef<Engine | null>(null);
+  const viewRef = useRef<EditorView | null>(null);
   const lastPositions = useRef<Float32Array>(new Float32Array(0));
   const debounceTimer = useRef<number | undefined>(undefined);
 
-  // Customizer state. Refs mirror the state so imperative render calls (from
-  // slider drags and editor edits) never see a stale closure.
-  const sourceRef = useRef(DEFAULT_SOURCE);
+  // File + customizer state. Refs mirror state so imperative render/edit paths
+  // never see a stale closure.
+  const filesRef = useRef<File[]>(DEFAULT_FILES.map((f) => ({ ...f })));
+  const activeRef = useRef(0);
+  const suppressRef = useRef(false);
   const overridesRef = useRef<Record<string, ParamValue>>({});
   const paramsJsonRef = useRef("");
   const requestRenderRef = useRef<() => void>(() => {});
 
+  const [files, setFiles] = useState<File[]>(filesRef.current);
+  const [active, setActive] = useState(0);
   const [status, setStatus] = useState<Status>({
     ok: true,
     message: "initializing…",
@@ -103,10 +112,18 @@ export function App() {
     engineRef.current = engine;
 
     const renderNow = () => {
+      const fs = filesRef.current;
       const ov = overridesRef.current;
       const names = Object.keys(ov);
       const values = names.map((n) => toLiteral(ov[n]));
-      engine.render(sourceRef.current, names, values);
+      const libs = fs.slice(1);
+      engine.render(
+        fs[0].content,
+        names,
+        values,
+        libs.map((f) => f.name),
+        libs.map((f) => f.content),
+      );
     };
     const requestRender = () => {
       window.clearTimeout(debounceTimer.current);
@@ -116,7 +133,7 @@ export function App() {
 
     const view = new EditorView({
       state: EditorState.create({
-        doc: DEFAULT_SOURCE,
+        doc: filesRef.current[0].content,
         extensions: [
           basicSetup,
           keymap.of([indentWithTab]),
@@ -126,8 +143,12 @@ export function App() {
             ".cm-scroller": { fontFamily: "ui-monospace, Menlo, monospace" },
           }),
           EditorView.updateListener.of((u) => {
-            if (u.docChanged) {
-              sourceRef.current = u.state.doc.toString();
+            if (u.docChanged && !suppressRef.current) {
+              const idx = activeRef.current;
+              const next = filesRef.current.slice();
+              next[idx] = { ...next[idx], content: u.state.doc.toString() };
+              filesRef.current = next;
+              setFiles(next);
               requestRender();
             }
           }),
@@ -135,6 +156,7 @@ export function App() {
       }),
       parent: editorHost.current,
     });
+    viewRef.current = view;
 
     renderNow(); // initial render
 
@@ -144,11 +166,59 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  function switchTo(idx: number) {
+    if (idx === activeRef.current || !viewRef.current) return;
+    activeRef.current = idx;
+    setActive(idx);
+    const view = viewRef.current;
+    suppressRef.current = true;
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: filesRef.current[idx].content },
+    });
+    suppressRef.current = false;
+    view.focus();
+  }
+
+  function addFile() {
+    const fs = filesRef.current;
+    let n = fs.length;
+    let name = `lib${n}.scad`;
+    while (fs.some((f) => f.name === name)) name = `lib${++n}.scad`;
+    const next = [...fs, { name, content: `// ${name}\n` }];
+    filesRef.current = next;
+    setFiles(next);
+    switchTo(next.length - 1);
+  }
+
+  function deleteFile(idx: number) {
+    if (idx === 0) return; // main is not deletable
+    const next = filesRef.current.filter((_, i) => i !== idx);
+    filesRef.current = next;
+    setFiles(next);
+    // Pick a new active file, then force the editor to swap to it.
+    let na = activeRef.current;
+    if (na === idx) na = idx - 1;
+    else if (na > idx) na -= 1;
+    activeRef.current = -1;
+    switchTo(na);
+    requestRenderRef.current();
+  }
+
+  function renameFile(idx: number) {
+    if (idx === 0) return; // keep main.scad stable
+    const cur = filesRef.current[idx].name;
+    const name = window.prompt("Rename file", cur);
+    if (!name || name === cur || filesRef.current.some((f) => f.name === name)) return;
+    const next = filesRef.current.slice();
+    next[idx] = { ...next[idx], name };
+    filesRef.current = next;
+    setFiles(next);
+    requestRenderRef.current();
+  }
+
   function onResult(r: RenderResponse) {
     if (r.version) setVersion(r.version);
 
-    // Update the parameter schema when it changed. Preserve override values for
-    // params that still exist (by name), drop the rest.
     if (r.params && r.params !== paramsJsonRef.current) {
       paramsJsonRef.current = r.params;
       const next = parseSchema(r.params);
@@ -186,11 +256,10 @@ export function App() {
         warnings: r.warnings,
         error: r.error,
       }));
-      setConsoleOpen(true); // surface failures immediately
+      setConsoleOpen(true);
     }
   }
 
-  // Console lines with severity, newest section first.
   const consoleLines: { kind: "error" | "warn" | "echo"; text: string }[] = [];
   if (status.error) consoleLines.push({ kind: "error", text: status.error });
   for (const w of status.warnings.split("\n").filter(Boolean))
@@ -245,7 +314,37 @@ export function App() {
       </header>
 
       <div className="workspace">
-        <div className="editor" ref={editorHost} />
+        <div className="editor-col">
+          <div className="tabs">
+            {files.map((f, i) => (
+              <div
+                key={i}
+                className={`tab ${i === active ? "active" : ""}`}
+                onClick={() => switchTo(i)}
+                onDoubleClick={() => renameFile(i)}
+                title={i === 0 ? "main (rendered)" : "double-click to rename"}
+              >
+                <span>{f.name}</span>
+                {i > 0 && (
+                  <button
+                    className="tab-close"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deleteFile(i);
+                    }}
+                    title="Delete file"
+                  >
+                    ×
+                  </button>
+                )}
+              </div>
+            ))}
+            <button className="tab-add" onClick={addFile} title="Add file">
+              +
+            </button>
+          </div>
+          <div className="editor" ref={editorHost} />
+        </div>
         <div className="viewer">
           <canvas ref={canvasRef} />
         </div>

@@ -146,6 +146,47 @@ pub fn render(source: &str) -> RenderResult {
 /// literal string (`"30"`, `"true"`, `"\"hi\""`, `"[1,2,3]"`).
 #[wasm_bindgen]
 pub fn render_with_params(source: &str, names: Vec<String>, values: Vec<String>) -> RenderResult {
+    render_with_files(source, names, values, Vec::new(), Vec::new())
+}
+
+/// A `FileResolver` over an in-memory map of `path -> source`, for resolving
+/// `include`/`use` in the browser (extra playground files or a bundled library).
+struct MapResolver {
+    files: std::collections::HashMap<String, String>,
+}
+
+impl quito_eval::FileResolver for MapResolver {
+    fn load(&self, path: &str, from_dir: &str) -> Option<quito_eval::LoadedFile> {
+        // Try the path as written, then normalized against the including dir.
+        let joined = if from_dir.is_empty() || from_dir == "." {
+            path.to_string()
+        } else {
+            format!("{from_dir}/{path}")
+        };
+        let key = if self.files.contains_key(path) {
+            path.to_string()
+        } else if self.files.contains_key(&joined) {
+            joined
+        } else {
+            return None;
+        };
+        let source = self.files.get(&key)?.clone();
+        let dir = key.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default();
+        Some(quito_eval::LoadedFile { key: key.clone(), source, dir })
+    }
+}
+
+/// Like [`render_with_params`], but `include`/`use` resolve against an in-memory
+/// set of files (`file_names[i]` → `file_contents[i]`) — the playground's other
+/// files and/or a bundled library.
+#[wasm_bindgen]
+pub fn render_with_files(
+    source: &str,
+    names: Vec<String>,
+    values: Vec<String>,
+    file_names: Vec<String>,
+    file_contents: Vec<String>,
+) -> RenderResult {
     // Parse.
     let program = match quito_syntax::parse(source) {
         Ok(p) => p,
@@ -166,13 +207,13 @@ pub fn render_with_params(source: &str, names: Vec<String>, values: Vec<String>)
         }
     }
 
+    // Build the in-memory file resolver from the parallel arrays.
+    let resolver = MapResolver {
+        files: file_names.into_iter().zip(file_contents).collect(),
+    };
+
     // Evaluate.
-    let eval = match quito_eval::eval_program_with_params(
-        &program,
-        &quito_eval::NullResolver,
-        ".",
-        &overrides,
-    ) {
+    let eval = match quito_eval::eval_program_with_params(&program, &resolver, ".", &overrides) {
         Ok(o) => o,
         Err(e) => return RenderResult::from_error(format!("evaluation error: {}", e.0), String::new(), String::new()),
     };
@@ -347,5 +388,21 @@ v = [1, 2, 3];
             render_with_params(src, vec!["width".to_string()], vec!["4".to_string()]);
         assert!(overridden.ok());
         assert!((overridden.volume() - 400.0).abs() < 1e-6, "vol {}", overridden.volume());
+    }
+
+    #[test]
+    fn render_resolves_files() {
+        // `use` a helper file from the in-memory resolver.
+        let main = "use <lib.scad>\ncube([side(), side(), side()]);";
+        let lib = "function side() = 3;";
+        let r = render_with_files(
+            main,
+            vec![],
+            vec![],
+            vec!["lib.scad".to_string()],
+            vec![lib.to_string()],
+        );
+        assert!(r.ok(), "err: {}", r.error());
+        assert!((r.volume() - 27.0).abs() < 1e-6, "vol {}", r.volume());
     }
 }

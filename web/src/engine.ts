@@ -4,11 +4,13 @@
 // the plan). Results are delivered latest-wins.
 import type { RenderRequest, RenderResponse } from "./engineWorker";
 
-/** A pending render request: source plus parameter overrides. */
+/** A pending render request: source, overrides, and extra files. */
 interface Job {
   source: string;
   names: string[];
   values: string[];
+  fileNames: string[];
+  fileContents: string[];
 }
 
 export class Engine {
@@ -31,12 +33,18 @@ export class Engine {
       if (this.pending !== null) {
         const job = this.pending;
         this.pending = null;
-        this.render(job.source, job.names, job.values);
+        this.render(job.source, job.names, job.values, job.fileNames, job.fileContents);
       }
     };
   }
 
-  render(source: string, names: string[] = [], values: string[] = []) {
+  render(
+    source: string,
+    names: string[] = [],
+    values: string[] = [],
+    fileNames: string[] = [],
+    fileContents: string[] = [],
+  ) {
     if (this.busy) {
       // Cancel the in-flight render by terminating; respawn fresh.
       this.worker.terminate();
@@ -44,6 +52,13 @@ export class Engine {
     }
     this.busy = true;
     this.seq += 1;
-    this.worker.postMessage({ seq: this.seq, source, names, values } satisfies RenderRequest);
+    this.worker.postMessage({
+      seq: this.seq,
+      source,
+      names,
+      values,
+      fileNames,
+      fileContents,
+    } satisfies RenderRequest);
   }
 }
