@@ -30,6 +30,7 @@ clap = { version = "4", features = ["derive"] }
 rustc-hash = "2"
 ttf-parser = "0.25"
 earcutr = "0.4"
+geo = "0.29"
 
 [profile.release]
 opt-level = 3

@@ -1,17 +1,194 @@
-//! 2D shapes (contours), polygon triangulation, and 2D→3D extrusion.
+//! 2D shapes (contours), polygon triangulation, 2D boolean ops, and 2D→3D
+//! extrusion.
 //!
-//! A 2D node renders to a set of closed contours (`Vec<Contour>`); the first is
-//! the outer boundary, any others are treated as holes. Extrusions turn these
-//! into a mesh. 2D boolean ops (difference/intersection/offset/hull) are not
-//! implemented yet — unions concatenate contours.
+//! A 2D node renders to a set of closed contours (`Vec<Contour>`) using even-odd
+//! nesting (outers + holes). Boolean ops (union/difference/intersection) go
+//! through the `geo` polygon clipper via [`boolean_2d`]; projection silhouettes
+//! via [`silhouette`].
 
 use crate::mesh::Mesh;
 use crate::tessellate::fragments;
+use geo::{BooleanOps, LineString, MultiPolygon, Polygon};
 use quito_ir::{FragmentSpec, Node};
 use std::f64::consts::PI;
 
 pub type Point2 = [f64; 2];
 pub type Contour = Vec<Point2>;
+
+/// A 2D boolean operation.
+#[derive(Clone, Copy)]
+pub enum Bop {
+    Union,
+    Difference,
+    Intersection,
+}
+
+// ---- contour <-> geo conversions -----------------------------------------
+
+fn to_linestring(c: &Contour) -> LineString<f64> {
+    LineString::from(c.iter().map(|p| (p[0], p[1])).collect::<Vec<_>>())
+}
+
+fn from_linestring(ls: &LineString<f64>) -> Contour {
+    let mut c: Contour = ls.0.iter().map(|p| [p.x, p.y]).collect();
+    if c.len() > 1 && c.first() == c.last() {
+        c.pop(); // geo rings are closed; drop the duplicate
+    }
+    c
+}
+
+/// Group flat even-odd contours into `(outer, holes)` polygons (outers oriented
+/// CCW, holes CW) — the model the clipper needs.
+fn group_contours(contours: &[Contour]) -> Vec<(Contour, Vec<Contour>)> {
+    let valid: Vec<&Contour> = contours.iter().filter(|c| c.len() >= 3).collect();
+    let n = valid.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let rep: Vec<Point2> = valid.iter().map(|c| c[0]).collect();
+    let depth: Vec<usize> = (0..n)
+        .map(|i| (0..n).filter(|&j| j != i && point_in_polygon(valid[j], rep[i])).count())
+        .collect();
+    let orient = |c: &Contour, ccw: bool| -> Contour {
+        if (signed_area(c) > 0.0) == ccw {
+            c.clone()
+        } else {
+            c.iter().rev().cloned().collect()
+        }
+    };
+    let mut groups: Vec<(Contour, Vec<Contour>)> = Vec::new();
+    let mut group_of = vec![None; n];
+    for i in 0..n {
+        if depth[i] % 2 == 0 {
+            group_of[i] = Some(groups.len());
+            groups.push((orient(valid[i], true), Vec::new()));
+        }
+    }
+    for h in 0..n {
+        if depth[h] % 2 == 1 {
+            if let Some(p) =
+                (0..n).find(|&p| depth[p] + 1 == depth[h] && point_in_polygon(valid[p], rep[h]))
+            {
+                if let Some(g) = group_of[p] {
+                    groups[g].1.push(orient(valid[h], false));
+                }
+            }
+        }
+    }
+    groups
+}
+
+fn to_multipolygon(contours: &[Contour]) -> MultiPolygon<f64> {
+    let polys = group_contours(contours)
+        .into_iter()
+        .map(|(outer, holes)| {
+            Polygon::new(to_linestring(&outer), holes.iter().map(to_linestring).collect())
+        })
+        .collect();
+    MultiPolygon::new(polys)
+}
+
+fn from_multipolygon(mp: MultiPolygon<f64>) -> Vec<Contour> {
+    let mut out = Vec::new();
+    for poly in mp {
+        out.push(from_linestring(poly.exterior()));
+        for hole in poly.interiors() {
+            out.push(from_linestring(hole));
+        }
+    }
+    out.retain(|c| c.len() >= 3);
+    out
+}
+
+// ---- 2D boolean ops -------------------------------------------------------
+
+/// Apply a boolean op between two contour sets, returning result contours
+/// (outers + holes, even-odd).
+pub fn boolean_2d(a: &[Contour], b: &[Contour], op: Bop) -> Vec<Contour> {
+    let (ma, mb) = (to_multipolygon(a), to_multipolygon(b));
+    let r = match op {
+        Bop::Union => ma.union(&mb),
+        Bop::Difference => ma.difference(&mb),
+        Bop::Intersection => ma.intersection(&mb),
+    };
+    from_multipolygon(r)
+}
+
+/// Balanced (divide-and-conquer) union of many multipolygons — far faster than a
+/// linear fold when unioning e.g. every triangle of a projection.
+fn union_multi(mut items: Vec<MultiPolygon<f64>>) -> Option<MultiPolygon<f64>> {
+    if items.is_empty() {
+        return None;
+    }
+    while items.len() > 1 {
+        let mut next = Vec::with_capacity(items.len().div_ceil(2));
+        let mut it = items.into_iter();
+        while let Some(a) = it.next() {
+            match it.next() {
+                Some(b) => next.push(a.union(&b)),
+                None => next.push(a),
+            }
+        }
+        items = next;
+    }
+    items.into_iter().next()
+}
+
+/// Union of several contour sets (e.g. the children of a 2D `union`).
+pub fn union_all(sets: &[Vec<Contour>]) -> Vec<Contour> {
+    let mps: Vec<_> = sets.iter().filter(|s| !s.is_empty()).map(|s| to_multipolygon(s)).collect();
+    union_multi(mps).map(from_multipolygon).unwrap_or_default()
+}
+
+/// The z=0 silhouette of a mesh (`projection(cut=false)`): union every triangle
+/// projected onto the XY plane.
+pub fn silhouette(mesh: &Mesh) -> Vec<Contour> {
+    let mut polys = Vec::new();
+    for t in &mesh.tris {
+        let a = mesh.verts[t[0] as usize];
+        let b = mesh.verts[t[1] as usize];
+        let c = mesh.verts[t[2] as usize];
+        let area = ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])).abs();
+        if area < 1e-9 {
+            continue; // edge-on triangle projects to a line
+        }
+        polys.push(MultiPolygon::new(vec![Polygon::new(
+            LineString::from(vec![(a[0], a[1]), (b[0], b[1]), (c[0], c[1])]),
+            vec![],
+        )]));
+    }
+    union_multi(polys).map(from_multipolygon).unwrap_or_default()
+}
+
+/// 2D convex hull (Andrew's monotone chain) of a point set → one CCW contour.
+pub fn hull_2d(mut pts: Vec<Point2>) -> Vec<Contour> {
+    pts.sort_by(|a, b| a[0].partial_cmp(&b[0]).unwrap().then(a[1].partial_cmp(&b[1]).unwrap()));
+    pts.dedup();
+    if pts.len() < 3 {
+        return Vec::new();
+    }
+    let cross = |o: Point2, a: Point2, b: Point2| {
+        (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+    };
+    let mut lower: Vec<Point2> = Vec::new();
+    for &p in &pts {
+        while lower.len() >= 2 && cross(lower[lower.len() - 2], lower[lower.len() - 1], p) <= 0.0 {
+            lower.pop();
+        }
+        lower.push(p);
+    }
+    let mut upper: Vec<Point2> = Vec::new();
+    for &p in pts.iter().rev() {
+        while upper.len() >= 2 && cross(upper[upper.len() - 2], upper[upper.len() - 1], p) <= 0.0 {
+            upper.pop();
+        }
+        upper.push(p);
+    }
+    lower.pop();
+    upper.pop();
+    lower.extend(upper);
+    vec![lower]
+}
 
 /// Render a 2D subtree to contours.
 pub fn render2d(node: &Node) -> Vec<Contour> {
@@ -32,12 +209,66 @@ pub fn render2d(node: &Node) -> Vec<Contour> {
             let (s, c) = (a.sin(), a.cos());
             map_contours(render2d(child), |p| [p[0] * c - p[1] * s, p[0] * s + p[1] * c])
         }
-        // Union/group: concatenate contours (no clipping yet).
+        // Union/group: clip overlaps (proper 2D union).
         Node::Group(children) | Node::Union(children) => {
-            children.iter().flat_map(|c| render2d(c)).collect()
+            let sets: Vec<Vec<Contour>> = children.iter().map(render2d).collect();
+            union_all(&sets)
         }
+        Node::Difference(children) => {
+            let Some((first, rest)) = children.split_first() else {
+                return Vec::new();
+            };
+            let a = render2d(first);
+            if rest.is_empty() {
+                return a;
+            }
+            let subtract = union_all(&rest.iter().map(render2d).collect::<Vec<_>>());
+            boolean_2d(&a, &subtract, Bop::Difference)
+        }
+        Node::Intersection(children) => {
+            let mut it = children.iter().map(render2d);
+            let Some(mut acc) = it.next() else {
+                return Vec::new();
+            };
+            for c in it {
+                acc = boolean_2d(&acc, &c, Bop::Intersection);
+            }
+            acc
+        }
+        Node::Hull(children) => {
+            let pts: Vec<Point2> = children.iter().flat_map(render2d).flatten().collect();
+            hull_2d(pts)
+        }
+        Node::Minkowski(children) => {
+            let sets: Vec<Vec<Contour>> =
+                children.iter().map(render2d).filter(|s| !s.is_empty()).collect();
+            minkowski_2d(sets)
+        }
+        // A projection anywhere in a 2D subtree flattens its 3D child; rendered
+        // via the geometry layer, not here (needs a mesh). Handled by render_node.
         _ => Vec::new(),
     }
+}
+
+/// Convex 2D Minkowski sum of several contour sets (hull of pairwise vertex
+/// sums — exact for convex operands, e.g. `minkowski(){ square; circle; }`).
+fn minkowski_2d(sets: Vec<Vec<Contour>>) -> Vec<Contour> {
+    let mut it = sets.into_iter();
+    let Some(first) = it.next() else {
+        return Vec::new();
+    };
+    let mut acc: Vec<Point2> = first.into_iter().flatten().collect();
+    for s in it {
+        let bpts: Vec<Point2> = s.into_iter().flatten().collect();
+        let mut sums = Vec::with_capacity(acc.len() * bpts.len());
+        for a in &acc {
+            for b in &bpts {
+                sums.push([a[0] + b[0], a[1] + b[1]]);
+            }
+        }
+        acc = hull_2d(sums).into_iter().flatten().collect();
+    }
+    hull_2d(acc)
 }
 
 fn map_contours(cs: Vec<Contour>, f: impl Fn(Point2) -> Point2) -> Vec<Contour> {
@@ -155,10 +386,21 @@ fn chain_segments(segs: Vec<(Point2, Point2)>) -> Vec<Contour> {
 /// refinement).
 pub fn offset(contours: &[Contour], r: f64, delta: f64, chamfer: bool, frags: FragmentSpec) -> Vec<Contour> {
     let (amt, rounded) = if r != 0.0 { (r, true) } else { (delta, false) };
-    contours
+    // Holes (odd nesting depth) offset the opposite way: growing the solid
+    // outward shrinks its holes.
+    let valid: Vec<&Contour> = contours.iter().filter(|c| c.len() >= 3).collect();
+    let n = valid.len();
+    let rep: Vec<Point2> = valid.iter().map(|c| c[0]).collect();
+    let depth: Vec<usize> = (0..n)
+        .map(|i| (0..n).filter(|&j| j != i && point_in_polygon(valid[j], rep[i])).count())
+        .collect();
+    valid
         .iter()
-        .filter(|c| c.len() >= 3)
-        .map(|c| offset_one(c, amt, rounded, chamfer, frags))
+        .enumerate()
+        .map(|(i, c)| {
+            let a = if depth[i] % 2 == 1 { -amt } else { amt };
+            offset_one(c, a, rounded, chamfer, frags)
+        })
         .collect()
 }
 

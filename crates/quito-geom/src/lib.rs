@@ -105,7 +105,41 @@ fn render_node(node: &Node, ctx: &mut Ctx) -> Result<Mesh, GeomError> {
 }
 
 /// The actual per-variant renderer (children go back through [`render_node`]).
+/// Is `node` a 2D subtree (result lies in the XY plane)?
+fn is_2d(node: &Node) -> bool {
+    use Node::*;
+    match node {
+        Square { .. } | Circle { .. } | Polygon { .. } | Offset { .. } | Projection { .. } => true,
+        Cube { .. } | Sphere { .. } | Cylinder { .. } | Polyhedron { .. } | Import { .. }
+        | LinearExtrude { .. } | RotateExtrude { .. } | Empty => false,
+        Translate { child, .. }
+        | Rotate { child, .. }
+        | Scale { child, .. }
+        | Mirror { child, .. }
+        | MultMatrix { child, .. }
+        | Resize { child, .. } => is_2d(child),
+        Group(cs) | Union(cs) | Difference(cs) | Intersection(cs) | Hull(cs) | Minkowski(cs) => {
+            cs.iter().any(is_2d)
+        }
+    }
+}
+
 fn render_uncached(node: &Node, ctx: &mut Ctx) -> Result<Mesh, GeomError> {
+    // 2D CSG (boolean/hull/minkowski/group of 2D shapes) is clipped in the 2D
+    // plane and returned as a flat mesh — the 3D kernel can't handle the
+    // coplanar, zero-volume meshes these would otherwise produce.
+    if matches!(
+        node,
+        Node::Group(_)
+            | Node::Union(_)
+            | Node::Difference(_)
+            | Node::Intersection(_)
+            | Node::Hull(_)
+            | Node::Minkowski(_)
+    ) && is_2d(node)
+    {
+        return Ok(shape2d::flat_mesh(&shape2d::render2d(node)));
+    }
     match node {
         Node::Empty => Ok(Mesh::new()),
         Node::Cube { size, center } => Ok(cube(*size, *center)),
@@ -148,7 +182,7 @@ fn render_uncached(node: &Node, ctx: &mut Ctx) -> Result<Mesh, GeomError> {
             let contours = if *cut {
                 shape2d::slice_z0(&mesh)
             } else {
-                Vec::new() // silhouette needs the 2D clipper
+                shape2d::silhouette(&mesh)
             };
             Ok(shape2d::flat_mesh(&contours))
         }
@@ -419,7 +453,7 @@ fn extrude_csg(
             let contours = if *cut {
                 shape2d::slice_z0(&mesh)
             } else {
-                Vec::new()
+                shape2d::silhouette(&mesh)
             };
             Ok(extrude(&contours))
         }
@@ -665,6 +699,58 @@ mod tests {
         }))
         .unwrap();
         assert!((m.volume() - 36.0).abs() < 1e-6, "inset {}", m.volume());
+    }
+
+    /// Total (unsigned) area of a flat 2D mesh at z=0.
+    fn flat_area(m: &Mesh) -> f64 {
+        m.tris
+            .iter()
+            .map(|t| {
+                let p = |i: u32| m.verts[i as usize];
+                let (a, b, c) = (p(t[0]), p(t[1]), p(t[2]));
+                ((b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])).abs() / 2.0
+            })
+            .sum()
+    }
+
+    #[test]
+    fn bare_2d_difference() {
+        // square(10) minus a 4×4 square hole → flat area 100 − 16 = 84 (the 3D
+        // kernel would produce garbage on these coplanar flat meshes).
+        let node = Node::Difference(vec![
+            Node::Square { size: [10.0, 10.0], center: false },
+            Node::Translate {
+                v: [3.0, 3.0, 0.0],
+                child: Box::new(Node::Square { size: [4.0, 4.0], center: false }),
+            },
+        ]);
+        let m = render(&node).unwrap();
+        assert!((flat_area(&m) - 84.0).abs() < 1e-6, "area {}", flat_area(&m));
+    }
+
+    #[test]
+    fn bare_2d_intersection_and_union() {
+        let sq = |x: f64, y: f64| Node::Translate {
+            v: [x, y, 0.0],
+            child: Box::new(Node::Square { size: [10.0, 10.0], center: false }),
+        };
+        // Overlap of two squares offset by 5 → 5×5 = 25.
+        let inter = Node::Intersection(vec![sq(0.0, 0.0), sq(5.0, 5.0)]);
+        assert!((flat_area(&render(&inter).unwrap()) - 25.0).abs() < 1e-6);
+        // Union of the same two → 200 − 25 overlap = 175.
+        let uni = Node::Union(vec![sq(0.0, 0.0), sq(5.0, 5.0)]);
+        assert!((flat_area(&render(&uni).unwrap()) - 175.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn projection_silhouette() {
+        // projection(cut=false) of a 10×20×30 box → its 10×20 footprint (200).
+        let node = Node::Projection {
+            cut: false,
+            child: Box::new(Node::Cube { size: [10.0, 20.0, 30.0], center: false }),
+        };
+        let m = render(&node).unwrap();
+        assert!((flat_area(&m) - 200.0).abs() < 1e-3, "area {}", flat_area(&m));
     }
 
     #[test]

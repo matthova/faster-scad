@@ -560,11 +560,6 @@ impl Interp<'_> {
             "projection" => {
                 let m = self.bind_named(&["cut"], args)?;
                 let cut = m.get("cut").map(Value::truthy).unwrap_or(false);
-                if !cut {
-                    self.warnings.push(
-                        "projection(cut=false) not yet supported (needs 2D clipper)".into(),
-                    );
-                }
                 Ok(Node::Projection {
                     cut,
                     child: Box::new(Node::group(self.eval_children(children)?)),
