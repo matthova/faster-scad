@@ -73,6 +73,21 @@ body {
   cursor: default;
 }
 
+.examples-select {
+  background: #23272f;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin-left: 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.examples-select:hover {
+  border-color: var(--accent);
+}
+
 .workspace {
   display: grid;
   grid-template-columns: minmax(260px, 36%) 1fr auto;

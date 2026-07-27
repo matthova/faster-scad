@@ -11,6 +11,7 @@ import { buildBinarySTL, buildOFF, buildOBJ, build3MF, buildAMF, downloadBlob } 
 import { CustomizerPanel } from "./CustomizerPanel";
 import { parseSchema, toLiteral, type Param, type ParamValue } from "./customizer";
 import { loadProject, saveProject, clearProject, type File } from "./project";
+import { EXAMPLES } from "./examples";
 import { decodeSharedProject, shareUrl } from "./share";
 import { resolveClosure } from "./library";
 import {
@@ -314,6 +315,29 @@ export function App() {
     requestRenderRef.current();
   }
 
+  /** Replace the whole project with a curated example (from the Examples menu). */
+  function loadExample(idx: number) {
+    const ex = EXAMPLES[idx];
+    if (!ex) return;
+    if (!window.confirm(`Load the "${ex.label}" example? This replaces the current project.`))
+      return;
+    sharedRef.current = null;
+    try {
+      window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    } catch {
+      /* ignore */
+    }
+    const fresh = ex.files.map((f) => ({ ...f }));
+    filesRef.current = fresh;
+    overridesRef.current = {};
+    setFiles(fresh);
+    setOverrides({});
+    activeRef.current = -1;
+    switchTo(0);
+    persist();
+    requestRenderRef.current();
+  }
+
   function addFile() {
     const fs = filesRef.current;
     let n = fs.length;
@@ -502,6 +526,24 @@ export function App() {
         </div>
         <div className="actions">
           <button onClick={newProject}>New</button>
+          <select
+            className="examples-select"
+            aria-label="Load example"
+            value=""
+            onChange={(e) => {
+              const i = Number(e.target.value);
+              if (e.target.value !== "") loadExample(i);
+            }}
+          >
+            <option value="" disabled>
+              Examples…
+            </option>
+            {EXAMPLES.map((ex, i) => (
+              <option key={i} value={i}>
+                {ex.label}
+              </option>
+            ))}
+          </select>
           {TAURI && <button onClick={openNative}>Open…</button>}
           {!TAURI && (
             <button onClick={onShare} title="Copy a shareable link to this project">

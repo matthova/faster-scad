@@ -81,6 +81,8 @@ build:wasm && npm run dev`; see [`web/`](web/README.md).
   in the playground, the desktop app, and the CLI. 2D profiles can be imported
   too (`import("foo.dxf")` / `import("foo.svg")`).
 - **Console** — echo / warnings / errors, color-coded.
+- **Examples** — an Examples menu loads curated sample projects (CSG, twisted
+  extrusion, text, a 2D gasket for DXF/SVG, a `$t` animation, and a BOSL2 model).
 - **Persistence** — files, parameter values, and the active tab autosave to
   `localStorage` and restore on reload.
 - **PWA** — installable, and the app shell + engine are cached for offline use.
