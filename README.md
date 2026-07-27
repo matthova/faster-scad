@@ -74,6 +74,25 @@ built with C-style-`for` comprehensions — renders to **17,408 triangles,
 watertight, volume 13.596**, identical in triangle count and matching in volume
 to OpenSCAD 2024.12 (regression-tested in CI).
 
+### Benchmarks (dual baseline)
+
+Full-process wall-clock, best of 3 runs, on an Apple Silicon laptop, comparing
+the release `quito` binary against OpenSCAD 2024.12's two render backends on the
+same `.scad` files (`cargo build --release && cargo run -p xtask -- bench`):
+
+| model | quito | OpenSCAD (CGAL) | speed-up | OpenSCAD (Manifold) | speed-up |
+|---|--:|--:|--:|--:|--:|
+| lamp shade (analytic polyhedron) | 55 ms | 181 ms | **3.3×** | 176 ms | **3.2×** |
+| booleans (grid of holes in a slab) | 54 ms | 19,576 ms | **360×** | 169 ms | **3.1×** |
+| rounded (minkowski + hull) | 25 ms | 354 ms | **14×** | 53 ms | **2.2×** |
+| gears (extrude/revolve heavy) | 17 ms | 1,893 ms | **114×** | 60 ms | **3.6×** |
+
+So Quito clears the **≥10× vs OpenSCAD 2021.01** goal (the 2021.01 renderer is
+CGAL, the left baseline) by a wide margin on geometry-heavy work, and is a solid
+**~3× ahead of OpenSCAD's newest Manifold backend** — while both baselines still
+pay process-startup overhead that dominates the smallest models, so these are
+conservative. Models live in [`benches/models/`](benches/models/).
+
 ## Build & run
 
 Requires a Rust toolchain and `cmake` (for the C++ Manifold backend).

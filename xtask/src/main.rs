@@ -12,6 +12,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Instant;
 
 fn main() {
     let mode = std::env::args().nth(1).unwrap_or_else(|| "echo".into());
@@ -28,6 +29,7 @@ fn main() {
             }
         }
         "bosl2" => run_bosl2(&root),
+        "bench" => run_bench(&root),
         other => {
             eprintln!("unknown command: {other}");
             eprintln!("usage: xtask [bless-echo|echo]");
@@ -70,6 +72,74 @@ fn run_bosl2(root: &Path) {
     if !failed.is_empty() {
         println!("  failing: {}", failed.join(", "));
     }
+}
+
+/// Dual-baseline benchmark (M3 exit): time the release `quito` binary against
+/// OpenSCAD's two backends (CGAL default + Manifold) on a set of pinned models,
+/// full process wall-clock, best of N runs. Requires `cargo build --release`
+/// first and `openscad` on PATH.
+fn run_bench(root: &Path) {
+    const RUNS: usize = 3;
+    let quito = root.join("target/release/quito");
+    if !quito.exists() {
+        eprintln!("release binary not found at {} — run `cargo build --release` first", quito.display());
+        std::process::exit(2);
+    }
+    let out = std::env::temp_dir().join("quito_bench.stl");
+    let models: [(&str, &str); 4] = [
+        ("lamp-shade", "examples/lamp.scad"),
+        ("booleans", "benches/models/booleans.scad"),
+        ("rounded", "benches/models/rounded.scad"),
+        ("gears", "benches/models/gears.scad"),
+    ];
+
+    println!("Dual-baseline benchmark — best of {RUNS} runs, full-process wall-clock (ms).\n");
+    println!(
+        "{:<12} {:>10} {:>12} {:>8} {:>12} {:>8}",
+        "model", "quito", "oscad-CGAL", "×", "oscad-Mfld", "×"
+    );
+    println!("{}", "-".repeat(66));
+
+    for (name, rel) in models {
+        let path = root.join(rel);
+        let q = bench_cmd(quito.to_str().unwrap(), &[path.to_str().unwrap(), "-o", out.to_str().unwrap()], RUNS);
+        let cgal = bench_cmd("openscad", &["-o", out.to_str().unwrap(), path.to_str().unwrap()], RUNS);
+        let mfld = bench_cmd(
+            "openscad",
+            &["--backend=manifold", "-o", out.to_str().unwrap(), path.to_str().unwrap()],
+            RUNS,
+        );
+        let fmt = |t: Option<f64>| t.map(|v| format!("{v:.0}")).unwrap_or_else(|| "FAIL".into());
+        let speed = |base: Option<f64>| match (base, q) {
+            (Some(b), Some(qq)) if qq > 0.0 => format!("{:.1}", b / qq),
+            _ => "-".into(),
+        };
+        println!(
+            "{:<12} {:>10} {:>12} {:>8} {:>12} {:>8}",
+            name,
+            fmt(q),
+            fmt(cgal),
+            speed(cgal),
+            fmt(mfld),
+            speed(mfld),
+        );
+    }
+    println!("\n(× = OpenSCAD time / quito time; higher is quito being faster.)");
+}
+
+/// Best-of-`runs` full-process wall-clock in ms; `None` if the command fails.
+fn bench_cmd(cmd: &str, args: &[&str], runs: usize) -> Option<f64> {
+    let mut best: Option<f64> = None;
+    for _ in 0..runs {
+        let t0 = Instant::now();
+        let status = Command::new(cmd).args(args).output();
+        let ms = t0.elapsed().as_secs_f64() * 1000.0;
+        match status {
+            Ok(o) if o.status.success() => best = Some(best.map_or(ms, |b| b.min(ms))),
+            _ => return best, // command missing or errored
+        }
+    }
+    best
 }
 
 /// Extract the OpenSCAD source from a BOSL2 `.scadtest` `script = '''...'''` block.
