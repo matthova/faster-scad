@@ -50,7 +50,14 @@ impl FileResolver for NullResolver {
 }
 
 const MAX_RANGE_ITERS: usize = 10_000_000;
-const MAX_CALL_DEPTH: usize = 20_000;
+/// Max function/module call nesting before erroring — a graceful error instead
+/// of a native stack overflow. Each release frame is ~1.6 KiB, so 6000 fits the
+/// CLI's 256 MiB worker thread with wide margin; callers must run eval on an
+/// ample stack (the CLI does). In the browser, V8's own wasm call-frame limit
+/// trips first and is caught by the engine wrapper (the tab never crashes);
+/// deep *tail* recursion is turned into a loop by TCE and is unbounded. Sits
+/// just above OpenSCAD's own limit (it accepts ~5000-deep recursion).
+const MAX_CALL_DEPTH: usize = 6_000;
 
 #[derive(Debug, Clone, thiserror::Error)]
 #[error("{0}")]
@@ -2234,6 +2241,48 @@ fn cross(args: &[Value]) -> Value {
 mod tests {
     use super::*;
     use quito_syntax::parse;
+
+    /// Malformed and adversarial inputs must fail gracefully (parse error or
+    /// eval error), never panic or overflow the stack — this is what keeps the
+    /// browser engine from taking down the tab. Guards against regressions.
+    #[test]
+    fn adversarial_inputs_never_panic() {
+        let deep_open = "(".repeat(3000);
+        let deep_list = format!("echo({}1{});", "[".repeat(1500), "]".repeat(1500));
+        let cases: Vec<String> = vec![
+            "x=1e999999; echo(x);".into(),
+            "echo(1/0); echo(0/0); echo(5%0);".into(),
+            "function f(x)=f(x); echo(f(1));".into(),        // infinite tail recursion
+            "function g(n)=n<=0?0:1+g(n-1); echo(g(100000));".into(), // deep non-tail
+            "a=[]; echo(a[999999999999]);".into(),
+            "echo(chr(-1), chr(1114112)); echo(\"abc\"[-5]);".into(),
+            "echo([for(i=[0:1:1e9]) i]);".into(),           // huge range (capped)
+            "echo(2^2^2^2^2);".into(),
+            "echo(\"日本語\"[1]); echo(len(\"🎉\"));".into(),
+            "polygon([[0,0]]); linear_extrude(-5) square(10);".into(),
+            "echo(concat(), str(), lookup(5,[]));".into(),
+            "for(i=[0:-1:10]) cube(1);".into(),
+            deep_open,       // unbalanced parens
+            deep_list,       // deeply nested list
+            "".into(),       // empty
+            "\u{0}\u{1}garbage \" unterminated".into(),
+        ];
+        // Run on a production-sized stack (the CLI uses 256 MiB, wasm 64 MiB);
+        // the default 2 MiB test thread is smaller than any real deployment.
+        std::thread::Builder::new()
+            .stack_size(256 << 20)
+            .spawn(move || {
+                for src in &cases {
+                    // parse may Err; if it parses, eval may Err — neither panics.
+                    if let Ok(prog) = parse(src) {
+                        let _ = eval_program(&prog);
+                    }
+                }
+            })
+            .unwrap()
+            .join()
+            .expect("adversarial inputs must not panic or overflow the stack");
+    }
 
     fn eval(src: &str) -> EvalOutput {
         eval_program(&parse(src).unwrap()).unwrap()
