@@ -1,8 +1,9 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { lezer } from "@lezer/generator/rollup";
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), lezer()],
   base: "./",
   worker: {
     format: "es",

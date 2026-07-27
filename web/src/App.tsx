@@ -3,7 +3,7 @@ import { EditorView, keymap } from "@codemirror/view";
 import { EditorState } from "@codemirror/state";
 import { basicSetup } from "codemirror";
 import { indentWithTab } from "@codemirror/commands";
-import { scad } from "./scadLang";
+import { openscad } from "./lang/openscad";
 import { Viewer } from "./viewer";
 import { Engine } from "./engine";
 import type { RenderResponse } from "./engineWorker";
@@ -86,7 +86,7 @@ export function App() {
         extensions: [
           basicSetup,
           keymap.of([indentWithTab]),
-          scad,
+          openscad(),
           EditorView.theme({
             "&": { height: "100%", fontSize: "13px" },
             ".cm-scroller": { fontFamily: "ui-monospace, Menlo, monospace" },
