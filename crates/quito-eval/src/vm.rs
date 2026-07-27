@@ -402,6 +402,15 @@ pub fn run(
     let mut ip = 0usize;
     let mut iters = 0usize;
     let code = &chunk.code;
+    // Whether this chunk's `TailCall`s (which the compiler only emits for the
+    // function's own name) actually resolve to this same closure. It's
+    // loop-invariant for the whole run — the scope chain is fixed to `f.env` —
+    // so resolve it once instead of on every tail iteration.
+    let tail_is_self = f
+        .name
+        .as_deref()
+        .and_then(|n| interp.lookup_func(n))
+        .is_some_and(|g| Rc::ptr_eq(&g, f));
     loop {
         match &code[ip] {
             Op::Const(i) => stack.push(chunk.consts[*i as usize].clone()),
@@ -421,7 +430,37 @@ pub fn run(
             Op::Bin(op) => {
                 let r = stack.pop().unwrap_or(Value::Undef);
                 let l = stack.pop().unwrap_or(Value::Undef);
-                stack.push(value::binary(*op, l, r));
+                // Fast path for the overwhelmingly common number-op-number case,
+                // bypassing `value::binary`'s layered type dispatch. Must match
+                // its semantics exactly — in particular NaN comparisons yield
+                // `undef` (via `partial_cmp`), not `false`.
+                if let (Value::Number(a), Value::Number(b)) = (&l, &r) {
+                    let (a, b) = (*a, *b);
+                    let v = match op {
+                        BinOp::Add => Value::Number(a + b),
+                        BinOp::Sub => Value::Number(a - b),
+                        BinOp::Mul => Value::Number(a * b),
+                        BinOp::Div => Value::Number(a / b),
+                        BinOp::Mod => Value::Number(a % b),
+                        BinOp::Pow => Value::Number(a.powf(b)),
+                        BinOp::Eq => Value::Bool(a == b),
+                        BinOp::Ne => Value::Bool(a != b),
+                        BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => match a.partial_cmp(&b) {
+                            Some(o) => Value::Bool(match op {
+                                BinOp::Lt => o.is_lt(),
+                                BinOp::Le => o.is_le(),
+                                BinOp::Gt => o.is_gt(),
+                                _ => o.is_ge(),
+                            }),
+                            None => Value::Undef,
+                        },
+                        // And/Or are compiled to jumps and never reach here.
+                        BinOp::And | BinOp::Or => value::binary(*op, l, r),
+                    };
+                    stack.push(v);
+                } else {
+                    stack.push(value::binary(*op, l, r));
+                }
             }
             Op::Index => {
                 let i = stack.pop().unwrap_or(Value::Undef);
@@ -485,12 +524,8 @@ pub fn run(
                 stack.push(r);
             }
             Op::TailCall(ni, argc) => {
-                let name = &chunk.names[*ni as usize];
-                let is_self = interp
-                    .lookup_func(name)
-                    .is_some_and(|g| Rc::ptr_eq(&g, f));
                 let start = stack.len() - *argc as usize;
-                if is_self {
+                if tail_is_self {
                     // TCE: rebind param slots and loop.
                     let newvals = stack.split_off(start);
                     for (k, v) in newvals.into_iter().enumerate() {
@@ -503,8 +538,10 @@ pub fn run(
                     ip = 0;
                     continue;
                 } else {
+                    // Name resolved to something other than this closure — an
+                    // ordinary call whose result is left on the stack.
                     let argv = stack.split_off(start);
-                    let name = name.clone();
+                    let name = chunk.names[*ni as usize].clone();
                     let r = interp.call_named_values(&name, argv)?;
                     stack.push(r);
                 }

@@ -86,7 +86,7 @@ same `.scad` files (`cargo build --release && cargo run -p xtask -- bench`):
 | booleans (grid of holes in a slab) | 53 ms | 20,000 ms | **377×** | 172 ms | **3.2×** |
 | rounded (minkowski + hull) | 24 ms | 350 ms | **14×** | 52 ms | **2.1×** |
 | gears (extrude/revolve heavy) | 17 ms | 1,925 ms | **113×** | 60 ms | **3.5×** |
-| eval-bound (heavy compute, tiny mesh) | 138 ms | 517 ms | **3.8×** | 523 ms | **3.8×** |
+| eval-bound (heavy compute, tiny mesh) | 97 ms | 517 ms | **5.3×** | 516 ms | **5.3×** |
 
 The **geometric mean across all five models is ~25× vs CGAL** (OpenSCAD
 2021.01's renderer) — clearing the ≥10× goal *including the eval-bound model* —
@@ -96,11 +96,12 @@ so these are conservative. Models live in [`benches/models/`](benches/models/).
 
 The **eval-bound** row — a model that is nearly all interpretation and almost no
 geometry — was a published loss until the M4 **bytecode VM** landed: function
-bodies now compile to slot-based bytecode (tail-calls become jumps), taking it
-from parity (1.1×) to **3.8×**. The tree-walk interpreter remains the reference
-semantics, the fallback for anything the VM doesn't compile (comprehensions,
-closures over locals, named-argument calls), and the differential oracle — so
-the VM only changes timing, never results (24/24 echo oracle unchanged).
+bodies compile to slot-based bytecode (tail-calls become jumps), with an inlined
+number-op-number fast path and a hoisted self-call check, taking it from parity
+(1.1×) to **5.3×**. The tree-walk interpreter remains the reference semantics,
+the fallback for anything the VM doesn't compile (comprehensions, closures over
+locals, named-argument calls), and the differential oracle — so the VM only
+changes timing, never results (24/24 echo oracle unchanged).
 
 #### Warm-edit latency (M4 cache)
 
