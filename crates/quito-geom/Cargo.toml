@@ -9,4 +9,9 @@ rust-version.workspace = true
 [dependencies]
 quito-ir = { workspace = true }
 thiserror = { workspace = true }
+# Pure-Rust CSG kernel — builds on native and wasm32-unknown-unknown.
+boolmesh = "0.1"
+
+# C++ Manifold kernel — native only (does not target wasm32-unknown-unknown).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 manifold-csg = "0.3"

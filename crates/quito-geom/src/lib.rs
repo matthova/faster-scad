@@ -5,7 +5,9 @@ mod kernel;
 mod mesh;
 mod tessellate;
 
-pub use kernel::{Kernel, ManifoldKernel};
+pub use kernel::{BoolmeshKernel, Kernel};
+#[cfg(not(target_arch = "wasm32"))]
+pub use kernel::ManifoldKernel;
 pub use mesh::Mesh;
 pub use tessellate::{cube, cylinder, fragments, sphere};
 
@@ -19,10 +21,18 @@ pub enum GeomError {
     NonManifold(String),
 }
 
-/// Render a CSG tree to a mesh using the default (Manifold) kernel.
+/// Render a CSG tree to a mesh using the default kernel for the target:
+/// C++ Manifold on native, pure-Rust boolmesh on wasm.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn render(node: &Node) -> Result<Mesh, GeomError> {
-    let kernel = ManifoldKernel::new();
-    render_with(node, &kernel)
+    render_with(node, &ManifoldKernel::new())
+}
+
+/// Render a CSG tree to a mesh using the default kernel for the target:
+/// C++ Manifold on native, pure-Rust boolmesh on wasm.
+#[cfg(target_arch = "wasm32")]
+pub fn render(node: &Node) -> Result<Mesh, GeomError> {
+    render_with(node, &BoolmeshKernel::new())
 }
 
 /// Render a CSG tree to a mesh using the given kernel.
@@ -176,5 +186,40 @@ mod tests {
         assert!(m.volume() > 0.0);
         // intersection is smaller than the cube
         assert!(m.volume() < 1000.0);
+    }
+
+    /// Bake-off: the pure-Rust boolmesh kernel must agree with the C++ Manifold
+    /// kernel to within tolerance on a mixed union/difference/intersection model.
+    #[test]
+    fn kernels_agree() {
+        let frags = FragmentSpec { fn_: 48.0, fa: 12.0, fs: 2.0 };
+        let cases = [
+            Node::Union(vec![
+                Node::Cube { size: [10.0, 10.0, 10.0], center: true },
+                Node::Sphere { r: 6.5, frags },
+            ]),
+            Node::Difference(vec![
+                Node::Cube { size: [20.0, 20.0, 20.0], center: true },
+                Node::Cylinder { h: 40.0, r1: 5.0, r2: 5.0, center: true, frags },
+            ]),
+            Node::Intersection(vec![
+                Node::Cube { size: [10.0, 10.0, 10.0], center: true },
+                Node::Sphere { r: 6.0, frags },
+            ]),
+        ];
+        let cpp = ManifoldKernel::new();
+        let rs = BoolmeshKernel::new();
+        for (i, node) in cases.iter().enumerate() {
+            let a = render_with(node, &cpp).unwrap();
+            let b = render_with(node, &rs).unwrap();
+            let rel = (a.volume() - b.volume()).abs() / a.volume().max(1e-9);
+            assert!(
+                rel < 0.005,
+                "case {i}: kernels disagree: cpp={} boolmesh={} (Δ={rel})",
+                a.volume(),
+                b.volume()
+            );
+            assert!(b.signed_volume() > 0.0, "case {i}: boolmesh output inward-facing");
+        }
     }
 }
