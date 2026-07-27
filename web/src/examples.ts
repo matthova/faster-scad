@@ -110,7 +110,7 @@ difference() {
     files: [
       {
         name: "main.scad",
-        content: `// Drag the $t slider in the toolbar to spin this.
+        content: `// Press ▶ (or drag the $t slider) in the toolbar to spin this.
 /* [Turbine] */
 blades = 6;   // [3:12]
 radius = 16;  // [8:30]

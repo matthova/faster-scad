@@ -309,7 +309,26 @@ body {
   width: 90px;
 }
 .anim-val {
-  min-width: 30px;
+  min-width: 38px;
+}
+.anim-play {
+  width: 26px;
+  padding: 2px 0;
+  text-align: center;
+}
+.anim-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.anim-field input[type="number"] {
+  width: 44px;
+  background: var(--panel);
+  color: inherit;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+  padding: 1px 2px;
 }
 
 .export {

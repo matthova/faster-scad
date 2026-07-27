@@ -110,7 +110,9 @@ export function App() {
   const overridesRef = useRef<Record<string, ParamValue>>(saved?.overrides ?? {});
   const paramsJsonRef = useRef("");
   const requestRenderRef = useRef<() => void>(() => {});
+  const renderNowRef = useRef<() => void>(() => {}); // immediate render (animation frames bypass the debounce)
   const timeRef = useRef(0); // $t for animation
+  const stepRef = useRef(0); // current animation frame index (0..steps-1)
 
   const [files, setFiles] = useState<File[]>(filesRef.current);
   const [active, setActive] = useState(activeRef.current);
@@ -130,6 +132,9 @@ export function App() {
   const [is2D, setIs2D] = useState(false);
   const [dims, setDims] = useState<MeshInfo | null>(null);
   const [time, setTime] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [fps, setFps] = useState(15);
+  const [steps, setSteps] = useState(20);
   const [schema, setSchema] = useState<Param[]>([]);
   const [overrides, setOverrides] = useState<Record<string, ParamValue>>(overridesRef.current);
   const [shareMsg, setShareMsg] = useState("");
@@ -189,6 +194,9 @@ export function App() {
       debounceTimer.current = window.setTimeout(renderNow, 150);
     };
     requestRenderRef.current = requestRender;
+    renderNowRef.current = () => {
+      renderNow();
+    };
 
     const view = new EditorView({
       state: EditorState.create({
@@ -238,6 +246,34 @@ export function App() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Animation driver: while playing, advance $t one frame every 1000/fps ms,
+  // wrapping after `steps` frames ($t = frame/steps, matching OpenSCAD). Frames
+  // render immediately (bypassing the edit debounce); the engine's worker-
+  // terminate cancellation drops any frame still rendering when the next fires,
+  // so a slow model just lowers the effective frame rate instead of piling up.
+  useEffect(() => {
+    if (!playing) return;
+    const n = Math.max(1, Math.round(steps));
+    const period = 1000 / Math.max(1, fps);
+    const id = window.setInterval(() => {
+      stepRef.current = (stepRef.current + 1) % n;
+      const t = stepRef.current / n;
+      timeRef.current = t;
+      setTime(t);
+      renderNowRef.current();
+    }, period);
+    return () => window.clearInterval(id);
+  }, [playing, fps, steps]);
+
+  /** Jump to an absolute $t (0–1), syncing the frame index so playback resumes
+   *  from here. Used by the scrub slider. */
+  function seekTime(t: number) {
+    timeRef.current = t;
+    setTime(t);
+    stepRef.current = Math.round(t * Math.max(1, Math.round(steps)));
+    renderNowRef.current();
+  }
 
   /** Replace the rendered (first) file's content — from a native open or an
    *  external-edit reload — updating the editor if that tab is active. */
@@ -568,23 +604,52 @@ export function App() {
             ))}
           </span>
           <button onClick={() => viewerRef.current?.resetView()}>Reset view</button>
-          <label className="anim" title="Animation time $t (0–1)">
-            $t
+          <div className="anim" title="Animation ($t sweeps 0→1)">
+            <button
+              className="anim-play"
+              onClick={() => setPlaying((p) => !p)}
+              title={playing ? "Pause animation" : "Play animation"}
+              aria-label={playing ? "Pause animation" : "Play animation"}
+            >
+              {playing ? "⏸" : "▶"}
+            </button>
             <input
               type="range"
               min={0}
               max={1}
-              step={0.01}
+              step={0.001}
               value={time}
-              onChange={(e) => {
-                const t = parseFloat(e.target.value);
-                setTime(t);
-                timeRef.current = t;
-                requestRenderRef.current();
-              }}
+              onChange={(e) => seekTime(parseFloat(e.target.value))}
+              title="Animation time $t (0–1)"
             />
-            <span className="anim-val">{time.toFixed(2)}</span>
-          </label>
+            <span className="anim-val" title="Current $t">
+              {time.toFixed(3)}
+            </span>
+            <label className="anim-field" title="Frames per second">
+              FPS
+              <input
+                type="number"
+                min={1}
+                max={60}
+                value={fps}
+                onChange={(e) =>
+                  setFps(Math.max(1, Math.min(60, Math.round(parseFloat(e.target.value) || 1))))
+                }
+              />
+            </label>
+            <label className="anim-field" title="Number of frames as $t goes 0→1">
+              Steps
+              <input
+                type="number"
+                min={1}
+                max={1000}
+                value={steps}
+                onChange={(e) =>
+                  setSteps(Math.max(1, Math.min(1000, Math.round(parseFloat(e.target.value) || 1))))
+                }
+              />
+            </label>
+          </div>
           <div className="export">
             <button onClick={() => onDownload(exportFmt)} disabled={status.triangleCount === 0}>
               Export
