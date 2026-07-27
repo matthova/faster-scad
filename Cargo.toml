@@ -28,6 +28,8 @@ thiserror = "2"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 rustc-hash = "2"
+ttf-parser = "0.25"
+earcutr = "0.4"
 
 [profile.release]
 opt-level = 3

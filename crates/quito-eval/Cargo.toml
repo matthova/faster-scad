@@ -11,3 +11,4 @@ quito-syntax = { workspace = true }
 quito-ir = { workspace = true }
 thiserror = { workspace = true }
 rustc-hash = { workspace = true }
+ttf-parser = { workspace = true }

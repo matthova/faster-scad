@@ -668,6 +668,28 @@ mod tests {
     }
 
     #[test]
+    fn extrude_polygon_with_hole() {
+        // A 10×10 square with a centered 4×4 hole (even-odd), extruded 1 mm →
+        // volume 100 − 16 = 84. Exercises the earcut hole triangulation.
+        let points = vec![
+            [0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0], // outer
+            [3.0, 3.0], [3.0, 7.0], [7.0, 7.0], [7.0, 3.0], // hole
+        ];
+        let paths = Some(vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7]]);
+        let node = Node::LinearExtrude {
+            height: 1.0,
+            center: false,
+            twist: 0.0,
+            scale: [1.0, 1.0],
+            slices: 1,
+            child: Box::new(Node::Polygon { points, paths }),
+        };
+        let m = render(&node).unwrap();
+        assert!((m.volume() - 84.0).abs() < 1e-6, "vol {}", m.volume());
+        assert!(m.signed_volume() > 0.0);
+    }
+
+    #[test]
     fn minkowski_rounded_cube() {
         let frags = FragmentSpec { fn_: 24.0, fa: 12.0, fs: 2.0 };
         let node = Node::Minkowski(vec![

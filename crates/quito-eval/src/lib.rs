@@ -6,6 +6,7 @@
 //! that mirrors execution nesting). Function values and module `children()`
 //! both close over their definition / call-site environments.
 
+mod text;
 mod value;
 mod vm;
 
@@ -552,6 +553,7 @@ impl Interp<'_> {
             "square" => self.b_square(args),
             "circle" => self.b_circle(args),
             "polygon" => self.b_polygon(args),
+            "text" => self.b_text(args),
             "linear_extrude" => self.b_linear_extrude(args, children),
             "rotate_extrude" => self.b_rotate_extrude(args, children),
             "offset" => self.b_offset(args, children),
@@ -822,6 +824,31 @@ impl Interp<'_> {
             r,
             frags: self.frag_spec(&m),
         })
+    }
+
+    fn b_text(&mut self, args: &[Arg]) -> EResult<Node> {
+        let m = self.bind_named(&["text", "size", "font"], args)?;
+        let text = m.get("text").map(Value::to_str).unwrap_or_default();
+        let size = m.get("size").and_then(Value::as_number).unwrap_or(10.0);
+        let sopt = |k: &str, d: &str| m.get(k).map(Value::to_str).unwrap_or_else(|| d.to_string());
+        let halign = sopt("halign", "left");
+        let valign = sopt("valign", "baseline");
+        let spacing = m.get("spacing").and_then(Value::as_number).unwrap_or(1.0);
+        let direction = sopt("direction", "ltr");
+        // Curve resolution follows `$fn` (like other curved primitives).
+        let fn_ = self.lookup_var("$fn").as_number().unwrap_or(0.0);
+        let segments = if fn_ >= 3.0 { ((fn_ / 4.0).ceil() as usize).max(2) } else { 8 };
+
+        let (points, paths) = text::text_contours(&text::TextOpts {
+            text: &text,
+            size,
+            halign: &halign,
+            valign: &valign,
+            spacing,
+            direction: &direction,
+            segments,
+        });
+        Ok(Node::Polygon { points, paths: Some(paths) })
     }
 
     fn b_polygon(&mut self, args: &[Arg]) -> EResult<Node> {
@@ -2239,6 +2266,27 @@ mod tests {
              wrap() cube(2);",
         );
         assert_ne!(out.node, Node::Empty, "forwarded cube was lost");
+    }
+
+    #[test]
+    fn text_glyph_outline() {
+        // text() produces a polygon whose bbox matches OpenSCAD's (same font,
+        // same 100/72 scale): "A" at size 10 is ~9.21 × 9.55 mm.
+        let out = eval("text(\"A\", size = 10);");
+        let Node::Polygon { points, paths } = out.node else {
+            panic!("expected polygon, got {:?}", out.node);
+        };
+        assert!(!paths.unwrap().is_empty());
+        let (mut x0, mut x1, mut y0, mut y1) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+        for p in &points {
+            x0 = x0.min(p[0]);
+            x1 = x1.max(p[0]);
+            y0 = y0.min(p[1]);
+            y1 = y1.max(p[1]);
+        }
+        assert!((x1 - x0 - 9.21).abs() < 0.1, "width {}", x1 - x0);
+        assert!((y1 - y0 - 9.55).abs() < 0.1, "height {}", y1 - y0);
+        assert!(y0.abs() < 0.01, "baseline should be y=0, got {y0}");
     }
 
     #[test]

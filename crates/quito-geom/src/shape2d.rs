@@ -325,22 +325,110 @@ fn triangulate_simple(poly: &[Point2]) -> Vec<[usize; 3]> {
     tris
 }
 
-/// A flat mesh of a 2D shape at z=0 (used when a 2D node is the render target).
-pub fn flat_mesh(contours: &[Contour]) -> Mesh {
-    let mut mesh = Mesh::new();
-    for c in contours {
-        let base = mesh.verts.len() as u32;
-        for p in c {
-            mesh.verts.push([p[0], p[1], 0.0]);
+/// Is `pt` inside the simple polygon `poly` (ray-cast, even-odd)?
+fn point_in_polygon(poly: &[Point2], pt: Point2) -> bool {
+    let n = poly.len();
+    let mut inside = false;
+    let mut j = n - 1;
+    for i in 0..n {
+        let (pi, pj) = (poly[i], poly[j]);
+        if ((pi[1] > pt[1]) != (pj[1] > pt[1]))
+            && (pt[0] < (pj[0] - pi[0]) * (pt[1] - pi[1]) / (pj[1] - pi[1]) + pi[0])
+        {
+            inside = !inside;
         }
-        for t in triangulate_simple(c) {
-            mesh.tris.push([base + t[0] as u32, base + t[1] as u32, base + t[2] as u32]);
+        j = i;
+    }
+    inside
+}
+
+/// Prepare a set of contours (with even-odd nesting → outers + holes) for
+/// filling and extrusion. Returns the concatenated vertex list, each contour's
+/// `(start, len)` range in it (outers oriented CCW, holes CW), and the cap
+/// triangulation (indices into the vertex list), with holes cut out via earcut.
+fn prepare(contours: &[Contour]) -> (Vec<Point2>, Vec<(usize, usize)>, Vec<[u32; 3]>) {
+    let valid: Vec<&Contour> = contours.iter().filter(|c| c.len() >= 3).collect();
+    let n = valid.len();
+    if n == 0 {
+        return (Vec::new(), Vec::new(), Vec::new());
+    }
+    // Nesting depth of each contour (how many others contain a point of it).
+    let rep: Vec<Point2> = valid.iter().map(|c| c[0]).collect();
+    let depth: Vec<usize> = (0..n)
+        .map(|i| (0..n).filter(|&j| j != i && point_in_polygon(valid[j], rep[i])).count())
+        .collect();
+
+    // Orient: outers (even depth) CCW, holes (odd depth) CW.
+    let oriented: Vec<Contour> = valid
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let want_ccw = depth[i] % 2 == 0;
+            if (signed_area(c) > 0.0) == want_ccw {
+                (*c).clone()
+            } else {
+                c.iter().rev().cloned().collect()
+            }
+        })
+        .collect();
+
+    let mut points: Vec<Point2> = Vec::new();
+    let mut ranges: Vec<(usize, usize)> = Vec::new();
+    for c in &oriented {
+        ranges.push((points.len(), c.len()));
+        points.extend_from_slice(c);
+    }
+
+    // Cap triangulation: earcut each outer with its immediate holes.
+    let mut cap_tris: Vec<[u32; 3]> = Vec::new();
+    for i in 0..n {
+        if depth[i] % 2 != 0 {
+            continue; // hole; handled by its parent outer
+        }
+        let holes: Vec<usize> = (0..n)
+            .filter(|&h| depth[h] == depth[i] + 1 && point_in_polygon(&oriented[i], rep[h]))
+            .collect();
+
+        let mut flat: Vec<f64> = Vec::new();
+        let mut map: Vec<u32> = Vec::new(); // group vertex index -> global index
+        let mut hole_starts: Vec<usize> = Vec::new();
+        let mut push_ring = |flat: &mut Vec<f64>, map: &mut Vec<u32>, idx: usize| {
+            let (s, len) = ranges[idx];
+            for k in 0..len {
+                let g = (s + k) as u32;
+                flat.push(points[g as usize][0]);
+                flat.push(points[g as usize][1]);
+                map.push(g);
+            }
+        };
+        push_ring(&mut flat, &mut map, i);
+        for &h in &holes {
+            hole_starts.push(map.len());
+            push_ring(&mut flat, &mut map, h);
+        }
+        if let Ok(idx) = earcutr::earcut(&flat, &hole_starts, 2) {
+            for t in idx.chunks(3) {
+                if t.len() == 3 {
+                    cap_tris.push([map[t[0]], map[t[1]], map[t[2]]]);
+                }
+            }
         }
     }
+    (points, ranges, cap_tris)
+}
+
+/// A flat mesh of a 2D shape at z=0 (used when a 2D node is the render target),
+/// with holes cut out (even-odd).
+pub fn flat_mesh(contours: &[Contour]) -> Mesh {
+    let (points, _ranges, cap_tris) = prepare(contours);
+    let mut mesh = Mesh::new();
+    mesh.verts = points.iter().map(|p| [p[0], p[1], 0.0]).collect();
+    mesh.tris = cap_tris;
     mesh
 }
 
-/// `linear_extrude` of the contours to a mesh.
+/// `linear_extrude` of the contours to a mesh, cutting out holes (even-odd) in
+/// the caps and giving every contour (outer and hole) a wall loop.
 pub fn linear_extrude(
     contours: &[Contour],
     height: f64,
@@ -349,38 +437,16 @@ pub fn linear_extrude(
     scale: Point2,
     slices: u32,
 ) -> Mesh {
+    let (points, ranges, cap_tris) = prepare(contours);
     let mut mesh = Mesh::new();
+    if points.is_empty() {
+        return mesh;
+    }
+    let n = points.len();
+    let slices = slices.max(1);
     let z0 = if center { -height / 2.0 } else { 0.0 };
-    for c in contours {
-        extrude_one(&mut mesh, c, z0, height, twist, scale, slices.max(1));
-    }
-    mesh.ensure_outward();
-    mesh
-}
 
-fn extrude_one(
-    mesh: &mut Mesh,
-    contour: &[Point2],
-    z0: f64,
-    height: f64,
-    twist: f64,
-    scale: Point2,
-    slices: u32,
-) {
-    if contour.len() < 3 {
-        return;
-    }
-    // Work CCW so walls and caps are consistently outward.
-    let owned: Vec<Point2>;
-    let contour: &[Point2] = if signed_area(contour) < 0.0 {
-        owned = contour.iter().rev().cloned().collect();
-        &owned
-    } else {
-        contour
-    };
-    let n = contour.len();
-    let base = mesh.verts.len() as u32;
-    // Build `slices+1` rings.
+    // `slices+1` rings of all points, twisted/scaled per layer.
     for layer in 0..=slices {
         let t = layer as f64 / slices as f64;
         let ang = (-twist * t).to_radians();
@@ -388,36 +454,36 @@ fn extrude_one(
         let sx = 1.0 + (scale[0] - 1.0) * t;
         let sy = 1.0 + (scale[1] - 1.0) * t;
         let z = z0 + height * t;
-        for p in contour {
+        for p in &points {
             let (x, y) = (p[0] * sx, p[1] * sy);
             mesh.verts.push([x * c - y * s, x * s + y * c, z]);
         }
     }
-    let ring = |layer: u32, i: usize| base + layer * n as u32 + i as u32;
-    // Walls.
-    for layer in 0..slices {
-        for i in 0..n {
-            let j = (i + 1) % n;
-            let a = ring(layer, i);
-            let b = ring(layer, j);
-            let cc = ring(layer + 1, j);
-            let d = ring(layer + 1, i);
-            mesh.tris.push([a, b, cc]);
-            mesh.tris.push([a, cc, d]);
+    let ring = |layer: u32, i: usize| layer * n as u32 + i as u32;
+
+    // Walls: each contour range forms a loop at every layer.
+    for &(start, len) in &ranges {
+        for layer in 0..slices {
+            for k in 0..len {
+                let i = start + k;
+                let j = start + (k + 1) % len;
+                let (a, b) = (ring(layer, i), ring(layer, j));
+                let (cc, d) = (ring(layer + 1, j), ring(layer + 1, i));
+                mesh.tris.push([a, b, cc]);
+                mesh.tris.push([a, cc, d]);
+            }
         }
     }
-    // Caps: bottom (layer 0, facing -z) and top (last layer, facing +z).
-    let tris = triangulate_simple(contour);
-    for tri in &tris {
-        // bottom reversed
-        mesh.tris.push([ring(0, tri[0]), ring(0, tri[2]), ring(0, tri[1])]);
-        // top
-        mesh.tris.push([
-            ring(slices, tri[0]),
-            ring(slices, tri[1]),
-            ring(slices, tri[2]),
-        ]);
+
+    // Caps: bottom (reversed) + top, holes already removed by earcut.
+    for t in &cap_tris {
+        let (a, b, cc) = (t[0] as usize, t[1] as usize, t[2] as usize);
+        mesh.tris.push([ring(0, a), ring(0, cc), ring(0, b)]);
+        mesh.tris.push([ring(slices, a), ring(slices, b), ring(slices, cc)]);
     }
+
+    mesh.ensure_outward();
+    mesh
 }
 
 /// `rotate_extrude` of the contours around the Z axis.
