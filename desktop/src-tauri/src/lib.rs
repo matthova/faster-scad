@@ -138,6 +138,17 @@ impl FileResolver for CombinedResolver {
     }
 
     fn load_bytes(&self, path: &str, from_dir: &str) -> Option<Vec<u8>> {
+        // In-memory tabs first (text profiles like DXF/SVG), then disk.
+        let joined = if from_dir.is_empty() || from_dir == "." {
+            path.to_string()
+        } else {
+            format!("{from_dir}/{path}")
+        };
+        for key in [path, joined.as_str()] {
+            if let Some(source) = self.files.get(key) {
+                return Some(source.clone().into_bytes());
+            }
+        }
         self.disk.load_bytes(path, from_dir)
     }
 }

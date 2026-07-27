@@ -195,24 +195,35 @@ struct MapResolver {
     files: std::collections::HashMap<String, String>,
 }
 
-impl quito_eval::FileResolver for MapResolver {
-    fn load(&self, path: &str, from_dir: &str) -> Option<quito_eval::LoadedFile> {
-        // Try the path as written, then normalized against the including dir.
+impl MapResolver {
+    /// Resolve a path to a stored key: as written, then normalized against the
+    /// including dir.
+    fn resolve_key(&self, path: &str, from_dir: &str) -> Option<String> {
+        if self.files.contains_key(path) {
+            return Some(path.to_string());
+        }
         let joined = if from_dir.is_empty() || from_dir == "." {
             path.to_string()
         } else {
             format!("{from_dir}/{path}")
         };
-        let key = if self.files.contains_key(path) {
-            path.to_string()
-        } else if self.files.contains_key(&joined) {
-            joined
-        } else {
-            return None;
-        };
+        self.files.contains_key(&joined).then_some(joined)
+    }
+}
+
+impl quito_eval::FileResolver for MapResolver {
+    fn load(&self, path: &str, from_dir: &str) -> Option<quito_eval::LoadedFile> {
+        let key = self.resolve_key(path, from_dir)?;
         let source = self.files.get(&key)?.clone();
         let dir = key.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default();
         Some(quito_eval::LoadedFile { key: key.clone(), source, dir })
+    }
+
+    /// Bytes for `import()` of a text-based profile (DXF/SVG) held in a tab.
+    /// Binary meshes can't be carried as text tabs, so only text files resolve.
+    fn load_bytes(&self, path: &str, from_dir: &str) -> Option<Vec<u8>> {
+        let key = self.resolve_key(path, from_dir)?;
+        self.files.get(&key).map(|s| s.clone().into_bytes())
     }
 }
 
@@ -345,5 +356,32 @@ v = [1, 2, 3];
         );
         assert!(r.ok(), "err: {}", r.error());
         assert!((r.volume() - 27.0).abs() < 1e-6, "vol {}", r.volume());
+    }
+
+    #[test]
+    fn imports_dxf_from_a_tab() {
+        // A DXF profile held in a tab is imported via load_bytes and extruded.
+        let outer = vec![[0.0, 0.0], [10.0, 0.0], [10.0, 20.0], [0.0, 20.0]];
+        let dxf = quito_geom::export_dxf(&[outer]);
+        let r = render_with_files(
+            "linear_extrude(3) import(\"p.dxf\");",
+            vec![],
+            vec![],
+            vec!["p.dxf".to_string()],
+            vec![dxf],
+        );
+        assert!(r.ok(), "err: {}", r.error());
+        assert!((r.volume() - 600.0).abs() < 1e-3, "vol {}", r.volume()); // 10*20*3
+    }
+
+    #[test]
+    fn export_2d_produces_dxf_and_svg() {
+        let src = "square([10, 20]);";
+        let dxf = export_2d(src, vec![], vec![], vec![], vec![], "dxf");
+        assert!(dxf.contains("LWPOLYLINE"), "dxf: {dxf}");
+        let svg = export_2d(src, vec![], vec![], vec![], vec![], "svg");
+        assert!(svg.contains("<svg") && svg.contains("<path"), "svg: {svg}");
+        // A 3D model yields no 2D export.
+        assert!(export_2d("cube(1);", vec![], vec![], vec![], vec![], "dxf").is_empty());
     }
 }
