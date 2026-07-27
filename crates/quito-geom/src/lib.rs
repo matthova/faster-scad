@@ -743,6 +743,20 @@ mod tests {
     }
 
     #[test]
+    fn render2d_mirror_in_boolean() {
+        // A mirror inside a 2D union must keep the mirrored child (regression:
+        // render2d had no Mirror arm, so `mirror() halftooth` vanished — halving
+        // every gear tooth). square [0,1]×[0,2] ∪ its y-mirror [0,1]×[-2,0] = 4.
+        let sq = Node::Square { size: [1.0, 2.0], center: false };
+        let node = Node::Union(vec![
+            sq.clone(),
+            Node::Mirror { v: [0.0, 1.0, 0.0], child: Box::new(sq) },
+        ]);
+        let m = render(&node).unwrap();
+        assert!((flat_area(&m) - 4.0).abs() < 1e-6, "area {}", flat_area(&m));
+    }
+
+    #[test]
     fn projection_silhouette() {
         // projection(cut=false) of a 10×20×30 box → its 10×20 footprint (200).
         let node = Node::Projection {

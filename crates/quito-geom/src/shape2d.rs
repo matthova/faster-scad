@@ -209,6 +209,26 @@ pub fn render2d(node: &Node) -> Vec<Contour> {
             let (s, c) = (a.sin(), a.cos());
             map_contours(render2d(child), |p| [p[0] * c - p[1] * s, p[0] * s + p[1] * c])
         }
+        // 2D reflection across the line through the origin with normal (v.x, v.y).
+        Node::Mirror { v, child } => {
+            let d = v[0] * v[0] + v[1] * v[1];
+            if d == 0.0 {
+                render2d(child)
+            } else {
+                map_contours(render2d(child), |p| {
+                    let t = 2.0 * (p[0] * v[0] + p[1] * v[1]) / d;
+                    [p[0] - t * v[0], p[1] - t * v[1]]
+                })
+            }
+        }
+        // 2D affine: the top-left 2×2 plus the translation column.
+        Node::MultMatrix { m, child } => map_contours(render2d(child), |p| {
+            [
+                m[0][0] * p[0] + m[0][1] * p[1] + m[0][3],
+                m[1][0] * p[0] + m[1][1] * p[1] + m[1][3],
+            ]
+        }),
+        Node::Resize { new, auto, child } => resize2d(render2d(child), *new, *auto),
         // Union/group: clip overlaps (proper 2D union).
         Node::Group(children) | Node::Union(children) => {
             let sets: Vec<Vec<Contour>> = children.iter().map(render2d).collect();
@@ -273,6 +293,40 @@ fn minkowski_2d(sets: Vec<Vec<Contour>>) -> Vec<Contour> {
 
 fn map_contours(cs: Vec<Contour>, f: impl Fn(Point2) -> Point2) -> Vec<Contour> {
     cs.into_iter().map(|c| c.into_iter().map(&f).collect()).collect()
+}
+
+/// 2D `resize`: scale the contours so their bounding box matches `new` (0 = keep;
+/// an `auto` axis with no target adopts the first explicit factor).
+fn resize2d(contours: Vec<Contour>, new: [f64; 3], auto: [bool; 3]) -> Vec<Contour> {
+    let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
+    for c in &contours {
+        for p in c {
+            for i in 0..2 {
+                lo[i] = lo[i].min(p[i]);
+                hi[i] = hi[i].max(p[i]);
+            }
+        }
+    }
+    if lo[0] > hi[0] {
+        return contours;
+    }
+    let size = [hi[0] - lo[0], hi[1] - lo[1]];
+    let mut factor = [1.0; 2];
+    let mut explicit = None;
+    for i in 0..2 {
+        if new[i] > 0.0 && size[i] > 0.0 {
+            factor[i] = new[i] / size[i];
+            explicit.get_or_insert(factor[i]);
+        }
+    }
+    if let Some(f) = explicit {
+        for i in 0..2 {
+            if new[i] == 0.0 && auto[i] {
+                factor[i] = f;
+            }
+        }
+    }
+    map_contours(contours, |p| [p[0] * factor[0], p[1] * factor[1]])
 }
 
 fn square_contour(size: Point2, center: bool) -> Contour {
