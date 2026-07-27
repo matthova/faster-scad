@@ -4,7 +4,7 @@ import { EditorState } from "@codemirror/state";
 import { basicSetup } from "codemirror";
 import { indentWithTab } from "@codemirror/commands";
 import { openscad } from "./lang/openscad";
-import { Viewer } from "./viewer";
+import { Viewer, type MeshInfo, type ViewPreset } from "./viewer";
 import { Engine, export2dBrowser } from "./engine";
 import type { RenderResponse } from "./engineWorker";
 import { buildBinarySTL, buildOFF, buildOBJ, build3MF, buildAMF, downloadBlob } from "./stl";
@@ -68,6 +68,11 @@ module rounded_box(sz, r) {
 
 type ExportFmt = "stl" | "off" | "obj" | "3mf" | "amf" | "dxf" | "svg";
 
+/** Format a bounding-box dimension: whole numbers plain, else up to 2 decimals. */
+function fmtDim(v: number): string {
+  return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, "");
+}
+
 // Formats offered per model dimensionality — 2D profiles export to vector
 // formats, 3D solids to mesh formats.
 const FORMATS_3D: ExportFmt[] = ["stl", "off", "obj", "3mf", "amf"];
@@ -123,6 +128,7 @@ export function App() {
   const [consoleOpen, setConsoleOpen] = useState(false);
   const [exportFmt, setExportFmt] = useState<ExportFmt>("stl");
   const [is2D, setIs2D] = useState(false);
+  const [dims, setDims] = useState<MeshInfo | null>(null);
   const [time, setTime] = useState(0);
   const [schema, setSchema] = useState<Param[]>([]);
   const [overrides, setOverrides] = useState<Record<string, ParamValue>>(overridesRef.current);
@@ -139,7 +145,7 @@ export function App() {
   useEffect(() => {
     if (!canvasRef.current || !editorHost.current) return;
 
-    const viewer = new Viewer(canvasRef.current);
+    const viewer = new Viewer(canvasRef.current, (info) => setDims(info));
     viewerRef.current = viewer;
 
     const engine = TAURI
@@ -550,6 +556,17 @@ export function App() {
               {shareMsg || "Share"}
             </button>
           )}
+          <span className="view-presets">
+            {(["iso", "front", "top", "right"] as ViewPreset[]).map((p) => (
+              <button
+                key={p}
+                onClick={() => viewerRef.current?.setPreset(p)}
+                title={`${p} view`}
+              >
+                {p[0].toUpperCase()}
+              </button>
+            ))}
+          </span>
           <button onClick={() => viewerRef.current?.resetView()}>Reset view</button>
           <label className="anim" title="Animation time $t (0–1)">
             $t
@@ -648,6 +665,7 @@ export function App() {
         <span className="status-main">{status.message}</span>
         {status.ok && (
           <span className="status-meta">
+            {dims && `${fmtDim(dims.x)} × ${fmtDim(dims.y)} × ${fmtDim(dims.z)} mm · `}
             vol {status.volume.toFixed(2)} · {status.ms.toFixed(0)} ms
           </span>
         )}
