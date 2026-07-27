@@ -11,6 +11,10 @@ import { buildBinarySTL, buildOFF, buildOBJ, downloadBlob } from "./stl";
 import { CustomizerPanel } from "./CustomizerPanel";
 import { parseSchema, toLiteral, type Param, type ParamValue } from "./customizer";
 import { loadProject, saveProject, clearProject, type File } from "./project";
+import { resolveClosure } from "./library";
+
+// Base URL for bundled libraries (public/lib/…), resolved against the page.
+const LIB_BASE = new URL("lib/", document.baseURI).href;
 
 // The first file is always the rendered "main"; the rest are libraries that
 // main can `use`/`include`.
@@ -116,19 +120,19 @@ export function App() {
     const engine = new Engine((r: RenderResponse) => onResult(r));
     engineRef.current = engine;
 
-    const renderNow = () => {
+    const renderNow = async () => {
       const fs = filesRef.current;
       const ov = overridesRef.current;
       const names = Object.keys(ov);
       const values = names.map((n) => toLiteral(ov[n]));
-      const libs = fs.slice(1);
-      engine.render(
+      // Resolve the include/use closure (fetching libraries as needed), then
+      // render with the full file set.
+      const { names: fileNames, contents: fileContents } = await resolveClosure(
         fs[0].content,
-        names,
-        values,
-        libs.map((f) => f.name),
-        libs.map((f) => f.content),
+        fs.slice(1),
+        LIB_BASE,
       );
+      engine.render(fs[0].content, names, values, fileNames, fileContents);
     };
     const requestRender = () => {
       window.clearTimeout(debounceTimer.current);
