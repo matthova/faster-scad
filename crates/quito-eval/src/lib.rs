@@ -466,6 +466,11 @@ impl Interp<'_> {
             "translate" => self.transform(args, children, TransformKind::Translate),
             "rotate" => self.transform(args, children, TransformKind::Rotate),
             "scale" => self.transform(args, children, TransformKind::Scale),
+            "mirror" => self.transform(args, children, TransformKind::Mirror),
+            "multmatrix" => self.b_multmatrix(args, children),
+            "resize" => self.b_resize(args, children),
+            // Visual-only / passthrough modules (ignored for geometry).
+            "color" | "render" => Ok(Node::group(self.eval_children(children)?)),
             "union" => Ok(Node::Union(self.eval_children(children)?)),
             "difference" => Ok(Node::Difference(self.eval_children(children)?)),
             "intersection" => Ok(Node::Intersection(self.eval_children(children)?)),
@@ -799,8 +804,49 @@ impl Interp<'_> {
                     child: Box::new(child),
                 }
             }
+            TransformKind::Mirror => Node::Mirror {
+                v: v.as_vec3().unwrap_or([1.0, 0.0, 0.0]),
+                child: Box::new(child),
+            },
         };
         Ok(node)
+    }
+
+    fn b_multmatrix(&mut self, args: &[Arg], children: &[Stmt]) -> EResult<Node> {
+        let child = Node::group(self.eval_children(children)?);
+        if matches!(child, Node::Empty) {
+            return Ok(Node::Empty);
+        }
+        let m = matrix_from_value(&self.first_positional(args)?);
+        Ok(Node::MultMatrix {
+            m,
+            child: Box::new(child),
+        })
+    }
+
+    fn b_resize(&mut self, args: &[Arg], children: &[Stmt]) -> EResult<Node> {
+        let child = Node::group(self.eval_children(children)?);
+        if matches!(child, Node::Empty) {
+            return Ok(Node::Empty);
+        }
+        let m = self.bind_named(&["newsize", "auto"], args)?;
+        let new = m
+            .get("newsize")
+            .and_then(Value::as_vec3)
+            .unwrap_or([0.0, 0.0, 0.0]);
+        let auto = match m.get("auto") {
+            Some(Value::Bool(b)) => [*b, *b, *b],
+            Some(Value::Vector(v)) => {
+                let g = |i: usize| v.get(i).map(Value::truthy).unwrap_or(false);
+                [g(0), g(1), g(2)]
+            }
+            _ => [false, false, false],
+        };
+        Ok(Node::Resize {
+            new,
+            auto,
+            child: Box::new(child),
+        })
     }
 
     /// Format and record an `echo(...)`; shared by the module and expression forms.
@@ -1217,6 +1263,27 @@ enum TransformKind {
     Translate,
     Rotate,
     Scale,
+    Mirror,
+}
+
+/// Build a 4x4 affine matrix from a value (list of rows), padding from identity.
+fn matrix_from_value(v: &Value) -> [[f64; 4]; 4] {
+    let mut m = [[0.0; 4]; 4];
+    for (i, row) in m.iter_mut().enumerate() {
+        row[i] = 1.0;
+    }
+    if let Value::Vector(rows) = v {
+        for (i, row) in rows.iter().enumerate().take(4) {
+            if let Value::Vector(cols) = row {
+                for (j, c) in cols.iter().enumerate().take(4) {
+                    if let Some(n) = c.as_number() {
+                        m[i][j] = n;
+                    }
+                }
+            }
+        }
+    }
+    m
 }
 
 fn scale_vec3(v: &Value) -> Vec3 {
@@ -1913,6 +1980,13 @@ mod tests {
             echoes("echo(is_undef(undef), is_list([1]), is_num(1), is_string(\"s\"));"),
             vec!["ECHO: true, true, true, true"]
         );
+    }
+
+    #[test]
+    fn color_is_passthrough() {
+        // color() must not drop its children.
+        let out = eval("color(\"red\") cube(2);");
+        assert_eq!(out.node, Node::Cube { size: [2.0, 2.0, 2.0], center: false });
     }
 
     #[test]

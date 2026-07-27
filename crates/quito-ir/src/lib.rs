@@ -107,6 +107,23 @@ pub enum Node {
         v: Vec3,
         child: Box<Node>,
     },
+    /// Reflect across the plane through the origin with normal `v`.
+    Mirror {
+        v: Vec3,
+        child: Box<Node>,
+    },
+    /// Apply a 4x4 affine matrix (row-major).
+    MultMatrix {
+        m: [[f64; 4]; 4],
+        child: Box<Node>,
+    },
+    /// Scale the child so its bounding box matches `new` (0 = keep, unless the
+    /// matching `auto` flag scales it proportionally).
+    Resize {
+        new: Vec3,
+        auto: [bool; 3],
+        child: Box<Node>,
+    },
 
     // --- booleans ---
     Union(Vec<Node>),

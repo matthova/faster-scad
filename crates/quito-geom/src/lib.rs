@@ -108,6 +108,21 @@ pub fn render_with(node: &Node, kernel: &dyn Kernel) -> Result<Mesh, GeomError> 
             scale(&mut m, *v);
             Ok(m)
         }
+        Node::Mirror { v, child } => {
+            let mut m = render_with(child, kernel)?;
+            mirror(&mut m, *v);
+            Ok(m)
+        }
+        Node::MultMatrix { m: mat, child } => {
+            let mut mesh = render_with(child, kernel)?;
+            mult_matrix(&mut mesh, mat);
+            Ok(mesh)
+        }
+        Node::Resize { new, auto, child } => {
+            let mut mesh = render_with(child, kernel)?;
+            resize(&mut mesh, *new, *auto);
+            Ok(mesh)
+        }
     }
 }
 
@@ -173,6 +188,81 @@ fn scale(m: &mut Mesh, v: Vec3) {
     }
     // A negative determinant mirrors the mesh, inverting winding.
     if v[0] * v[1] * v[2] < 0.0 {
+        m.flip_winding();
+    }
+}
+
+/// Reflect across the plane through the origin with normal `v`.
+fn mirror(m: &mut Mesh, v: Vec3) {
+    let d = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
+    if d == 0.0 {
+        return;
+    }
+    // Householder reflection I - 2 v vᵀ / (v·v).
+    let h = [
+        [1.0 - 2.0 * v[0] * v[0] / d, -2.0 * v[0] * v[1] / d, -2.0 * v[0] * v[2] / d],
+        [-2.0 * v[1] * v[0] / d, 1.0 - 2.0 * v[1] * v[1] / d, -2.0 * v[1] * v[2] / d],
+        [-2.0 * v[2] * v[0] / d, -2.0 * v[2] * v[1] / d, 1.0 - 2.0 * v[2] * v[2] / d],
+    ];
+    for p in &mut m.verts {
+        let [x, y, z] = *p;
+        *p = [
+            h[0][0] * x + h[0][1] * y + h[0][2] * z,
+            h[1][0] * x + h[1][1] * y + h[1][2] * z,
+            h[2][0] * x + h[2][1] * y + h[2][2] * z,
+        ];
+    }
+    m.flip_winding(); // reflection inverts orientation
+}
+
+/// Apply a 4x4 affine matrix (row-major).
+fn mult_matrix(m: &mut Mesh, mat: &[[f64; 4]; 4]) {
+    for p in &mut m.verts {
+        let [x, y, z] = *p;
+        *p = [
+            mat[0][0] * x + mat[0][1] * y + mat[0][2] * z + mat[0][3],
+            mat[1][0] * x + mat[1][1] * y + mat[1][2] * z + mat[1][3],
+            mat[2][0] * x + mat[2][1] * y + mat[2][2] * z + mat[2][3],
+        ];
+    }
+    // Flip winding if the linear part has negative determinant.
+    let det = mat[0][0] * (mat[1][1] * mat[2][2] - mat[1][2] * mat[2][1])
+        - mat[0][1] * (mat[1][0] * mat[2][2] - mat[1][2] * mat[2][0])
+        + mat[0][2] * (mat[1][0] * mat[2][1] - mat[1][1] * mat[2][0]);
+    if det < 0.0 {
+        m.flip_winding();
+    }
+}
+
+/// Scale so the bounding box matches `new` (0 = keep; `auto` scales that axis
+/// by another axis's factor).
+fn resize(m: &mut Mesh, new: Vec3, auto: [bool; 3]) {
+    let Some((lo, hi)) = m.bbox() else { return };
+    let size = [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]];
+    let mut factor = [1.0; 3];
+    let mut explicit = None;
+    for i in 0..3 {
+        if new[i] > 0.0 && size[i] > 0.0 {
+            factor[i] = new[i] / size[i];
+            if explicit.is_none() {
+                explicit = Some(factor[i]);
+            }
+        }
+    }
+    // auto axes with no explicit target adopt the first explicit factor.
+    if let Some(f) = explicit {
+        for i in 0..3 {
+            if new[i] == 0.0 && auto[i] {
+                factor[i] = f;
+            }
+        }
+    }
+    for p in &mut m.verts {
+        for i in 0..3 {
+            p[i] *= factor[i];
+        }
+    }
+    if factor[0] * factor[1] * factor[2] < 0.0 {
         m.flip_winding();
     }
 }
