@@ -579,6 +579,7 @@ impl Interp<'_> {
             "hull" => Ok(Node::Hull(self.eval_children(children)?)),
             "minkowski" => Ok(Node::Minkowski(self.eval_children(children)?)),
             "import" => self.b_import(args),
+            "surface" => self.b_surface(args),
             "group" => Ok(Node::group(self.eval_children(children)?)),
             "echo" => self.b_echo(args, children),
             "assert" => self.b_assert(args, children),
@@ -777,6 +778,34 @@ impl Interp<'_> {
                 Ok(Node::Empty)
             }
         }
+    }
+
+    fn b_surface(&mut self, args: &[Arg]) -> EResult<Node> {
+        let m = self.bind_named(&["file", "center", "convexity", "invert"], args)?;
+        let path = match m.get("file") {
+            Some(Value::Str(s)) => s.clone(),
+            _ => return Ok(Node::Empty),
+        };
+        let center = m.get("center").map(Value::truthy).unwrap_or(false);
+        if path.to_ascii_lowercase().ends_with(".png") {
+            self.warnings
+                .push("surface(): PNG heightmaps not yet supported (use a .dat text file)".into());
+            return Ok(Node::Empty);
+        }
+        let Some(lf) = self.resolver.load(&path, &self.cur_dir) else {
+            self.warnings.push(format!("Can't open surface file '{path}'"));
+            return Ok(Node::Empty);
+        };
+        // Whitespace-separated rows of z-values; `#` lines are comments.
+        let rows: Vec<Vec<f64>> = lf
+            .source
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .map(|l| l.split_whitespace().filter_map(|s| s.parse::<f64>().ok()).collect())
+            .filter(|r: &Vec<f64>| !r.is_empty())
+            .collect();
+        Ok(surface_polyhedron(&rows, center))
     }
 
     fn b_polyhedron(&mut self, args: &[Arg]) -> EResult<Node> {
@@ -1603,6 +1632,101 @@ fn value_to_face(v: &Value) -> Vec<u32> {
             .collect(),
         _ => Vec::new(),
     }
+}
+
+/// Push a triangle `(a,b,c)` to a polyhedron face list, oriented so its normal
+/// points along `out`. `polyhedron()` reverses each face on triangulation, so we
+/// emit `[v0, v2, v1]` where `(v0,v1,v2)` is the outward-facing order.
+fn surf_face(faces: &mut Vec<Vec<u32>>, pts: &[Vec3], a: u32, b: u32, c: u32, out: Vec3) {
+    let (pa, pb, pc) = (pts[a as usize], pts[b as usize], pts[c as usize]);
+    let e1 = [pb[0] - pa[0], pb[1] - pa[1], pb[2] - pa[2]];
+    let e2 = [pc[0] - pa[0], pc[1] - pa[1], pc[2] - pa[2]];
+    let n = [
+        e1[1] * e2[2] - e1[2] * e2[1],
+        e1[2] * e2[0] - e1[0] * e2[2],
+        e1[0] * e2[1] - e1[1] * e2[0],
+    ];
+    // Degenerate (zero-area) triangle — e.g. a wall where the height is 0.
+    if n[0] * n[0] + n[1] * n[1] + n[2] * n[2] < 1e-18 {
+        return;
+    }
+    let dot = n[0] * out[0] + n[1] * out[1] + n[2] * out[2];
+    let (v0, v1, v2) = if dot >= 0.0 { (a, b, c) } else { (a, c, b) };
+    faces.push(vec![v0, v2, v1]);
+}
+
+/// Build the `surface()` solid from a heightmap grid: the top follows the
+/// heights, the bottom is flat at z=0, joined by vertical walls. Matches
+/// OpenSCAD (row r → y=r, col c → x=c; `center` shifts to the origin).
+fn surface_polyhedron(rows: &[Vec<f64>], center: bool) -> Node {
+    let nr = rows.len();
+    let nc = rows.iter().map(Vec::len).max().unwrap_or(0);
+    if nr < 2 || nc < 2 {
+        return Node::Empty;
+    }
+    let h = |r: usize, c: usize| rows[r].get(c).copied().unwrap_or(0.0);
+    let ox = if center { (nc - 1) as f64 / 2.0 } else { 0.0 };
+    let oy = if center { (nr - 1) as f64 / 2.0 } else { 0.0 };
+    // Bottom plane, matching OpenSCAD: z=0 when all heights ≥1, else min−1.
+    let min_h = (0..nr)
+        .flat_map(|r| (0..nc).map(move |c| (r, c)))
+        .map(|(r, c)| h(r, c))
+        .fold(f64::INFINITY, f64::min);
+    let bottom_z = (min_h - 1.0).min(0.0);
+
+    let mut points: Vec<Vec3> = Vec::with_capacity(nr * nc * 2 + (nr - 1) * (nc - 1));
+    for r in 0..nr {
+        for c in 0..nc {
+            points.push([c as f64 - ox, r as f64 - oy, h(r, c)]);
+        }
+    }
+    for r in 0..nr {
+        for c in 0..nc {
+            points.push([c as f64 - ox, r as f64 - oy, bottom_z]);
+        }
+    }
+    // A center vertex per top cell (average height): OpenSCAD fan-triangulates
+    // each cell around it, so a non-planar cell's volume is exact.
+    let cbase = 2 * nr * nc;
+    for r in 0..nr - 1 {
+        for c in 0..nc - 1 {
+            let z = (h(r, c) + h(r, c + 1) + h(r + 1, c) + h(r + 1, c + 1)) / 4.0;
+            points.push([c as f64 + 0.5 - ox, r as f64 + 0.5 - oy, z]);
+        }
+    }
+    let top = |r: usize, c: usize| (r * nc + c) as u32;
+    let bot = |r: usize, c: usize| (nr * nc + r * nc + c) as u32;
+    let mid = |r: usize, c: usize| (cbase + r * (nc - 1) + c) as u32;
+    let mut faces: Vec<Vec<u32>> = Vec::new();
+
+    for r in 0..nr - 1 {
+        for c in 0..nc - 1 {
+            // Top: fan the 4 cell edges around the center vertex.
+            let m = mid(r, c);
+            surf_face(&mut faces, &points, top(r, c), top(r, c + 1), m, [0.0, 0.0, 1.0]);
+            surf_face(&mut faces, &points, top(r, c + 1), top(r + 1, c + 1), m, [0.0, 0.0, 1.0]);
+            surf_face(&mut faces, &points, top(r + 1, c + 1), top(r + 1, c), m, [0.0, 0.0, 1.0]);
+            surf_face(&mut faces, &points, top(r + 1, c), top(r, c), m, [0.0, 0.0, 1.0]);
+            // Bottom stays a flat quad (z=0 → volume-neutral either way).
+            surf_face(&mut faces, &points, bot(r, c), bot(r, c + 1), bot(r + 1, c + 1), [0.0, 0.0, -1.0]);
+            surf_face(&mut faces, &points, bot(r, c), bot(r + 1, c + 1), bot(r + 1, c), [0.0, 0.0, -1.0]);
+        }
+    }
+    // Front (y=0) and back (y=max) walls.
+    for c in 0..nc - 1 {
+        surf_face(&mut faces, &points, top(0, c), top(0, c + 1), bot(0, c + 1), [0.0, -1.0, 0.0]);
+        surf_face(&mut faces, &points, top(0, c), bot(0, c + 1), bot(0, c), [0.0, -1.0, 0.0]);
+        surf_face(&mut faces, &points, top(nr - 1, c), top(nr - 1, c + 1), bot(nr - 1, c + 1), [0.0, 1.0, 0.0]);
+        surf_face(&mut faces, &points, top(nr - 1, c), bot(nr - 1, c + 1), bot(nr - 1, c), [0.0, 1.0, 0.0]);
+    }
+    // Left (x=0) and right (x=max) walls.
+    for r in 0..nr - 1 {
+        surf_face(&mut faces, &points, top(r, 0), top(r + 1, 0), bot(r + 1, 0), [-1.0, 0.0, 0.0]);
+        surf_face(&mut faces, &points, top(r, 0), bot(r + 1, 0), bot(r, 0), [-1.0, 0.0, 0.0]);
+        surf_face(&mut faces, &points, top(r, nc - 1), top(r + 1, nc - 1), bot(r + 1, nc - 1), [1.0, 0.0, 0.0]);
+        surf_face(&mut faces, &points, top(r, nc - 1), bot(r + 1, nc - 1), bot(r, nc - 1), [1.0, 0.0, 0.0]);
+    }
+    Node::Polyhedron { points, faces }
 }
 
 fn index_value(base: &Value, index: &Value) -> Value {

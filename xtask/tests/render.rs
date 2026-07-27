@@ -117,6 +117,28 @@ fn renders_bosl2_rounded_cuboid() {
     );
 }
 
+/// `surface()` builds a heightmap solid (top follows the data, bottom flat).
+/// A 3×4 ramp has volume 21 (sum of cell-average heights) and must be
+/// outward-facing.
+#[test]
+fn renders_surface() {
+    struct R;
+    impl quito_eval::FileResolver for R {
+        fn load(&self, path: &str, _from: &str) -> Option<quito_eval::LoadedFile> {
+            (path == "h.dat").then(|| quito_eval::LoadedFile {
+                key: path.into(),
+                source: "1 2 3 4\n2 3 4 5\n3 4 5 6\n".into(),
+                dir: ".".into(),
+            })
+        }
+    }
+    let prog = quito_syntax::parse("surface(\"h.dat\");").expect("parse");
+    let out = quito_eval::eval_program_with(&prog, &R, ".").expect("eval");
+    let mesh = quito_geom::render(&out.node).expect("render");
+    assert!((mesh.volume() - 21.0).abs() < 1e-6, "surface volume {}", mesh.volume());
+    assert!(mesh.signed_volume() > 0.0, "surface mesh is inward-facing");
+}
+
 /// The draped/fluted dome lamp shade: a single analytic-surface polyhedron
 /// built with C-style-for comprehensions. Must render to a watertight,
 /// outward-facing mesh matching OpenSCAD (17408 triangles, volume ~13.596).
