@@ -1,0 +1,12 @@
+ECHO: 14, 20, -5, 2, 2
+ECHO: -1, 1, -1
+ECHO: 5, true, true, [-1, 2, -3]
+ECHO: undef, undef, undef, undef, true, false
+ECHO: true, true, false, true, false
+ECHO: 0, "", "123"
+ECHO: undef, undef, 0
+ECHO: 3, 3
+ECHO: 1e+21, 1e-10, 99999, 999999, 1e+7
+ECHO: [1, 2, 3]
+ECHO: [1, [2, 3], 4]
+ECHO: undef, 1
