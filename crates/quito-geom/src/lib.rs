@@ -6,12 +6,21 @@ mod kernel;
 mod mesh;
 mod shape2d;
 mod tessellate;
+mod vector2d;
 
 pub use kernel::{BoolmeshKernel, Kernel};
 #[cfg(not(target_arch = "wasm32"))]
 pub use kernel::ManifoldKernel;
 pub use mesh::Mesh;
+pub use shape2d::Contour;
 pub use tessellate::{cube, cylinder, fragments, polyhedron, sphere};
+pub use vector2d::{export_dxf, export_svg, import_dxf, import_svg};
+
+/// Render a node's 2D profile as even-odd contours, or `None` if it isn't a 2D
+/// object. Used by the CLI/engine to export 2D geometry to DXF/SVG.
+pub fn render_contours(node: &Node) -> Option<Vec<Contour>> {
+    is_2d(node).then(|| shape2d::render2d(node))
+}
 
 use quito_ir::{Node, Vec3};
 use std::collections::HashMap;
@@ -110,7 +119,8 @@ fn is_2d(node: &Node) -> bool {
     use Node::*;
     match node {
         Square { .. } | Circle { .. } | Polygon { .. } | Offset { .. } | Projection { .. } => true,
-        Cube { .. } | Sphere { .. } | Cylinder { .. } | Polyhedron { .. } | Import { .. }
+        Import { format, .. } => matches!(format.as_str(), "dxf" | "svg"),
+        Cube { .. } | Sphere { .. } | Cylinder { .. } | Polyhedron { .. }
         | LinearExtrude { .. } | RotateExtrude { .. } | Empty => false,
         Translate { child, .. }
         | Rotate { child, .. }
@@ -155,6 +165,7 @@ fn render_uncached(node: &Node, ctx: &mut Ctx) -> Result<Mesh, GeomError> {
         Node::Import { data, format } => Ok(match format.as_str() {
             "off" => Mesh::from_off(&String::from_utf8_lossy(data)),
             "obj" => Mesh::from_obj(&String::from_utf8_lossy(data)),
+            "dxf" | "svg" => shape2d::flat_mesh(&shape2d::render2d(node)),
             _ => Mesh::from_stl(data), // stl (binary or ascii)
         }),
 

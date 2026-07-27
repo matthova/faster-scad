@@ -133,6 +133,30 @@ fn run() -> Result<()> {
         return Ok(());
     }
 
+    // 2D vector export (DXF/SVG): write contours directly, no 3D mesh needed.
+    if let Some(path) = &cli.output {
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if matches!(ext.as_str(), "dxf" | "svg") {
+            match quito_geom::render_contours(&out.node) {
+                Some(contours) => {
+                    let text = if ext == "dxf" {
+                        quito_geom::export_dxf(&contours)
+                    } else {
+                        quito_geom::export_svg(&contours)
+                    };
+                    std::fs::write(path, text)?;
+                    eprintln!("wrote {} ({} contours)", path.display(), contours.len());
+                }
+                None => anyhow::bail!("{} export requires a 2D object", ext.to_uppercase()),
+            }
+            return Ok(());
+        }
+    }
+
     // Render.
     let t0 = Instant::now();
     let mesh = quito_geom::render(&out.node).context("rendering geometry")?;

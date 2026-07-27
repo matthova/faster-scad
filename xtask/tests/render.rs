@@ -139,6 +139,29 @@ fn renders_surface() {
     assert!(mesh.signed_volume() > 0.0, "surface mesh is inward-facing");
 }
 
+/// A DXF profile imported and extruded must produce the extruded area×height.
+/// A 10×20 square with a 2×2 hole (LWPOLYLINEs) → area 196, ×3 → volume 588.
+#[test]
+fn imports_and_extrudes_dxf() {
+    struct R(Vec<u8>);
+    impl quito_eval::FileResolver for R {
+        fn load(&self, _p: &str, _f: &str) -> Option<quito_eval::LoadedFile> {
+            None
+        }
+        fn load_bytes(&self, path: &str, _f: &str) -> Option<Vec<u8>> {
+            (path == "p.dxf").then(|| self.0.clone())
+        }
+    }
+    let outer = vec![[0.0, 0.0], [10.0, 0.0], [10.0, 20.0], [0.0, 20.0]];
+    let hole = vec![[4.0, 4.0], [4.0, 6.0], [6.0, 6.0], [6.0, 4.0]];
+    let dxf = quito_geom::export_dxf(&[outer, hole]).into_bytes();
+    let prog = quito_syntax::parse("linear_extrude(3) import(\"p.dxf\");").expect("parse");
+    let out = quito_eval::eval_program_with(&prog, &R(dxf), ".").expect("eval");
+    let mesh = quito_geom::render(&out.node).expect("render");
+    assert!((mesh.volume() - 588.0).abs() < 1e-3, "dxf extrude volume {}", mesh.volume());
+    assert!(mesh.signed_volume() > 0.0, "dxf extrude is inward-facing");
+}
+
 /// The draped/fluted dome lamp shade: a single analytic-surface polyhedron
 /// built with C-style-for comprehensions. Must render to a watertight,
 /// outward-facing mesh matching OpenSCAD (17408 triangles, volume ~13.596).

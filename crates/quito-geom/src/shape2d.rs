@@ -197,6 +197,11 @@ pub fn render2d(node: &Node) -> Vec<Contour> {
         Node::Square { size, center } => vec![square_contour(*size, *center)],
         Node::Circle { r, frags } => vec![circle_contour(*r, *frags)],
         Node::Polygon { points, paths } => polygon_contours(points, paths),
+        Node::Import { data, format } => match format.as_str() {
+            "dxf" => crate::vector2d::import_dxf(data),
+            "svg" => crate::vector2d::import_svg(data),
+            _ => Vec::new(),
+        },
         Node::Offset { r, delta, chamfer, frags, child } => {
             offset(&render2d(child), *r, *delta, *chamfer, *frags)
         }
@@ -391,7 +396,7 @@ pub fn slice_z0(mesh: &Mesh) -> Vec<Contour> {
 
 /// Chain unordered segments into closed contours by walking segment by segment
 /// (so points shared by collinear segments are handled correctly).
-fn chain_segments(segs: Vec<(Point2, Point2)>) -> Vec<Contour> {
+pub(crate) fn chain_segments(segs: Vec<(Point2, Point2)>) -> Vec<Contour> {
     let key = |p: Point2| [(p[0] * 1e5).round() as i64, (p[1] * 1e5).round() as i64];
     // point key -> indices of incident segments
     let mut inc: std::collections::HashMap<[i64; 2], Vec<usize>> = Default::default();
