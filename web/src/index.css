@@ -201,6 +201,23 @@ body {
   width: 46px;
 }
 
+.export {
+  display: inline-flex;
+}
+.export button {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.export select {
+  border-left: 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  background: var(--panel);
+  color: inherit;
+  border: 1px solid var(--border);
+  font-size: 12px;
+}
+
 .console {
   height: 160px;
   overflow-y: auto;

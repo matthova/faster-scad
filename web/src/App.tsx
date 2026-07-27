@@ -7,7 +7,7 @@ import { openscad } from "./lang/openscad";
 import { Viewer } from "./viewer";
 import { Engine } from "./engine";
 import type { RenderResponse } from "./engineWorker";
-import { buildBinarySTL, downloadBlob } from "./stl";
+import { buildBinarySTL, buildOFF, buildOBJ, downloadBlob } from "./stl";
 import { CustomizerPanel } from "./CustomizerPanel";
 import { parseSchema, toLiteral, type Param, type ParamValue } from "./customizer";
 
@@ -89,6 +89,7 @@ export function App() {
   });
   const [version, setVersion] = useState("");
   const [consoleOpen, setConsoleOpen] = useState(false);
+  const [exportFmt, setExportFmt] = useState<"stl" | "off" | "obj">("stl");
   const [schema, setSchema] = useState<Param[]>([]);
   const [overrides, setOverrides] = useState<Record<string, ParamValue>>({});
 
@@ -210,9 +211,12 @@ export function App() {
     requestRenderRef.current();
   }
 
-  function onDownload() {
-    if (lastPositions.current.length === 0) return;
-    downloadBlob(buildBinarySTL(lastPositions.current), "quito.stl");
+  function onDownload(format: "stl" | "off" | "obj") {
+    const pos = lastPositions.current;
+    if (pos.length === 0) return;
+    const data =
+      format === "off" ? buildOFF(pos) : format === "obj" ? buildOBJ(pos) : buildBinarySTL(pos);
+    downloadBlob(data, `quito.${format}`);
   }
 
   return (
@@ -223,9 +227,20 @@ export function App() {
         </div>
         <div className="actions">
           <button onClick={() => viewerRef.current?.resetView()}>Reset view</button>
-          <button onClick={onDownload} disabled={status.triangleCount === 0}>
-            Download STL
-          </button>
+          <div className="export">
+            <button onClick={() => onDownload(exportFmt)} disabled={status.triangleCount === 0}>
+              Export
+            </button>
+            <select
+              aria-label="Export format"
+              value={exportFmt}
+              onChange={(e) => setExportFmt(e.target.value as "stl" | "off" | "obj")}
+            >
+              <option value="stl">STL</option>
+              <option value="off">OFF</option>
+              <option value="obj">OBJ</option>
+            </select>
+          </div>
         </div>
       </header>
 
