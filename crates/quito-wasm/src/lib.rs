@@ -51,6 +51,7 @@ pub struct RenderResult {
     vertex_count: u32,
     volume: f64,
     area: f64,
+    is_2d: bool,
 }
 
 #[wasm_bindgen]
@@ -110,6 +111,12 @@ impl RenderResult {
     pub fn area(&self) -> f64 {
         self.area
     }
+
+    /// Whether the model is a 2D object (exportable to DXF/SVG) vs a 3D solid.
+    #[wasm_bindgen(getter)]
+    pub fn is_2d(&self) -> bool {
+        self.is_2d
+    }
 }
 
 impl RenderResult {
@@ -124,7 +131,40 @@ impl RenderResult {
             vertex_count: 0,
             volume: 0.0,
             area: 0.0,
+            is_2d: false,
         }
+    }
+}
+
+/// Render a 2D model and serialize it to DXF or SVG text. Returns an empty
+/// string if the model isn't 2D or fails to evaluate (the caller checks
+/// `RenderResult.is_2d` first). `format` is "dxf" or "svg".
+#[wasm_bindgen]
+pub fn export_2d(
+    source: &str,
+    names: Vec<String>,
+    values: Vec<String>,
+    file_names: Vec<String>,
+    file_contents: Vec<String>,
+    format: &str,
+) -> String {
+    let Ok(program) = quito_syntax::parse(source) else { return String::new() };
+    let mut overrides = Vec::new();
+    for (name, val) in names.iter().zip(values.iter()) {
+        if let Some(pv) = quito_syntax::customizer::parse_value(val) {
+            overrides.push((name.clone(), quito_eval::value_from_param(&pv)));
+        }
+    }
+    let resolver = MapResolver {
+        files: file_names.into_iter().zip(file_contents).collect(),
+    };
+    let Ok(eval) = quito_eval::eval_program_with_params(&program, &resolver, ".", &overrides) else {
+        return String::new();
+    };
+    match quito_geom::render_contours(&eval.node) {
+        Some(contours) if format == "dxf" => quito_geom::export_dxf(&contours),
+        Some(contours) if format == "svg" => quito_geom::export_svg(&contours),
+        _ => String::new(),
     }
 }
 
@@ -241,6 +281,7 @@ pub fn render_with_files(
         vertex_count: mesh.verts.len() as u32,
         volume: mesh.volume(),
         area: mesh.surface_area(),
+        is_2d: quito_geom::is_2d(&eval.node),
         positions,
         normals,
         echo,

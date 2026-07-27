@@ -21,6 +21,7 @@ interface NativeResult {
   vertexCount: number;
   volume: number;
   area: number;
+  is2D: boolean;
   params: string;
 }
 
@@ -66,6 +67,7 @@ export class DesktopEngine {
           vertexCount: res.vertexCount,
           volume: res.volume,
           area: res.area,
+          is2D: res.is2D,
           ms: performance.now() - t0,
           version: "native",
           params: res.params,
@@ -85,6 +87,7 @@ export class DesktopEngine {
           vertexCount: 0,
           volume: 0,
           area: 0,
+          is2D: false,
           ms: performance.now() - t0,
           version: "native",
           params: `{"params":[]}`,
@@ -123,7 +126,7 @@ export async function onFileChanged(
 
 /** Native save via a Tauri save dialog + the `save_model` command. */
 export async function saveModelNative(
-  format: "stl" | "off" | "obj" | "3mf" | "amf",
+  format: "stl" | "off" | "obj" | "3mf" | "amf" | "dxf" | "svg",
   source: string,
   names: string[],
   values: string[],

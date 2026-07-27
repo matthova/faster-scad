@@ -3,6 +3,24 @@
 // giving true cancellation of the superseded render (serial-wasm strategy from
 // the plan). Results are delivered latest-wins.
 import type { RenderRequest, RenderResponse } from "./engineWorker";
+import type { Export2DRequest, Export2DResponse } from "./exportWorker";
+
+/** Render a 2D model to DXF/SVG text via a dedicated one-shot worker. */
+export function export2dBrowser(req: Export2DRequest): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const w = new Worker(new URL("./exportWorker.ts", import.meta.url), { type: "module" });
+    w.onmessage = (e: MessageEvent<Export2DResponse>) => {
+      w.terminate();
+      if (e.data.error) reject(new Error(e.data.error));
+      else resolve(e.data.data);
+    };
+    w.onerror = (e) => {
+      w.terminate();
+      reject(new Error(e.message || "export worker error"));
+    };
+    w.postMessage(req);
+  });
+}
 
 /** A pending render request: source, overrides, and extra files. */
 interface Job {

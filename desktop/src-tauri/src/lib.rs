@@ -56,6 +56,9 @@ struct RenderResult {
     vertex_count: u32,
     volume: f64,
     area: f64,
+    /// Whether the model is a 2D object (exportable to DXF/SVG).
+    #[serde(rename = "is2D")]
+    is_2d: bool,
     /// Customizer schema JSON for the current source.
     params: String,
 }
@@ -159,7 +162,7 @@ fn eval_and_render(
     values: &[String],
     file_names: &[String],
     file_contents: &[String],
-) -> Result<(quito_geom::Mesh, Vec<String>, Vec<String>), String> {
+) -> Result<(quito_geom::Mesh, Vec<String>, Vec<String>, bool), String> {
     let program = quito_syntax::parse(source).map_err(|e| {
         format!("parse error: {} (at {}..{})", e.message, e.span.start, e.span.end)
     })?;
@@ -169,12 +172,13 @@ fn eval_and_render(
     };
     let out = quito_eval::eval_program_with_params(&program, &resolver, dir, &overrides(names, values))
         .map_err(|e| format!("evaluation error: {}", e.0))?;
+    let is_2d = quito_geom::is_2d(&out.node);
     let kernel = quito_geom::ManifoldKernel::new();
     let mesh = {
         let mut cache = cache.lock().unwrap();
         quito_geom::render_cached(&out.node, &kernel, &mut cache).map_err(|e| format!("geometry error: {e}"))?
     };
-    Ok((mesh, out.echoes, out.warnings))
+    Ok((mesh, out.echoes, out.warnings, is_2d))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -193,7 +197,7 @@ fn render(
     let work = move || {
         let params = quito_syntax::customizer::extract(&source).to_json();
         match eval_and_render(&cache, &source, &dir, &param_names, &param_values, &file_names, &file_contents) {
-            Ok((mesh, echoes, warnings)) => {
+            Ok((mesh, echoes, warnings, is_2d)) => {
                 let (positions, normals) = mesh.to_triangle_soup_f32();
                 RenderResult {
                     ok: true,
@@ -204,6 +208,7 @@ fn render(
                     vertex_count: mesh.verts.len() as u32,
                     volume: mesh.volume(),
                     area: mesh.surface_area(),
+                    is_2d,
                     positions,
                     normals,
                     params,
@@ -232,7 +237,32 @@ fn save_model(
     let cache = state.cache.clone();
     let dir = dir.unwrap_or_else(|| ".".to_string());
     let work = move || -> Result<(), String> {
-        let (mesh, _, _) = eval_and_render(
+        // 2D vector formats need the exact contours, not the flat mesh.
+        if format == "dxf" || format == "svg" {
+            let program = quito_syntax::parse(&source).map_err(|e| {
+                format!("parse error: {} (at {}..{})", e.message, e.span.start, e.span.end)
+            })?;
+            let resolver = CombinedResolver {
+                files: file_names.iter().cloned().zip(file_contents.iter().cloned()).collect(),
+                disk: DiskResolver::new(),
+            };
+            let out = quito_eval::eval_program_with_params(
+                &program,
+                &resolver,
+                &dir,
+                &overrides(&param_names, &param_values),
+            )
+            .map_err(|e| format!("evaluation error: {}", e.0))?;
+            let contours = quito_geom::render_contours(&out.node)
+                .ok_or_else(|| "export requires a 2D model".to_string())?;
+            let text = if format == "dxf" {
+                quito_geom::export_dxf(&contours)
+            } else {
+                quito_geom::export_svg(&contours)
+            };
+            return std::fs::write(&path, text).map_err(|e| format!("write {path}: {e}"));
+        }
+        let (mesh, _, _, _) = eval_and_render(
             &cache,
             &source,
             &dir,

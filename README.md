@@ -76,9 +76,10 @@ build:wasm && npm run dev`; see [`web/`](web/README.md).
   and the rest are libraries. `include`/`use` resolve between files in-browser,
   and unknown paths are fetched lazily (bundled `/lib/`, or a CDN by prefix —
   e.g. `BOSL2/…` from jsDelivr) with transitive resolution + caching.
-- **Export** — STL (binary), OFF, OBJ, 3MF, or AMF from the playground and
-  desktop app; the CLI also writes DXF or SVG for 2D models. 2D profiles can be
-  imported too (`import("foo.dxf")` / `import("foo.svg")`).
+- **Export** — the format dropdown adapts to the model: 3D solids export to STL
+  (binary), OFF, OBJ, 3MF, or AMF; 2D profiles export to DXF or SVG. Available
+  in the playground, the desktop app, and the CLI. 2D profiles can be imported
+  too (`import("foo.dxf")` / `import("foo.svg")`).
 - **Console** — echo / warnings / errors, color-coded.
 - **Persistence** — files, parameter values, and the active tab autosave to
   `localStorage` and restore on reload.

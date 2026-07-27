@@ -115,7 +115,9 @@ fn render_node(node: &Node, ctx: &mut Ctx) -> Result<Mesh, GeomError> {
 
 /// The actual per-variant renderer (children go back through [`render_node`]).
 /// Is `node` a 2D subtree (result lies in the XY plane)?
-fn is_2d(node: &Node) -> bool {
+/// Whether a node renders as a 2D object (its output is a flat profile, exportable
+/// to DXF/SVG) rather than a 3D solid.
+pub fn is_2d(node: &Node) -> bool {
     use Node::*;
     match node {
         Square { .. } | Circle { .. } | Polygon { .. } | Offset { .. } | Projection { .. } => true,

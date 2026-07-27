@@ -26,6 +26,8 @@ export interface RenderResponse {
   vertexCount: number;
   volume: number;
   area: number;
+  /** True when the model is a 2D object (exportable to DXF/SVG). */
+  is2D: boolean;
   ms: number;
   version: string;
   /** Customizer schema JSON (`{"params":[…]}`) for the current source. */
@@ -62,6 +64,7 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
       vertexCount: 0,
       volume: 0,
       area: 0,
+      is2D: false,
       ms: performance.now() - t0,
       version: "",
       params,
@@ -83,6 +86,7 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
     vertexCount: res.vertex_count,
     volume: res.volume,
     area: res.area,
+    is2D: res.is_2d,
     ms: performance.now() - t0,
     version: version(),
     params,

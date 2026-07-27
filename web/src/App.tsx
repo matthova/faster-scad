@@ -5,7 +5,7 @@ import { basicSetup } from "codemirror";
 import { indentWithTab } from "@codemirror/commands";
 import { openscad } from "./lang/openscad";
 import { Viewer } from "./viewer";
-import { Engine } from "./engine";
+import { Engine, export2dBrowser } from "./engine";
 import type { RenderResponse } from "./engineWorker";
 import { buildBinarySTL, buildOFF, buildOBJ, build3MF, buildAMF, downloadBlob } from "./stl";
 import { CustomizerPanel } from "./CustomizerPanel";
@@ -65,7 +65,12 @@ module rounded_box(sz, r) {
   },
 ];
 
-type ExportFmt = "stl" | "off" | "obj" | "3mf" | "amf";
+type ExportFmt = "stl" | "off" | "obj" | "3mf" | "amf" | "dxf" | "svg";
+
+// Formats offered per model dimensionality — 2D profiles export to vector
+// formats, 3D solids to mesh formats.
+const FORMATS_3D: ExportFmt[] = ["stl", "off", "obj", "3mf", "amf"];
+const FORMATS_2D: ExportFmt[] = ["dxf", "svg"];
 
 interface Status {
   ok: boolean;
@@ -116,6 +121,7 @@ export function App() {
   const [version, setVersion] = useState("");
   const [consoleOpen, setConsoleOpen] = useState(false);
   const [exportFmt, setExportFmt] = useState<ExportFmt>("stl");
+  const [is2D, setIs2D] = useState(false);
   const [time, setTime] = useState(0);
   const [schema, setSchema] = useState<Param[]>([]);
   const [overrides, setOverrides] = useState<Record<string, ParamValue>>(overridesRef.current);
@@ -368,6 +374,18 @@ export function App() {
     if (r.ok) {
       lastPositions.current = r.positions;
       viewerRef.current?.setMesh(r.positions, r.normals);
+      // Offer vector formats for 2D models, mesh formats for 3D; keep the
+      // selected format valid when the model's dimensionality changes.
+      setIs2D(r.is2D);
+      setExportFmt((f) =>
+        r.is2D
+          ? FORMATS_2D.includes(f)
+            ? f
+            : "dxf"
+          : FORMATS_3D.includes(f)
+            ? f
+            : "stl",
+      );
       setStatus({
         ok: true,
         message: `${r.triangleCount.toLocaleString()} triangles`,
@@ -414,25 +432,53 @@ export function App() {
     requestRenderRef.current();
   }
 
-  function onDownload(format: ExportFmt) {
+  async function onDownload(format: ExportFmt) {
     if (status.triangleCount === 0) return;
+    const fs = filesRef.current;
+    const ov = overridesRef.current;
+    const names = Object.keys(ov);
+    const values = names.map((n) => toLiteral(ov[n]));
+    const libs = fs.slice(1);
+
     if (TAURI) {
       // Native: re-render on the native engine and write via a save dialog, so
-      // the exported mesh is welded/exact (not derived from the render soup).
-      const fs = filesRef.current;
-      const ov = overridesRef.current;
-      const names = Object.keys(ov);
-      const libs = fs.slice(1);
+      // the exported model is welded/exact (not derived from the render soup).
       void saveModelNative(
         format,
         fs[0].content,
         names,
-        names.map((n) => toLiteral(ov[n])),
+        values,
         libs.map((f) => f.name),
         libs.map((f) => f.content),
       );
       return;
     }
+
+    // 2D vector formats need the exact contours, so re-render in a worker.
+    if (format === "dxf" || format === "svg") {
+      try {
+        const { names: fileNames, contents: fileContents } = await resolveClosure(
+          fs[0].content,
+          libs,
+          LIB_BASE,
+        );
+        const text = await export2dBrowser({
+          source: fs[0].content,
+          names,
+          values,
+          fileNames,
+          fileContents,
+          format,
+        });
+        downloadBlob(new TextEncoder().encode(text), `quito.${format}`);
+      } catch (err) {
+        setStatus((s) => ({ ...s, error: `export failed: ${String(err)}` }));
+        setConsoleOpen(true);
+      }
+      return;
+    }
+
+    // 3D mesh formats: build client-side from the last render soup.
     const pos = lastPositions.current;
     if (pos.length === 0) return;
     const data =
@@ -489,11 +535,11 @@ export function App() {
               value={exportFmt}
               onChange={(e) => setExportFmt(e.target.value as ExportFmt)}
             >
-              <option value="stl">STL</option>
-              <option value="off">OFF</option>
-              <option value="obj">OBJ</option>
-              <option value="3mf">3MF</option>
-              <option value="amf">AMF</option>
+              {(is2D ? FORMATS_2D : FORMATS_3D).map((f) => (
+                <option key={f} value={f}>
+                  {f.toUpperCase()}
+                </option>
+              ))}
             </select>
           </div>
         </div>
