@@ -19,6 +19,13 @@ pub trait Kernel {
     fn union(&self, meshes: Vec<Mesh>) -> Result<Mesh, GeomError>;
     fn difference(&self, base: Mesh, tools: Vec<Mesh>) -> Result<Mesh, GeomError>;
     fn intersection(&self, meshes: Vec<Mesh>) -> Result<Mesh, GeomError>;
+    /// Convex hull of all vertices in the given meshes.
+    fn hull(&self, meshes: Vec<Mesh>) -> Result<Mesh, GeomError>;
+}
+
+/// Collect every vertex from a set of meshes.
+fn all_points(meshes: &[Mesh]) -> Vec<[f64; 3]> {
+    meshes.iter().flat_map(|m| m.verts.iter().copied()).collect()
 }
 
 // ===================================================================
@@ -113,6 +120,10 @@ impl Kernel for BoolmeshKernel {
             });
         }
         Ok(acc.map(|m| bm::from_manifold(&m)).unwrap_or_default())
+    }
+
+    fn hull(&self, meshes: Vec<Mesh>) -> Result<Mesh, GeomError> {
+        Ok(crate::hull::convex_hull(&all_points(&meshes)))
     }
 }
 
@@ -214,6 +225,14 @@ mod manifold_backend {
                 });
             }
             Ok(acc.map(|m| from_manifold(&m)).unwrap_or_default())
+        }
+
+        fn hull(&self, meshes: Vec<Mesh>) -> Result<Mesh, GeomError> {
+            let points = super::all_points(&meshes);
+            if points.len() < 4 {
+                return Ok(Mesh::new());
+            }
+            Ok(from_manifold(&Manifold::hull_pts(&points)))
         }
     }
 }

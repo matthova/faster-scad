@@ -474,6 +474,7 @@ impl Interp<'_> {
             "union" => Ok(Node::Union(self.eval_children(children)?)),
             "difference" => Ok(Node::Difference(self.eval_children(children)?)),
             "intersection" => Ok(Node::Intersection(self.eval_children(children)?)),
+            "hull" => Ok(Node::Hull(self.eval_children(children)?)),
             "group" => Ok(Node::group(self.eval_children(children)?)),
             "echo" => self.b_echo(args, children),
             "assert" => self.b_assert(args, children),

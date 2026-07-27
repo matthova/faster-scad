@@ -129,6 +129,8 @@ pub enum Node {
     Union(Vec<Node>),
     Difference(Vec<Node>),
     Intersection(Vec<Node>),
+    /// Convex hull of all children.
+    Hull(Vec<Node>),
 }
 
 impl Node {

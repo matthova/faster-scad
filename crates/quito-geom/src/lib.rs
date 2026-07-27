@@ -1,6 +1,7 @@
 //! Geometry: mesh types, the fragment formula + primitive tessellation, the
 //! `Kernel` trait (CSG boolean backend), and the CSG-tree -> mesh renderer.
 
+mod hull;
 mod kernel;
 mod mesh;
 mod shape2d;
@@ -82,6 +83,10 @@ pub fn render_with(node: &Node, kernel: &dyn Kernel) -> Result<Mesh, GeomError> 
         Node::Intersection(children) => {
             let meshes = render_all(children, kernel)?;
             kernel.intersection(meshes)
+        }
+        Node::Hull(children) => {
+            let meshes = render_all(children, kernel)?;
+            kernel.hull(meshes)
         }
         Node::Difference(children) => {
             let mut meshes = render_all(children, kernel)?;
