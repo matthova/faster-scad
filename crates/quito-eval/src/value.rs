@@ -316,11 +316,7 @@ pub fn value_eq(a: &Value, b: &Value) -> bool {
 }
 
 fn compare(op: BinOp, a: &Value, b: &Value) -> Value {
-    let ord = match (a, b) {
-        (Value::Number(x), Value::Number(y)) => x.partial_cmp(y),
-        _ => return Value::Undef, // mixed comparison -> undef
-    };
-    match ord {
+    match value_cmp(a, b) {
         None => Value::Undef,
         Some(o) => {
             let res = match op {
@@ -332,5 +328,26 @@ fn compare(op: BinOp, a: &Value, b: &Value) -> Value {
             };
             Value::Bool(res)
         }
+    }
+}
+
+/// Ordering comparison with OpenSCAD semantics: numbers numerically, strings
+/// and vectors lexicographically (vectors recursively). Mixed/other types are
+/// incomparable (`None` -> `undef`).
+fn value_cmp(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
+    use std::cmp::Ordering;
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => x.partial_cmp(y),
+        (Value::Str(x), Value::Str(y)) => Some(x.cmp(y)),
+        (Value::Vector(x), Value::Vector(y)) => {
+            for (p, q) in x.iter().zip(y.iter()) {
+                match value_cmp(p, q) {
+                    Some(Ordering::Equal) => continue,
+                    other => return other,
+                }
+            }
+            Some(x.len().cmp(&y.len()))
+        }
+        _ => None,
     }
 }

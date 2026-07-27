@@ -1101,6 +1101,7 @@ fn chr(args: &[Value]) -> Value {
     fn one(n: f64) -> String {
         u32::try_from(n as i64)
             .ok()
+            .filter(|&c| c != 0) // OpenSCAD ignores code point 0
             .and_then(char::from_u32)
             .map(|c| c.to_string())
             .unwrap_or_default()
