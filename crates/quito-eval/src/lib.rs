@@ -1946,19 +1946,28 @@ fn builtin_fn(name: &str, args: &[Value], warnings: &mut Vec<String>) -> Value {
     }
 }
 
+thread_local! {
+    /// The global unseeded-`rands` PRNG state. Advances across calls (like
+    /// OpenSCAD's global generator) so two `rands(a,b,n)` calls yield different
+    /// sequences; starts from a fixed value each process, so runs are still
+    /// reproducible. A `rands(...,seed)` call reseeds it, matching OpenSCAD.
+    static RNG_STATE: std::cell::Cell<u64> = const { std::cell::Cell::new(0x9E37_79B9_7F4A_7C15) };
+}
+
 /// `rands(min, max, count, seed=undef)` — a list of pseudo-random numbers.
-/// Uses a seeded xorshift PRNG (deterministic per seed). Values won't match
-/// OpenSCAD's PRNG bit-for-bit, but distribution/range are correct, which is
-/// what identity-based tests (and most usage) rely on.
+/// Uses an xorshift PRNG. Values won't match OpenSCAD's PRNG bit-for-bit, but
+/// range/distribution are correct and, crucially, consecutive unseeded calls
+/// differ (BOSL2's geometry tests rely on that). Deterministic per process.
 fn rands_fn(args: &[Value]) -> Value {
     let min = args.first().and_then(Value::as_number).unwrap_or(0.0);
     let max = args.get(1).and_then(Value::as_number).unwrap_or(1.0);
     let count = args.get(2).and_then(Value::as_number).unwrap_or(1.0).max(0.0) as usize;
     let count = count.min(1_000_000);
     let seed = args.get(3).and_then(Value::as_number);
+    // Seeded: reset the global generator; unseeded: continue from where it left.
     let mut state: u64 = match seed {
-        Some(s) => (s.to_bits()) ^ 0x2545_F491_4F6C_DD1D,
-        None => 0x9E37_79B9_7F4A_7C15,
+        Some(s) => s.to_bits() ^ 0x2545_F491_4F6C_DD1D,
+        None => RNG_STATE.with(|c| c.get()),
     };
     if state == 0 {
         state = 1;
@@ -1971,6 +1980,7 @@ fn rands_fn(args: &[Value]) -> Value {
         let u = (state >> 11) as f64 / (1u64 << 53) as f64; // [0, 1)
         out.push(Value::Number(min + u * (max - min)));
     }
+    RNG_STATE.with(|c| c.set(state)); // persist so the next call advances
     value::vector(out)
 }
 
@@ -2141,17 +2151,24 @@ fn search(args: &[Value]) -> Value {
 }
 
 fn cross(args: &[Value]) -> Value {
-    if let (Some(Value::Vector(a)), Some(Value::Vector(b))) = (args.first(), args.get(1)) {
-        let g = |v: &[Value], i: usize| v.get(i).and_then(Value::as_number).unwrap_or(f64::NAN);
-        let (a0, a1, a2) = (g(a, 0), g(a, 1), g(a, 2));
-        let (b0, b1, b2) = (g(b, 0), g(b, 1), g(b, 2));
-        value::vector(vec![
-            Value::Number(a1 * b2 - a2 * b1),
-            Value::Number(a2 * b0 - a0 * b2),
-            Value::Number(a0 * b1 - a1 * b0),
-        ])
-    } else {
-        Value::Undef
+    // OpenSCAD: cross of two 3-vectors is a 3-vector; cross of two 2-vectors is
+    // the scalar z-component; anything else (mismatched lengths, non-numeric
+    // elements) is undef.
+    let (Some(Value::Vector(a)), Some(Value::Vector(b))) = (args.first(), args.get(1)) else {
+        return Value::Undef;
+    };
+    let nums = |v: &[Value]| -> Option<Vec<f64>> { v.iter().map(Value::as_number).collect() };
+    let (Some(a), Some(b)) = (nums(a), nums(b)) else {
+        return Value::Undef;
+    };
+    match (a.len(), b.len()) {
+        (3, 3) => value::vector(vec![
+            Value::Number(a[1] * b[2] - a[2] * b[1]),
+            Value::Number(a[2] * b[0] - a[0] * b[2]),
+            Value::Number(a[0] * b[1] - a[1] * b[0]),
+        ]),
+        (2, 2) => Value::Number(a[0] * b[1] - a[1] * b[0]),
+        _ => Value::Undef,
     }
 }
 
@@ -2241,6 +2258,27 @@ mod tests {
 
     fn echoes(src: &str) -> Vec<String> {
         eval(src).echoes
+    }
+
+    #[test]
+    fn cross_2d_is_scalar_3d_is_vector() {
+        // OpenSCAD: 2D cross -> scalar z, 3D cross -> vector, mismatch -> undef.
+        assert_eq!(echoes("echo(cross([1,2],[3,4]));"), vec!["ECHO: -2"]);
+        assert_eq!(echoes("echo(cross([2,3,4],[5,6,7]));"), vec!["ECHO: [-3, 6, -3]"]);
+        assert_eq!(echoes("echo(cross([1,2],[3,4,5]));"), vec!["ECHO: undef"]);
+    }
+
+    #[test]
+    fn unseeded_rands_advances() {
+        // Two consecutive unseeded rands() calls must differ (BOSL2 geometry
+        // tests build distinct random points this way).
+        let out = echoes("a=rands(0,1,3); b=rands(0,1,3); echo(a==b);");
+        assert_eq!(out, vec!["ECHO: false"]);
+        // A seeded call is reproducible.
+        assert_eq!(
+            echoes("echo(rands(0,1,2,42)==rands(0,1,2,42));"),
+            vec!["ECHO: true"]
+        );
     }
 
     #[test]

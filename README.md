@@ -13,7 +13,7 @@ shipping to the browser (wasm) and desktop (Tauri).
 > in-browser `include`/`use` and lazy library fetching, **STL/OFF/OBJ export**, a
 > **console**, **localStorage persistence**, and an installable/offline **PWA**.
 > An echo oracle (24/24) diffs the language against real OpenSCAD and BOSL2's
-> function suite passes 13/15. The full plan is in
+> function suite passes 15/15. The full plan is in
 > `.context/attachments/HoR0PL/plan.md`; research is in `.context/research/`.
 
 ## What works today (M0 native)
