@@ -53,6 +53,19 @@ export function CustomizerPanel({ params, overrides, onChange, onReset }: Props)
   );
 }
 
+/** Round a slider value for display so digit count stays bounded (mid-drag the
+ *  raw float would otherwise vary in width). Precision follows step when given,
+ *  else caps at 3 decimals; trailing zeros are dropped. */
+function formatSlider(value: number, step: number | null): string {
+  if (!Number.isFinite(value)) return String(value);
+  let decimals = 3;
+  if (step && step > 0) {
+    const dot = String(step).indexOf(".");
+    decimals = dot === -1 ? 0 : String(step).length - dot - 1;
+  }
+  return String(Number(value.toFixed(decimals)));
+}
+
 function Row({
   param,
   value,
@@ -86,7 +99,7 @@ function Row({
             value={Number(value)}
             onChange={(e) => onChange(parseFloat(e.target.value))}
           />
-          <output>{Number(value)}</output>
+          <output>{formatSlider(Number(value), c.step)}</output>
         </span>
       )}
 

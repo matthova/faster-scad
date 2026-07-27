@@ -240,8 +240,13 @@ body {
 }
 
 .param-slider output {
-  min-width: 34px;
+  /* Fixed width so the value's digit count can't resize the grid column
+     mid-drag (which shifts the thumb under the pointer -> feedback loop). */
+  width: 52px;
+  flex: none;
   text-align: right;
+  overflow: hidden;
+  white-space: nowrap;
   font-family: ui-monospace, Menlo, monospace;
   font-size: 11px;
 }
