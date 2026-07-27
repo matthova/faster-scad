@@ -62,16 +62,13 @@ pub fn render_with(node: &Node, kernel: &dyn Kernel) -> Result<Mesh, GeomError> 
             scale,
             slices,
             child,
-        } => Ok(shape2d::linear_extrude(
-            &shape2d::render2d(child),
-            *height,
-            *center,
-            *twist,
-            *scale,
-            *slices,
-        )),
+        } => extrude_csg(
+            child,
+            &|cs| shape2d::linear_extrude(cs, *height, *center, *twist, *scale, *slices),
+            kernel,
+        ),
         Node::RotateExtrude { angle, frags, child } => {
-            Ok(shape2d::rotate_extrude(&shape2d::render2d(child), *angle, *frags))
+            extrude_csg(child, &|cs| shape2d::rotate_extrude(cs, *angle, *frags), kernel)
         }
 
         Node::Group(children) => {
@@ -116,6 +113,48 @@ pub fn render_with(node: &Node, kernel: &dyn Kernel) -> Result<Mesh, GeomError> 
 
 fn render_all(children: &[Node], kernel: &dyn Kernel) -> Result<Vec<Mesh>, GeomError> {
     children.iter().map(|c| render_with(c, kernel)).collect()
+}
+
+/// Extrude a 2D subtree, distributing over 2D booleans: because the extrusion
+/// transform is applied identically to every operand (per height slice / per
+/// revolution step), `extrude(A op B) == extrude(A) op extrude(B)`, so 2D CSG
+/// is realized with the existing 3D kernel (no separate 2D kernel needed).
+fn extrude_csg(
+    node: &Node,
+    extrude: &dyn Fn(&[shape2d::Contour]) -> Mesh,
+    kernel: &dyn Kernel,
+) -> Result<Mesh, GeomError> {
+    match node {
+        Node::Empty => Ok(Mesh::new()),
+        Node::Union(children) | Node::Group(children) => {
+            let meshes = children
+                .iter()
+                .map(|c| extrude_csg(c, extrude, kernel))
+                .collect::<Result<Vec<_>, _>>()?;
+            kernel.union(meshes)
+        }
+        Node::Intersection(children) => {
+            let meshes = children
+                .iter()
+                .map(|c| extrude_csg(c, extrude, kernel))
+                .collect::<Result<Vec<_>, _>>()?;
+            kernel.intersection(meshes)
+        }
+        Node::Difference(children) => {
+            let mut meshes = children
+                .iter()
+                .map(|c| extrude_csg(c, extrude, kernel))
+                .collect::<Result<Vec<_>, _>>()?;
+            if meshes.is_empty() {
+                Ok(Mesh::new())
+            } else {
+                let base = meshes.remove(0);
+                kernel.difference(base, meshes)
+            }
+        }
+        // A leaf 2D shape (primitive or transform chain): render to contours.
+        leaf => Ok(extrude(&shape2d::render2d(leaf))),
+    }
 }
 
 fn translate(m: &mut Mesh, v: Vec3) {
@@ -225,6 +264,28 @@ mod tests {
         };
         let m = render(&node).unwrap();
         assert!((m.volume() - 240.0).abs() < 1e-6, "vol {}", m.volume());
+        assert!(m.signed_volume() > 0.0);
+    }
+
+    #[test]
+    fn extrude_2d_difference() {
+        // linear_extrude of (square - circle) = a plate with a hole.
+        let frags = FragmentSpec { fn_: 64.0, fa: 12.0, fs: 2.0 };
+        let node = Node::LinearExtrude {
+            height: 5.0,
+            center: false,
+            twist: 0.0,
+            scale: [1.0, 1.0],
+            slices: 1,
+            child: Box::new(Node::Difference(vec![
+                Node::Square { size: [20.0, 20.0], center: true },
+                Node::Circle { r: 5.0, frags },
+            ])),
+        };
+        let m = render(&node).unwrap();
+        let expected = (400.0 - std::f64::consts::PI * 25.0) * 5.0;
+        let rel = (m.volume() - expected).abs() / expected;
+        assert!(rel < 0.01, "plate vol off by {rel}: {}", m.volume());
         assert!(m.signed_volume() > 0.0);
     }
 
