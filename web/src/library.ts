@@ -11,8 +11,10 @@ export interface NamedFile {
 
 /** Path-prefix → CDN base for known libraries (BSD/permissive, CORS-enabled). */
 const LIBRARIES: Record<string, string> = {
-  // BOSL2 (BSD-2): `include <BOSL2/std.scad>` → jsDelivr.
-  BOSL2: "https://cdn.jsdelivr.net/gh/BelfrySCAD/BOSL2@3.0.0/",
+  // BOSL2 (BSD-2): `include <BOSL2/std.scad>` → jsDelivr. Pinned to the exact
+  // commit vendored as the corpus submodule (v2.0.747), which the engine's
+  // BOSL2 render test verifies against.
+  BOSL2: "https://cdn.jsdelivr.net/gh/BelfrySCAD/BOSL2@afe82db884ee4409aa76ecfcfbbf54d446964af1/",
 };
 
 // resolved path → content, or null when known-missing (don't refetch).
@@ -72,22 +74,31 @@ export async function resolveClosure(
   for (const f of localFiles) map.set(f.name, f.content);
 
   const seen = new Set<string>();
-  const queue: Array<[string, string]> = []; // [path, includingDir]
+  // Breadth-first over include/use edges, fetching each level in parallel — a
+  // big library like BOSL2 pulls in 100+ files, far too slow to fetch serially.
+  let level: string[] = []; // resolved paths to fetch next
   const enqueue = (content: string, dir: string) => {
-    for (const p of extractPaths(content)) queue.push([p, dir]);
+    for (const p of extractPaths(content)) {
+      const resolved = normJoin(dir, p);
+      if (!map.has(resolved) && !seen.has(resolved)) {
+        seen.add(resolved);
+        level.push(resolved);
+      }
+    }
   };
   enqueue(mainSource, "");
   for (const f of localFiles) enqueue(f.content, dirname(f.name));
 
-  while (queue.length) {
-    const [path, dir] = queue.shift()!;
-    const resolved = normJoin(dir, path);
-    if (map.has(resolved) || seen.has(resolved)) continue;
-    seen.add(resolved);
-    const content = await fetchLib(resolved, libBase);
-    if (content == null) continue; // missing → leave out; the engine warns
-    map.set(resolved, content);
-    enqueue(content, dirname(resolved));
+  while (level.length) {
+    const batch = level;
+    level = [];
+    const fetched = await Promise.all(batch.map((r) => fetchLib(r, libBase)));
+    batch.forEach((resolved, i) => {
+      const content = fetched[i];
+      if (content == null) return; // missing → leave out; the engine warns
+      map.set(resolved, content);
+      enqueue(content, dirname(resolved));
+    });
   }
 
   const names: string[] = [];
