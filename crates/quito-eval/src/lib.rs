@@ -376,6 +376,16 @@ impl Interp<'_> {
                 r
             }
             Stmt::For { bindings, body } => self.eval_for(bindings, body),
+            Stmt::Let { bindings, body } => {
+                self.push_scope();
+                for (n, e) in bindings {
+                    let v = self.eval_expr(e)?;
+                    self.set_var(n, v);
+                }
+                let r = self.eval_stmts(body);
+                self.pop_scope();
+                r
+            }
             Stmt::ModuleCall {
                 modifier,
                 name,
@@ -676,7 +686,8 @@ impl Interp<'_> {
         Ok(node)
     }
 
-    fn b_echo(&mut self, args: &[Arg], children: &[Stmt]) -> EResult<Node> {
+    /// Format and record an `echo(...)`; shared by the module and expression forms.
+    fn do_echo(&mut self, args: &[Arg]) -> EResult<()> {
         let mut parts = Vec::new();
         for a in args {
             let v = self.eval_expr(&a.value)?;
@@ -686,10 +697,17 @@ impl Interp<'_> {
             }
         }
         self.echoes.push(format!("ECHO: {}", parts.join(", ")));
+        Ok(())
+    }
+
+    fn b_echo(&mut self, args: &[Arg], children: &[Stmt]) -> EResult<Node> {
+        self.do_echo(args)?;
         Ok(Node::group(self.eval_children(children)?))
     }
 
-    fn b_assert(&mut self, args: &[Arg], children: &[Stmt]) -> EResult<Node> {
+    /// Assert semantics shared by the module and expression forms; returns
+    /// whether the assertion passed (errors on failure).
+    fn do_assert(&mut self, args: &[Arg]) -> EResult<()> {
         let cond = self
             .first_positional(args)
             .unwrap_or(Value::Undef)
@@ -704,6 +722,11 @@ impl Interp<'_> {
                 .unwrap_or_default();
             return err(format!("Assertion failed: {msg}"));
         }
+        Ok(())
+    }
+
+    fn b_assert(&mut self, args: &[Arg], children: &[Stmt]) -> EResult<Node> {
+        self.do_assert(args)?;
         Ok(Node::group(self.eval_children(children)?))
     }
 
@@ -799,6 +822,21 @@ impl Interp<'_> {
                 let v = self.eval_expr(expr)?;
                 Ok(value::unary(*op, v))
             }
+            // `&&` / `||` short-circuit (the right side may assert or error).
+            Expr::Binary { op: BinOp::And, lhs, rhs } => {
+                if !self.eval_expr(lhs)?.truthy() {
+                    Ok(Value::Bool(false))
+                } else {
+                    Ok(Value::Bool(self.eval_expr(rhs)?.truthy()))
+                }
+            }
+            Expr::Binary { op: BinOp::Or, lhs, rhs } => {
+                if self.eval_expr(lhs)?.truthy() {
+                    Ok(Value::Bool(true))
+                } else {
+                    Ok(Value::Bool(self.eval_expr(rhs)?.truthy()))
+                }
+            }
             Expr::Binary { op, lhs, rhs } => {
                 let l = self.eval_expr(lhs)?;
                 let r = self.eval_expr(rhs)?;
@@ -849,6 +887,14 @@ impl Interp<'_> {
                 } else {
                     Ok(Value::Undef)
                 }
+            }
+            Expr::Echo { args, body } => {
+                self.do_echo(args)?;
+                self.eval_expr(body)
+            }
+            Expr::Assert { args, body } => {
+                self.do_assert(args)?;
+                self.eval_expr(body)
             }
         }
     }
@@ -911,6 +957,14 @@ impl Interp<'_> {
                 self.pop_scope();
                 r
             }
+            Expr::Echo { args, body } => {
+                self.do_echo(args)?;
+                self.eval_tail(body, f)
+            }
+            Expr::Assert { args, body } => {
+                self.do_assert(args)?;
+                self.eval_tail(body, f)
+            }
             Expr::Call { name, args } => {
                 // A self-call in tail position becomes a loop iteration.
                 if let Some(g) = self.lookup_func(name) {
@@ -930,13 +984,17 @@ impl Interp<'_> {
             ListElem::Item(e) => {
                 out.push(self.eval_expr(e)?);
             }
-            ListElem::Each(e) => {
-                let v = self.eval_expr(e)?;
-                match v {
-                    Value::Vector(xs) => out.extend(xs.iter().cloned()),
-                    Value::Range { .. } => out.extend(iter_values(&v)?),
-                    Value::Undef => {}
-                    other => out.push(other),
+            ListElem::Each(inner) => {
+                // Evaluate the operand element, then splice each produced value.
+                let mut temp = Vec::new();
+                self.eval_list_elem(inner, &mut temp)?;
+                for v in temp {
+                    match v {
+                        Value::Vector(xs) => out.extend(xs.iter().cloned()),
+                        r @ Value::Range { .. } => out.extend(iter_values(&r)?),
+                        Value::Undef => {}
+                        other => out.push(other),
+                    }
                 }
             }
             ListElem::For { bindings, body } => {
@@ -1239,6 +1297,12 @@ fn builtin_fn(name: &str, args: &[Value], warnings: &mut Vec<String>) -> Value {
         "is_string" => Value::Bool(matches!(args.first(), Some(Value::Str(_)))),
         "is_list" => Value::Bool(matches!(args.first(), Some(Value::Vector(_)))),
         "is_function" => Value::Bool(matches!(args.first(), Some(Value::Function(_)))),
+        "version" => value::vector(vec![
+            Value::Number(2021.0),
+            Value::Number(1.0),
+            Value::Number(0.0),
+        ]),
+        "version_num" => Value::Number(20210100.0),
         "lookup" => lookup(args),
         "search" => search(args),
         "str" => {

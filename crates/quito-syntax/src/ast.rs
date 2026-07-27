@@ -90,6 +90,17 @@ pub enum Expr {
         callee: Box<Expr>,
         args: Vec<Arg>,
     },
+    /// `echo(args) body` — echo as an expression prefix (2019.05); echoes then
+    /// evaluates to `body`.
+    Echo {
+        args: Vec<Arg>,
+        body: Box<Expr>,
+    },
+    /// `assert(cond, msg) body` — assert as an expression prefix.
+    Assert {
+        args: Vec<Arg>,
+        body: Box<Expr>,
+    },
 }
 
 /// An element of a vector / list comprehension.
@@ -97,8 +108,9 @@ pub enum Expr {
 pub enum ListElem {
     /// A plain expression element.
     Item(Expr),
-    /// `each expr` — splice a list's elements in place.
-    Each(Expr),
+    /// `each elem` — splice the produced list(s) in place (the operand is itself
+    /// a comprehension element, so `each if (c) xs` is valid).
+    Each(Box<ListElem>),
     /// `for (bindings) body` — range/cartesian form.
     For {
         bindings: Vec<(String, Expr)>,
@@ -185,6 +197,11 @@ pub enum Stmt {
         cond: Expr,
         then: Vec<Stmt>,
         els: Vec<Stmt>,
+    },
+    /// `let (bindings) body` at statement level — binds variables for children.
+    Let {
+        bindings: Vec<(String, Expr)>,
+        body: Vec<Stmt>,
     },
     /// A bare `{ ... }` block.
     Block(Vec<Stmt>),

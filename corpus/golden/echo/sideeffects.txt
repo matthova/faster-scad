@@ -1,0 +1,6 @@
+ECHO: "computing"
+ECHO: true, false
+ECHO: 42
+ECHO: 99
+ECHO: [0, 0, 2, 2]
+ECHO: [1, 2, 3, 4, 5]

@@ -147,6 +147,14 @@ impl<'a> Parser<'a> {
             Some(Token::Function) => self.parse_function_def(),
             Some(Token::If) => self.parse_if(),
             Some(Token::For) => self.parse_for(),
+            Some(Token::Let) => {
+                self.advance();
+                self.expect(&Token::LParen)?;
+                let bindings = self.parse_bindings()?;
+                self.expect(&Token::RParen)?;
+                let body = self.parse_child_body()?;
+                Ok(Stmt::Let { bindings, body })
+            }
             Some(Token::Star | Token::Bang | Token::Hash | Token::Percent) => {
                 let modifier = match self.advance().unwrap() {
                     Token::Star => Modifier::Disable,
@@ -322,6 +330,29 @@ impl<'a> Parser<'a> {
         Ok(out)
     }
 
+    /// Whether the current token can begin an expression (used to detect the
+    /// trailing body of an `echo(...)`/`assert(...)` expression prefix).
+    fn at_expr_start(&self) -> bool {
+        matches!(
+            self.peek(),
+            Some(
+                Token::Number(_)
+                    | Token::Str(_)
+                    | Token::True
+                    | Token::False
+                    | Token::Undef
+                    | Token::Ident(_)
+                    | Token::Let
+                    | Token::Function
+                    | Token::LParen
+                    | Token::LBracket
+                    | Token::Minus
+                    | Token::Plus
+                    | Token::Bang
+            )
+        )
+    }
+
     // ---- expressions ---------------------------------------------------
 
     pub fn parse_expr(&mut self) -> PResult<Expr> {
@@ -487,7 +518,17 @@ impl<'a> Parser<'a> {
                 if self.eat(&Token::LParen) {
                     let args = self.parse_args()?;
                     self.expect(&Token::RParen)?;
-                    Ok(Expr::Call { name, args })
+                    // `echo(...) expr` / `assert(...) expr` are expression prefixes.
+                    if (name == "echo" || name == "assert") && self.at_expr_start() {
+                        let body = Box::new(self.parse_expr()?);
+                        if name == "echo" {
+                            Ok(Expr::Echo { args, body })
+                        } else {
+                            Ok(Expr::Assert { args, body })
+                        }
+                    } else {
+                        Ok(Expr::Call { name, args })
+                    }
                 } else {
                     Ok(Expr::Ident(name))
                 }
@@ -629,7 +670,17 @@ impl<'a> Parser<'a> {
             }
             Some(Token::Ident(n)) if n == "each" => {
                 self.advance();
-                Ok(ListElem::Each(self.parse_expr()?))
+                Ok(ListElem::Each(Box::new(self.parse_list_element()?)))
+            }
+            // A parenthesized comprehension element, e.g. `(each a)`.
+            Some(Token::LParen)
+                if matches!(self.peek2(), Some(Token::For | Token::Let | Token::If))
+                    || matches!(self.peek2(), Some(Token::Ident(n)) if n == "each") =>
+            {
+                self.advance(); // (
+                let elem = self.parse_list_element()?;
+                self.expect(&Token::RParen)?;
+                Ok(elem)
             }
             _ => Ok(ListElem::Item(self.parse_expr()?)),
         }
