@@ -27,12 +27,57 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        "bosl2" => run_bosl2(&root),
         other => {
             eprintln!("unknown command: {other}");
             eprintln!("usage: xtask [bless-echo|echo]");
             std::process::exit(2);
         }
     }
+}
+
+/// Run BOSL2's function-oriented test suite (BSD-licensed submodule) through
+/// quito and report the pass rate — the M2 exit metric.
+fn run_bosl2(root: &Path) {
+    let dir = root.join("corpus/BOSL2/tests");
+    let subset = [
+        "test_math", "test_lists", "test_comparisons", "test_strings", "test_vectors",
+        "test_linalg", "test_trigonometry", "test_utility", "test_fnliterals", "test_structs",
+        "test_coords", "test_affine", "test_quaternions", "test_geometry", "test_paths",
+        "test_regions",
+    ];
+    let dir_str = dir.to_string_lossy().into_owned();
+    let mut pass = 0;
+    let mut total = 0;
+    let mut failed = Vec::new();
+    for name in subset {
+        let path = dir.join(format!("{name}.scadtest"));
+        let Ok(raw) = fs::read_to_string(&path) else { continue };
+        let Some(script) = extract_script(&raw) else { continue };
+        total += 1;
+        let ok = match quito_syntax::parse(&script) {
+            Ok(prog) => quito_eval::eval_program_with(&prog, &DiskResolver, &dir_str).is_ok(),
+            Err(_) => false,
+        };
+        if ok {
+            pass += 1;
+        } else {
+            failed.push(name);
+        }
+    }
+    let pct = if total == 0 { 0.0 } else { pass as f64 / total as f64 * 100.0 };
+    println!("BOSL2 function tests: {pass}/{total} ({pct:.0}%)");
+    if !failed.is_empty() {
+        println!("  failing: {}", failed.join(", "));
+    }
+}
+
+/// Extract the OpenSCAD source from a BOSL2 `.scadtest` `script = '''...'''` block.
+fn extract_script(raw: &str) -> Option<String> {
+    let start = raw.find("script = '''")? + "script = '''".len();
+    let rest = &raw[start..];
+    let end = rest.find("'''")?;
+    Some(rest[..end].to_string())
 }
 
 fn workspace_root() -> PathBuf {
