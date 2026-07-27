@@ -10,11 +10,7 @@ import type { RenderResponse } from "./engineWorker";
 import { buildBinarySTL, buildOFF, buildOBJ, downloadBlob } from "./stl";
 import { CustomizerPanel } from "./CustomizerPanel";
 import { parseSchema, toLiteral, type Param, type ParamValue } from "./customizer";
-
-interface File {
-  name: string;
-  content: string;
-}
+import { loadProject, saveProject, clearProject, type File } from "./project";
 
 // The first file is always the rendered "main"; the rest are libraries that
 // main can `use`/`include`.
@@ -75,17 +71,18 @@ export function App() {
   const lastPositions = useRef<Float32Array>(new Float32Array(0));
   const debounceTimer = useRef<number | undefined>(undefined);
 
-  // File + customizer state. Refs mirror state so imperative render/edit paths
-  // never see a stale closure.
-  const filesRef = useRef<File[]>(DEFAULT_FILES.map((f) => ({ ...f })));
-  const activeRef = useRef(0);
+  // File + customizer state, restored from localStorage if present. Refs mirror
+  // state so imperative render/edit paths never see a stale closure.
+  const saved = useRef(loadProject()).current;
+  const filesRef = useRef<File[]>(saved?.files ?? DEFAULT_FILES.map((f) => ({ ...f })));
+  const activeRef = useRef(saved?.active ?? 0);
   const suppressRef = useRef(false);
-  const overridesRef = useRef<Record<string, ParamValue>>({});
+  const overridesRef = useRef<Record<string, ParamValue>>(saved?.overrides ?? {});
   const paramsJsonRef = useRef("");
   const requestRenderRef = useRef<() => void>(() => {});
 
   const [files, setFiles] = useState<File[]>(filesRef.current);
-  const [active, setActive] = useState(0);
+  const [active, setActive] = useState(activeRef.current);
   const [status, setStatus] = useState<Status>({
     ok: true,
     message: "initializing…",
@@ -100,7 +97,15 @@ export function App() {
   const [consoleOpen, setConsoleOpen] = useState(false);
   const [exportFmt, setExportFmt] = useState<"stl" | "off" | "obj">("stl");
   const [schema, setSchema] = useState<Param[]>([]);
-  const [overrides, setOverrides] = useState<Record<string, ParamValue>>({});
+  const [overrides, setOverrides] = useState<Record<string, ParamValue>>(overridesRef.current);
+
+  function persist() {
+    saveProject({
+      files: filesRef.current,
+      overrides: overridesRef.current,
+      active: activeRef.current,
+    });
+  }
 
   useEffect(() => {
     if (!canvasRef.current || !editorHost.current) return;
@@ -133,7 +138,7 @@ export function App() {
 
     const view = new EditorView({
       state: EditorState.create({
-        doc: filesRef.current[0].content,
+        doc: filesRef.current[activeRef.current].content,
         extensions: [
           basicSetup,
           keymap.of([indentWithTab]),
@@ -149,6 +154,7 @@ export function App() {
               next[idx] = { ...next[idx], content: u.state.doc.toString() };
               filesRef.current = next;
               setFiles(next);
+              persist();
               requestRender();
             }
           }),
@@ -177,6 +183,20 @@ export function App() {
     });
     suppressRef.current = false;
     view.focus();
+    persist();
+  }
+
+  function newProject() {
+    if (!window.confirm("Discard the current project and start fresh?")) return;
+    clearProject();
+    const fresh = DEFAULT_FILES.map((f) => ({ ...f }));
+    filesRef.current = fresh;
+    overridesRef.current = {};
+    setFiles(fresh);
+    setOverrides({});
+    activeRef.current = -1;
+    switchTo(0);
+    requestRenderRef.current();
   }
 
   function addFile() {
@@ -188,6 +208,7 @@ export function App() {
     filesRef.current = next;
     setFiles(next);
     switchTo(next.length - 1);
+    persist();
   }
 
   function deleteFile(idx: number) {
@@ -201,6 +222,7 @@ export function App() {
     else if (na > idx) na -= 1;
     activeRef.current = -1;
     switchTo(na);
+    persist();
     requestRenderRef.current();
   }
 
@@ -213,6 +235,7 @@ export function App() {
     next[idx] = { ...next[idx], name };
     filesRef.current = next;
     setFiles(next);
+    persist();
     requestRenderRef.current();
   }
 
@@ -271,12 +294,14 @@ export function App() {
     const next = { ...overridesRef.current, [name]: value };
     overridesRef.current = next;
     setOverrides(next);
+    persist();
     requestRenderRef.current();
   }
 
   function resetOverrides() {
     overridesRef.current = {};
     setOverrides({});
+    persist();
     requestRenderRef.current();
   }
 
@@ -295,6 +320,7 @@ export function App() {
           Quito <span className="tag">playground</span>
         </div>
         <div className="actions">
+          <button onClick={newProject}>New</button>
           <button onClick={() => viewerRef.current?.resetView()}>Reset view</button>
           <div className="export">
             <button onClick={() => onDownload(exportFmt)} disabled={status.triangleCount === 0}>
