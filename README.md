@@ -82,16 +82,24 @@ same `.scad` files (`cargo build --release && cargo run -p xtask -- bench`):
 
 | model | quito | OpenSCAD (CGAL) | speed-up | OpenSCAD (Manifold) | speed-up |
 |---|--:|--:|--:|--:|--:|
-| lamp shade (analytic polyhedron) | 55 ms | 181 ms | **3.3×** | 176 ms | **3.2×** |
-| booleans (grid of holes in a slab) | 54 ms | 19,576 ms | **360×** | 169 ms | **3.1×** |
-| rounded (minkowski + hull) | 25 ms | 354 ms | **14×** | 53 ms | **2.2×** |
-| gears (extrude/revolve heavy) | 17 ms | 1,893 ms | **114×** | 60 ms | **3.6×** |
+| lamp shade (analytic polyhedron) | 42 ms | 181 ms | **4.3×** | 177 ms | **4.3×** |
+| booleans (grid of holes in a slab) | 53 ms | 19,729 ms | **371×** | 167 ms | **3.1×** |
+| rounded (minkowski + hull) | 25 ms | 346 ms | **14×** | 56 ms | **2.3×** |
+| gears (extrude/revolve heavy) | 17 ms | 1,905 ms | **111×** | 61 ms | **3.5×** |
+| eval-bound (heavy compute, tiny mesh) | 455 ms | 513 ms | **1.1×** | 509 ms | **1.1×** |
 
 So Quito clears the **≥10× vs OpenSCAD 2021.01** goal (the 2021.01 renderer is
 CGAL, the left baseline) by a wide margin on geometry-heavy work, and is a solid
 **~3× ahead of OpenSCAD's newest Manifold backend** — while both baselines still
 pay process-startup overhead that dominates the smallest models, so these are
 conservative. Models live in [`benches/models/`](benches/models/).
+
+The **eval-bound** row is a deliberately published loss (per the project's
+losses-published policy): on a model that is nearly all interpretation and almost
+no geometry, Quito's tree-walk interpreter is only at parity with OpenSCAD's.
+Switching the interpreter's hot maps to a fast hasher took it from 0.9× to 1.1×;
+closing the rest of that gap is what the M4 **bytecode VM** is for (the tree-walk
+stays as its differential oracle).
 
 #### Warm-edit latency (M4 cache)
 

@@ -12,7 +12,12 @@ pub use value::{format_number, Value};
 
 use quito_ir::{FragmentSpec, Node, Vec3};
 use quito_syntax::ast::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
+
+/// Fast hash map for the interpreter's hot maps (scopes, params, specials).
+/// Variable names are short strings hashed on every lookup/insert; FxHash is
+/// far faster than the default SipHash and deterministic (no per-run seed).
+type FastMap<K, V> = rustc_hash::FxHashMap<K, V>;
 
 /// A file loaded by an `include`/`use` resolver.
 pub struct LoadedFile {
@@ -72,7 +77,7 @@ pub struct FnClosure {
 enum TailResult {
     Value(Value),
     /// Re-invoke the same function with these freshly-bound arguments.
-    TailCall(HashMap<String, Value>),
+    TailCall(FastMap<String, Value>),
 }
 
 /// A module definition with its captured lexical environment.
@@ -84,9 +89,9 @@ struct ModClosure {
 
 #[derive(Default)]
 struct Scope {
-    vars: HashMap<String, Value>,
-    funcs: HashMap<String, Rc<FnClosure>>,
-    modules: HashMap<String, Rc<ModClosure>>,
+    vars: FastMap<String, Value>,
+    funcs: FastMap<String, Rc<FnClosure>>,
+    modules: FastMap<String, Rc<ModClosure>>,
 }
 
 /// The output of evaluating a program.
@@ -101,7 +106,7 @@ struct Interp<'a> {
     scopes: Vec<ScopeRef>,
     /// Dynamic frames for `$` variables (mirrors execution nesting; NOT swapped
     /// on calls, giving `$vars` dynamic scoping).
-    specials: Vec<HashMap<String, Value>>,
+    specials: Vec<FastMap<String, Value>>,
     echoes: Vec<String>,
     warnings: Vec<String>,
     root: Option<Node>,
@@ -134,7 +139,7 @@ pub fn eval_program_with(
     base.vars.insert("PI".into(), Value::Number(std::f64::consts::PI));
 
     // `$` special variables live in the dynamic frame stack.
-    let mut globals = HashMap::new();
+    let mut globals = FastMap::default();
     globals.insert("$fn".to_string(), Value::Number(0.0));
     globals.insert("$fa".to_string(), Value::Number(12.0));
     globals.insert("$fs".to_string(), Value::Number(2.0));
@@ -168,7 +173,7 @@ impl Interp<'_> {
 
     fn push_scope(&mut self) {
         self.scopes.push(Rc::new(RefCell::new(Scope::default())));
-        self.specials.push(HashMap::new());
+        self.specials.push(FastMap::default());
     }
 
     fn pop_scope(&mut self) {
@@ -340,7 +345,7 @@ impl Interp<'_> {
         let base = self.scopes[0].clone();
         let saved = std::mem::replace(&mut self.scopes, vec![base, file_scope.clone()]);
         let prev_dir = std::mem::replace(&mut self.cur_dir, lf.dir.clone());
-        self.specials.push(HashMap::new());
+        self.specials.push(FastMap::default());
 
         let expanded = self.expand_includes(&prog);
         let result = expanded.and_then(|eff| self.eval_defs_and_assigns(&eff));
@@ -821,7 +826,7 @@ impl Interp<'_> {
 
     /// Resolve the fragment spec from call-site `$fn/$fa/$fs` args, falling back
     /// to the ambient special variables.
-    fn frag_spec(&self, m: &HashMap<String, Value>) -> FragmentSpec {
+    fn frag_spec(&self, m: &FastMap<String, Value>) -> FragmentSpec {
         let pick = |key: &str, default: f64| -> f64 {
             m.get(key)
                 .and_then(Value::as_number)
@@ -960,8 +965,8 @@ impl Interp<'_> {
 
     /// Bind arguments by the given positional parameter names, honoring named
     /// args (including out-of-band `$fn`-style and `d`/`r1` overrides).
-    fn bind_named(&mut self, positional: &[&str], args: &[Arg]) -> EResult<HashMap<String, Value>> {
-        let mut map = HashMap::new();
+    fn bind_named(&mut self, positional: &[&str], args: &[Arg]) -> EResult<FastMap<String, Value>> {
+        let mut map = FastMap::default();
         let mut pos = 0;
         for a in args {
             let v = self.eval_expr(&a.value)?;
@@ -980,8 +985,8 @@ impl Interp<'_> {
         Ok(map)
     }
 
-    fn bind_params(&mut self, params: &[Param], args: &[Arg]) -> EResult<HashMap<String, Value>> {
-        let mut map = HashMap::new();
+    fn bind_params(&mut self, params: &[Param], args: &[Arg]) -> EResult<FastMap<String, Value>> {
+        let mut map = FastMap::default();
         for p in params {
             if let Some(d) = &p.default {
                 let v = self.eval_expr(d)?;

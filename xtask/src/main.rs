@@ -86,11 +86,12 @@ fn run_bench(root: &Path) {
         std::process::exit(2);
     }
     let out = std::env::temp_dir().join("quito_bench.stl");
-    let models: [(&str, &str); 4] = [
+    let models: [(&str, &str); 5] = [
         ("lamp-shade", "examples/lamp.scad"),
         ("booleans", "benches/models/booleans.scad"),
         ("rounded", "benches/models/rounded.scad"),
         ("gears", "benches/models/gears.scad"),
+        ("eval-bound", "benches/models/evalbound.scad"),
     ];
 
     println!("Dual-baseline benchmark — best of {RUNS} runs, full-process wall-clock (ms).\n");
