@@ -61,6 +61,47 @@ fn renders_lamp_assembly() {
     );
 }
 
+/// BOSL2 (BSD, git submodule) exercises a large slice of the language and its
+/// attachment system. `cuboid([20,20,20])` must render a 20 mm cube (vol 8000),
+/// proving matrix multiply, `search`, nested `children()`, and `use`-inside-
+/// `include` resolution all work together. Skipped if the submodule is absent.
+#[test]
+fn renders_bosl2_cuboid() {
+    let corpus = workspace_root().join("corpus");
+    if !corpus.join("BOSL2/std.scad").exists() {
+        eprintln!("skipping: corpus/BOSL2 submodule not checked out");
+        return;
+    }
+    struct DR(std::path::PathBuf);
+    impl quito_eval::FileResolver for DR {
+        fn load(&self, path: &str, from: &str) -> Option<quito_eval::LoadedFile> {
+            for c in [std::path::Path::new(from).join(path), self.0.join(path)] {
+                if let Ok(source) = std::fs::read_to_string(&c) {
+                    let key = std::fs::canonicalize(&c)
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .unwrap_or_else(|_| c.to_string_lossy().into_owned());
+                    let dir = c
+                        .parent()
+                        .map(|d| d.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    return Some(quito_eval::LoadedFile { key, source, dir });
+                }
+            }
+            None
+        }
+    }
+    let src = "include <BOSL2/std.scad>\ncuboid([20,20,20]);";
+    let prog = quito_syntax::parse(src).expect("parse");
+    let out = quito_eval::eval_program_with(&prog, &DR(corpus.clone()), corpus.to_str().unwrap())
+        .expect("eval");
+    let mesh = quito_geom::render(&out.node).expect("render");
+    assert!(
+        (mesh.volume() - 8000.0).abs() < 1.0,
+        "BOSL2 cuboid volume {} not ~8000",
+        mesh.volume()
+    );
+}
+
 /// The draped/fluted dome lamp shade: a single analytic-surface polyhedron
 /// built with C-style-for comprehensions. Must render to a watertight,
 /// outward-facing mesh matching OpenSCAD (17408 triangles, volume ~13.596).

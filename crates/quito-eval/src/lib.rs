@@ -61,6 +61,33 @@ fn err<T>(msg: impl Into<String>) -> EResult<T> {
     Err(EvalError(msg.into()))
 }
 
+/// Resolve `path` against directory `dir`, normalizing `.`/`..` segments. Used
+/// to make a `use` path inside an included file resolvable later (when the
+/// evaluator's current directory is no longer that file's). Absolute paths and
+/// an empty `dir` are returned unchanged.
+fn join_dir(dir: &str, path: &str) -> String {
+    if dir.is_empty() || path.starts_with('/') {
+        return path.to_string();
+    }
+    let mut parts: Vec<&str> = Vec::new();
+    for seg in dir.split('/').chain(path.split('/')) {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            s => parts.push(s),
+        }
+    }
+    // Preserve a leading '/' from an absolute `dir`.
+    let joined = parts.join("/");
+    if dir.starts_with('/') {
+        format!("/{joined}")
+    } else {
+        joined
+    }
+}
+
 use std::cell::{OnceCell, RefCell};
 use std::rc::Rc;
 
@@ -270,7 +297,7 @@ impl Interp<'_> {
         // Splice `include`d files in first (only when present, to avoid cloning).
         let expanded;
         let effective: &[Stmt] = if stmts.iter().any(|s| matches!(s, Stmt::Include { .. })) {
-            expanded = self.expand_includes(stmts)?;
+            expanded = self.expand_includes(stmts, false)?;
             &expanded
         } else {
             stmts
@@ -344,7 +371,14 @@ impl Interp<'_> {
     }
 
     /// Recursively splice `include`d files' top-level statements in place.
-    fn expand_includes(&mut self, stmts: &[Stmt]) -> EResult<Vec<Stmt>> {
+    ///
+    /// `in_include` is true while expanding a file reached via `include`/`use`
+    /// (i.e. not the main program). In that case a deferred `use` must remember
+    /// the file it came from — the flattened statements are later resolved
+    /// against the *main* directory, so we rewrite the `use` path to an absolute
+    /// one relative to the including file's directory. (Top-level `use`s are
+    /// left relative so they still search library paths / the CDN registry.)
+    fn expand_includes(&mut self, stmts: &[Stmt], in_include: bool) -> EResult<Vec<Stmt>> {
         let mut out = Vec::new();
         for s in stmts {
             match s {
@@ -360,10 +394,13 @@ impl Interp<'_> {
                         EvalError(format!("in include '{path}': {}", e.message))
                     })?;
                     let prev = std::mem::replace(&mut self.cur_dir, lf.dir.clone());
-                    let expanded = self.expand_includes(&prog);
+                    let expanded = self.expand_includes(&prog, true);
                     self.cur_dir = prev;
                     self.loading.remove(&lf.key);
                     out.extend(expanded?);
+                }
+                Stmt::Use { path } if in_include => {
+                    out.push(Stmt::Use { path: join_dir(&self.cur_dir, path) });
                 }
                 other => out.push(other.clone()),
             }
@@ -391,7 +428,7 @@ impl Interp<'_> {
         let prev_dir = std::mem::replace(&mut self.cur_dir, lf.dir.clone());
         self.specials.push(FastMap::default());
 
-        let expanded = self.expand_includes(&prog);
+        let expanded = self.expand_includes(&prog, true);
         let result = expanded.and_then(|eff| self.eval_defs_and_assigns(&eff));
 
         self.specials.pop();
@@ -2161,6 +2198,34 @@ mod tests {
             echoes("function t(a,b)=a && b; echo(t(true,false), t(true,true));"),
             vec!["ECHO: false, true"]
         );
+    }
+
+    #[test]
+    fn use_inside_included_file_resolves_relative() {
+        // main includes lib/a.scad, which `use`s a sibling b.scad. The `use`
+        // must resolve relative to a.scad's directory (`lib/`), not the main
+        // file's — the bug that kept BOSL2's builtins.scad from loading.
+        struct R;
+        impl FileResolver for R {
+            fn load(&self, path: &str, from: &str) -> Option<LoadedFile> {
+                let files = [
+                    ("lib/a.scad", "use <b.scad>\nfunction val() = sz();"),
+                    ("lib/b.scad", "function sz() = 7;"),
+                ];
+                let full = if from.is_empty() || from == "." {
+                    path.to_string()
+                } else {
+                    format!("{from}/{path}")
+                };
+                files.iter().find(|(k, _)| *k == full || *k == path).map(|(k, v)| {
+                    let dir = k.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default();
+                    LoadedFile { key: k.to_string(), source: v.to_string(), dir }
+                })
+            }
+        }
+        let prog = quito_syntax::parse("include <lib/a.scad>\necho(val());").unwrap();
+        let out = eval_program_with(&prog, &R, ".").unwrap();
+        assert_eq!(out.echoes, vec!["ECHO: 7"]);
     }
 
     #[test]
