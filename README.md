@@ -4,19 +4,17 @@ A fast, greenfield reimplementation of the [OpenSCAD](https://openscad.org)
 language — same language spirit, a modern geometry kernel, one Rust core
 shipping to the browser (wasm) and desktop (Tauri).
 
-> **Status: M3 complete, M4 exit criteria met — full language + geometry + perf.**
-> M0 (native skeleton), M1 (playground + kernel bake-off) and M2 (full language)
-> are complete: BOSL2's function test suite passes **13/15 (87%)** and an echo
-> oracle (24/24) diffs the language against real OpenSCAD. M3 has added the 2D
-> subsystem (`square`/`circle`/`polygon`/`offset`), `linear_extrude`/
-> `rotate_extrude` (with 2D booleans), `projection(cut=true)`, `hull`,
-> `minkowski`, `mirror`/`multmatrix`/`resize`/`color`, and STL/OFF/OBJ import +
-> export — so the complete parametric lamp *assembly* renders (matching
-> OpenSCAD's Manifold backend, where its default CGAL backend crashes). Still to
-> come: a 2D clipper (for `projection(cut=false)` silhouettes, robust
-> offset-of-booleans, non-convex minkowski) and the benchmark suite. The full
-> plan is in `.context/attachments/HoR0PL/plan.md`; research is in
-> `.context/research/`.
+> **Status: M4 met, M5 (playground → product) landing.**
+> M0–M2 (native skeleton, playground+kernel bake-off, full language) and M3 (full
+> geometry) are complete; M4 met both perf exits (warm-edit <100 ms via a
+> geometry cache; ~25× geomean vs OpenSCAD 2021.01/CGAL including an eval-bound
+> model, via a bytecode VM). M5 has turned the playground into a product: a
+> **customizer** (annotation-driven parameter UI), **multi-file projects** with
+> in-browser `include`/`use` and lazy library fetching, **STL/OFF/OBJ export**, a
+> **console**, **localStorage persistence**, and an installable/offline **PWA**.
+> An echo oracle (24/24) diffs the language against real OpenSCAD and BOSL2's
+> function suite passes 13/15. The full plan is in
+> `.context/attachments/HoR0PL/plan.md`; research is in `.context/research/`.
 
 ## What works today (M0 native)
 
@@ -48,13 +46,41 @@ Geometry booleans run behind a `Kernel` trait with two backends:
   test confirms the two backends agree to within 0.5% on
   union/difference/intersection.
 
-### Browser playground (M1)
+### Browser playground
 
-A live-editing playground runs the engine as wasm in a Web Worker with a
-three.js preview; see [`web/`](web/README.md). Verified in headless Chrome:
-non-trivial `.scad` edits re-render live in single-digit milliseconds, with
-worker-terminate cancellation and parse errors surfaced inline. `cd web && npm
-run build:wasm && npm install && npm run dev`.
+The engine runs as wasm in a Web Worker with a three.js preview; edits re-render
+live in single-digit milliseconds, with worker-terminate cancellation and parse
+errors surfaced inline. Run it locally with `cd web && npm install && npm run
+build:wasm && npm run dev`; see [`web/`](web/README.md).
+
+**Product features (M5):**
+
+- **Customizer** — annotated top-level variables become an editable control
+  panel (grouped), and changes re-render live. Supported annotations:
+
+  | annotation | control |
+  |---|---|
+  | `x = 5;` | number spinbox |
+  | `x = 5;  // [0:10]` | slider |
+  | `x = 5;  // [0:0.5:10]` | slider with step |
+  | `x = 2;  // [0, 1, 2, 3]` | dropdown (values) |
+  | `m = 1;  // [0:Off, 1:On]` | dropdown (labelled) |
+  | `on = true;` | checkbox |
+  | `s = "hi"; // 8` | text (max length) |
+  | `v = [1,2,3];` | vector |
+
+  `/* [Group] */` starts a group (`[Hidden]` drops params); a `//` comment on the
+  line above a variable becomes its label. The same overrides are available on
+  the CLI: `quito model.scad -D width=20 -o out.stl`.
+- **Multi-file projects** — a tab bar for several files; the first is rendered
+  and the rest are libraries. `include`/`use` resolve between files in-browser,
+  and unknown paths are fetched lazily (bundled `/lib/`, or a CDN by prefix —
+  e.g. `BOSL2/…` from jsDelivr) with transitive resolution + caching.
+- **Export** — STL (binary), OFF, or OBJ.
+- **Console** — echo / warnings / errors, color-coded.
+- **Persistence** — files, parameter values, and the active tab autosave to
+  `localStorage` and restore on reload.
+- **PWA** — installable, and the app shell + engine are cached for offline use.
 
 ### Oracle verification
 
