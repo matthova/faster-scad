@@ -574,6 +574,13 @@ impl Interp<'_> {
         args: &[Arg],
         children: &[Stmt],
     ) -> EResult<Node> {
+        // Guard against unbounded module recursion (shared budget with function
+        // calls) so a runaway library errors gracefully instead of overflowing
+        // the stack and aborting the process.
+        if self.depth >= MAX_CALL_DEPTH {
+            return err("maximum module recursion depth exceeded");
+        }
+        self.depth += 1;
         // Arguments are evaluated in the caller's scope; the body runs in the
         // module's captured (lexical) environment.
         let bound = self.bind_params(&def.params, args)?;
@@ -589,15 +596,33 @@ impl Interp<'_> {
         self.children_stack.pop();
         self.pop_scope();
         self.scopes = saved;
+        self.depth -= 1;
         Ok(Node::group(r?))
     }
 
     /// `children()` / `children(i)` / `children([indices|range])`. Children are
     /// evaluated in the caller's lexical scope (where they were written).
     fn b_children(&mut self, args: &[Arg]) -> EResult<Node> {
-        let Some((kids, caller_scopes)) = self.children_stack.last().cloned() else {
+        // Pop our own frame while evaluating the children: a `children()` call
+        // *inside* those children must resolve to the grandparent's children
+        // (one level up), matching OpenSCAD — and preventing infinite recursion
+        // when a module forwards `children()` through another module's children.
+        let Some(frame) = self.children_stack.pop() else {
             return Ok(Node::Empty);
         };
+        let (kids, caller_scopes) = frame.clone();
+        let result = self.eval_children_frame(&kids, caller_scopes, args);
+        self.children_stack.push(frame);
+        result
+    }
+
+    fn eval_children_frame(
+        &mut self,
+        kids: &[Stmt],
+        caller_scopes: Vec<ScopeRef>,
+        args: &[Arg],
+    ) -> EResult<Node> {
+        let kids = kids.to_vec();
         // The index selector is evaluated in the module's scope.
         let idxs: Option<Vec<usize>> = if args.is_empty() {
             None
@@ -2136,6 +2161,19 @@ mod tests {
             echoes("function t(a,b)=a && b; echo(t(true,false), t(true,true));"),
             vec!["ECHO: false, true"]
         );
+    }
+
+    #[test]
+    fn nested_children_forwarding() {
+        // `children()` used inside a module's own children must forward to the
+        // grandparent's children, not re-read the same frame (which would loop
+        // forever). BOSL2's attachment system relies on this.
+        let out = eval(
+            "module outer() { children(); }\n\
+             module wrap() { outer() children(); }\n\
+             wrap() cube(2);",
+        );
+        assert_ne!(out.node, Node::Empty, "forwarded cube was lost");
     }
 
     #[test]

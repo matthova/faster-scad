@@ -71,6 +71,18 @@ enum StlFormat {
 }
 
 fn main() -> Result<()> {
+    // Run on a worker thread with a large stack: recursive libraries (e.g.
+    // BOSL2's attachment system) can nest the evaluator deeply, and OpenSCAD
+    // itself runs with a large stack for the same reason.
+    std::thread::Builder::new()
+        .stack_size(256 << 20) // 256 MiB
+        .spawn(run)
+        .context("spawning worker thread")?
+        .join()
+        .map_err(|_| anyhow::anyhow!("worker thread panicked"))?
+}
+
+fn run() -> Result<()> {
     let cli = Cli::parse();
 
     let src = std::fs::read_to_string(&cli.input)
