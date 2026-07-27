@@ -133,8 +133,9 @@ fn escape_string(s: &str) -> String {
     out
 }
 
-/// Format a number like OpenSCAD: C `%.6g` (6 significant digits), but with the
-/// exponent written without leading zeros (`1e+6`, `1.234e-6`).
+/// Format a number like OpenSCAD: 6 significant digits (`%g`-style), with the
+/// exponent written without leading zeros (`1e+6`, `1.234e-6`) and exact ties
+/// rounded half-away-from-zero (matching OpenSCAD, not Rust's half-to-even).
 pub fn format_number(n: f64) -> String {
     if n.is_nan() {
         return "nan".to_string();
@@ -146,36 +147,81 @@ pub fn format_number(n: f64) -> String {
         return "0".to_string();
     }
 
-    const P: i32 = 6;
-    // Reliable base-10 exponent via Rust's scientific formatter.
-    let sci = format!("{:e}", n);
-    let exp: i32 = sci
-        .split('e')
-        .nth(1)
-        .and_then(|e| e.parse().ok())
-        .unwrap_or(0);
+    const P: usize = 6;
+    let neg = n < 0.0;
 
-    if exp < -4 || exp >= P {
-        // scientific, P-1 fractional mantissa digits, trailing zeros trimmed
-        let s = format!("{:.*e}", (P - 1) as usize, n);
-        let (mant, e) = s.split_once('e').unwrap();
-        let mant = trim_frac(mant);
-        let exp_num: i32 = e.parse().unwrap_or(0);
-        let sign = if exp_num < 0 { "-" } else { "+" };
-        format!("{mant}e{sign}{}", exp_num.abs())
+    // Extract the exact significant digits of |n| and the exponent of the first.
+    let sci = format!("{:e}", n.abs()); // e.g. "1.250025e9"
+    let (mant, exp_s) = sci.split_once('e').unwrap();
+    let mut exp: i32 = exp_s.parse().unwrap_or(0);
+    let mut digits: Vec<u8> = mant.bytes().filter(|b| *b != b'.').map(|b| b - b'0').collect();
+
+    // Round to P significant digits, half-away-from-zero.
+    if digits.len() > P {
+        let round_up = digits[P] >= 5;
+        digits.truncate(P);
+        if round_up {
+            let mut i = P;
+            loop {
+                if i == 0 {
+                    digits.insert(0, 1);
+                    exp += 1;
+                    digits.truncate(P);
+                    break;
+                }
+                i -= 1;
+                if digits[i] == 9 {
+                    digits[i] = 0;
+                } else {
+                    digits[i] += 1;
+                    break;
+                }
+            }
+        }
     } else {
-        let decimals = (P - 1 - exp).max(0) as usize;
-        let s = format!("{n:.decimals$}");
-        trim_frac(&s).to_string()
+        digits.resize(P, 0);
     }
-}
 
-/// Trim trailing zeros (and a trailing dot) from a decimal mantissa.
-fn trim_frac(s: &str) -> String {
-    if s.contains('.') {
-        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    let sign = if neg { "-" } else { "" };
+    let digit_ch = |d: &u8| (b'0' + d) as char;
+
+    if exp < -4 || exp >= P as i32 {
+        // scientific
+        let mut frac: String = digits[1..].iter().map(digit_ch).collect();
+        while frac.ends_with('0') {
+            frac.pop();
+        }
+        let mant_str = if frac.is_empty() {
+            digits[0].to_string()
+        } else {
+            format!("{}.{}", digits[0], frac)
+        };
+        let esign = if exp < 0 { "-" } else { "+" };
+        format!("{sign}{mant_str}e{esign}{}", exp.abs())
+    } else if exp >= 0 {
+        // fixed with an integer part of exp+1 digits
+        let ip = exp as usize + 1;
+        let mut int_part: String = digits.iter().take(ip.min(P)).map(digit_ch).collect();
+        for _ in P..ip {
+            int_part.push('0');
+        }
+        let mut frac: String = digits.iter().skip(ip).map(digit_ch).collect();
+        while frac.ends_with('0') {
+            frac.pop();
+        }
+        if frac.is_empty() {
+            format!("{sign}{int_part}")
+        } else {
+            format!("{sign}{int_part}.{frac}")
+        }
     } else {
-        s.to_string()
+        // 0.00…digits  (exp in [-4, -1])
+        let mut frac = "0".repeat((-exp - 1) as usize);
+        frac.extend(digits.iter().map(digit_ch));
+        while frac.ends_with('0') {
+            frac.pop();
+        }
+        format!("{sign}0.{frac}")
     }
 }
 

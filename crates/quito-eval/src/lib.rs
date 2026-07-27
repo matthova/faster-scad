@@ -40,6 +40,13 @@ pub struct FnClosure {
     env: Vec<ScopeRef>,
 }
 
+/// Outcome of evaluating a function body in tail position.
+enum TailResult {
+    Value(Value),
+    /// Re-invoke the same function with these freshly-bound arguments.
+    TailCall(HashMap<String, Value>),
+}
+
 /// A module definition with its captured lexical environment.
 struct ModClosure {
     params: Vec<Param>,
@@ -714,22 +721,74 @@ impl Interp {
 
     /// Call a function closure: arguments are bound in the caller's scope, then
     /// the body runs in the closure's captured lexical environment.
+    ///
+    /// Self-tail-calls are eliminated: when the body reduces (through ternaries
+    /// and `let`s) to a call of the same function in tail position, the frame is
+    /// reused in a loop instead of recursing, so accumulator-style recursion
+    /// runs to arbitrary depth without overflowing the (small, on wasm) stack.
     fn call_function(&mut self, f: &Rc<FnClosure>, args: &[Arg]) -> EResult<Value> {
         if self.depth >= MAX_CALL_DEPTH {
             return err("maximum call depth exceeded");
         }
-        let bound = self.bind_params(&f.params, args)?;
+        let mut bound = self.bind_params(&f.params, args)?;
         self.depth += 1;
-        let saved = std::mem::replace(&mut self.scopes, f.env.clone());
-        self.push_scope();
-        for (k, v) in bound {
-            self.set_var(&k, v);
-        }
-        let r = self.eval_expr(&f.body);
-        self.pop_scope();
-        self.scopes = saved;
+        let mut iters = 0usize;
+        let result = loop {
+            let saved = std::mem::replace(&mut self.scopes, f.env.clone());
+            self.push_scope();
+            for (k, v) in bound.drain() {
+                self.set_var(&k, v);
+            }
+            let tail = self.eval_tail(&f.body, f);
+            self.pop_scope();
+            self.scopes = saved;
+            match tail {
+                Err(e) => break Err(e),
+                Ok(TailResult::Value(v)) => break Ok(v),
+                Ok(TailResult::TailCall(next)) => {
+                    bound = next;
+                    iters += 1;
+                    if iters > MAX_RANGE_ITERS {
+                        break err("tail recursion exceeded iteration limit");
+                    }
+                }
+            }
+        };
         self.depth -= 1;
-        r
+        result
+    }
+
+    /// Evaluate `expr` in tail position relative to function `f`. Returns either
+    /// a final value or a request to tail-call `f` with fresh arguments (already
+    /// evaluated in the current frame).
+    fn eval_tail(&mut self, expr: &Expr, f: &Rc<FnClosure>) -> EResult<TailResult> {
+        match expr {
+            Expr::Ternary { cond, then, els } => {
+                let branch = if self.eval_expr(cond)?.truthy() { then } else { els };
+                self.eval_tail(branch, f)
+            }
+            Expr::Let { bindings, body } => {
+                self.push_scope();
+                for (n, e) in bindings {
+                    let v = self.eval_expr(e)?;
+                    self.set_var(n, v);
+                }
+                let r = self.eval_tail(body, f);
+                self.pop_scope();
+                r
+            }
+            Expr::Call { name, args } => {
+                // A self-call in tail position becomes a loop iteration.
+                if let Some(g) = self.lookup_func(name) {
+                    if Rc::ptr_eq(&g, f) {
+                        let next = self.bind_params(&f.params, args)?;
+                        return Ok(TailResult::TailCall(next));
+                    }
+                }
+                Ok(TailResult::Value(self.eval_expr(expr)?))
+            }
+            _ => Ok(TailResult::Value(self.eval_expr(expr)?)),
+        }
     }
 
     fn eval_list_elem(&mut self, el: &ListElem, out: &mut Vec<Value>) -> EResult<()> {
