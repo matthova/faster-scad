@@ -794,25 +794,35 @@ impl Interp<'_> {
             _ => return Ok(Node::Empty),
         };
         let center = m.get("center").map(Value::truthy).unwrap_or(false);
-        if path.to_ascii_lowercase().ends_with(".png") {
-            self.warnings
-                .push("surface(): PNG heightmaps not yet supported (use a .dat text file)".into());
-            return Ok(Node::Empty);
-        }
-        let Some(lf) = self.resolver.load(&path, &self.cur_dir) else {
-            self.warnings.push(format!("Can't open surface file '{path}'"));
-            return Ok(Node::Empty);
+        let invert = m.get("invert").map(Value::truthy).unwrap_or(false);
+        let is_png = path.to_ascii_lowercase().ends_with(".png");
+        let rows = if is_png {
+            let Some(bytes) = self.resolver.load_bytes(&path, &self.cur_dir) else {
+                self.warnings.push(format!("Can't open surface file '{path}'"));
+                return Ok(Node::Empty);
+            };
+            match png_heightmap(&bytes, invert) {
+                Ok(rows) => rows,
+                Err(e) => {
+                    self.warnings.push(format!("surface(): {e} in '{path}'"));
+                    return Ok(Node::Empty);
+                }
+            }
+        } else {
+            let Some(lf) = self.resolver.load(&path, &self.cur_dir) else {
+                self.warnings.push(format!("Can't open surface file '{path}'"));
+                return Ok(Node::Empty);
+            };
+            // Whitespace-separated rows of z-values; `#` lines are comments.
+            lf.source
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                .map(|l| l.split_whitespace().filter_map(|s| s.parse::<f64>().ok()).collect())
+                .filter(|r: &Vec<f64>| !r.is_empty())
+                .collect()
         };
-        // Whitespace-separated rows of z-values; `#` lines are comments.
-        let rows: Vec<Vec<f64>> = lf
-            .source
-            .lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty() && !l.starts_with('#'))
-            .map(|l| l.split_whitespace().filter_map(|s| s.parse::<f64>().ok()).collect())
-            .filter(|r: &Vec<f64>| !r.is_empty())
-            .collect();
-        Ok(surface_polyhedron(&rows, center))
+        Ok(surface_polyhedron(&rows, center, is_png))
     }
 
     fn b_polyhedron(&mut self, args: &[Arg]) -> EResult<Node> {
@@ -1662,10 +1672,56 @@ fn surf_face(faces: &mut Vec<Vec<u32>>, pts: &[Vec3], a: u32, b: u32, c: u32, ou
     faces.push(vec![v0, v2, v1]);
 }
 
+/// Decode a PNG into a heightmap grid for `surface()`. Each pixel's height is
+/// its Rec.709 luma scaled to 0..100 (white = 100), matching OpenSCAD; `invert`
+/// flips brightness (height → 100 - height). Rows are returned bottom-to-top so
+/// they feed `surface_polyhedron`'s row-r→y=r convention (OpenSCAD places the
+/// image's top row at the maximum Y).
+fn png_heightmap(bytes: &[u8], invert: bool) -> Result<Vec<Vec<f64>>, String> {
+    let decoder = png::Decoder::new(bytes);
+    let mut reader = decoder.read_info().map_err(|e| e.to_string())?;
+    let mut buf = vec![0u8; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buf).map_err(|e| e.to_string())?;
+    let (w, h) = (info.width as usize, info.height as usize);
+    let chans = info.color_type.samples();
+    let bytes_per_sample = match info.bit_depth {
+        png::BitDepth::Sixteen => 2,
+        _ => 1,
+    };
+    let sample = |base: usize| -> f64 {
+        // Read one channel sample as 0..255. 16-bit samples are reduced to 8-bit
+        // by their most-significant byte (libpng's strip_16), matching OpenSCAD.
+        let i = base * bytes_per_sample;
+        buf[i] as f64
+    };
+    let stride = w * chans;
+    let mut rows: Vec<Vec<f64>> = Vec::with_capacity(h);
+    for y in 0..h {
+        let mut row = Vec::with_capacity(w);
+        for x in 0..w {
+            let base = y * stride + x * chans;
+            // Grayscale (1-2 chans) uses the single value; RGB(A) uses Rec.709.
+            let luma = if chans <= 2 {
+                sample(base)
+            } else {
+                0.2126 * sample(base) + 0.7152 * sample(base + 1) + 0.0722 * sample(base + 2)
+            };
+            let mut z = luma / 2.55; // 0..255 -> 0..100
+            if invert {
+                z = 100.0 - z;
+            }
+            row.push(z);
+        }
+        rows.push(row);
+    }
+    rows.reverse(); // image top row -> largest y
+    Ok(rows)
+}
+
 /// Build the `surface()` solid from a heightmap grid: the top follows the
 /// heights, the bottom is flat at z=0, joined by vertical walls. Matches
 /// OpenSCAD (row r → y=r, col c → x=c; `center` shifts to the origin).
-fn surface_polyhedron(rows: &[Vec<f64>], center: bool) -> Node {
+fn surface_polyhedron(rows: &[Vec<f64>], center: bool, png: bool) -> Node {
     let nr = rows.len();
     let nc = rows.iter().map(Vec::len).max().unwrap_or(0);
     if nr < 2 || nc < 2 {
@@ -1674,12 +1730,14 @@ fn surface_polyhedron(rows: &[Vec<f64>], center: bool) -> Node {
     let h = |r: usize, c: usize| rows[r].get(c).copied().unwrap_or(0.0);
     let ox = if center { (nc - 1) as f64 / 2.0 } else { 0.0 };
     let oy = if center { (nr - 1) as f64 / 2.0 } else { 0.0 };
-    // Bottom plane, matching OpenSCAD: z=0 when all heights ≥1, else min−1.
+    // Bottom plane. OpenSCAD's two source paths differ: a text (.dat) surface
+    // uses z=0 when all heights ≥1 (else min−1), while a PNG surface always
+    // drops the base to min−1.
     let min_h = (0..nr)
         .flat_map(|r| (0..nc).map(move |c| (r, c)))
         .map(|(r, c)| h(r, c))
         .fold(f64::INFINITY, f64::min);
-    let bottom_z = (min_h - 1.0).min(0.0);
+    let bottom_z = if png { min_h - 1.0 } else { (min_h - 1.0).min(0.0) };
 
     let mut points: Vec<Vec3> = Vec::with_capacity(nr * nc * 2 + (nr - 1) * (nc - 1));
     for r in 0..nr {

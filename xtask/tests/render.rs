@@ -139,6 +139,28 @@ fn renders_surface() {
     assert!(mesh.signed_volume() > 0.0, "surface mesh is inward-facing");
 }
 
+/// `surface()` on a PNG heightmap: each pixel's Rec.709 luma scales to 0..100,
+/// the base drops to min−1 (PNG rule). This 3×2 gray ramp matches OpenSCAD's
+/// rendered volume of 121.0196 (verified against the oracle).
+#[test]
+fn surface_png_heightmap() {
+    struct R(Vec<u8>);
+    impl quito_eval::FileResolver for R {
+        fn load(&self, _p: &str, _f: &str) -> Option<quito_eval::LoadedFile> {
+            None
+        }
+        fn load_bytes(&self, path: &str, _f: &str) -> Option<Vec<u8>> {
+            (path == "h.png").then(|| self.0.clone())
+        }
+    }
+    let png = include_bytes!("fixtures/heightmap.png").to_vec();
+    let prog = quito_syntax::parse("surface(\"h.png\");").expect("parse");
+    let out = quito_eval::eval_program_with(&prog, &R(png), ".").expect("eval");
+    let mesh = quito_geom::render(&out.node).expect("render");
+    assert!((mesh.volume() - 121.0196).abs() < 1e-3, "png surface volume {}", mesh.volume());
+    assert!(mesh.signed_volume() > 0.0, "png surface is inward-facing");
+}
+
 /// A DXF profile imported and extruded must produce the extruded area×height.
 /// A 10×20 square with a 2×2 hole (LWPOLYLINEs) → area 196, ×3 → volume 588.
 #[test]
