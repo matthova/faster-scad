@@ -11,6 +11,7 @@ import { buildBinarySTL, buildOFF, buildOBJ, downloadBlob } from "./stl";
 import { CustomizerPanel } from "./CustomizerPanel";
 import { parseSchema, toLiteral, type Param, type ParamValue } from "./customizer";
 import { loadProject, saveProject, clearProject, type File } from "./project";
+import { decodeSharedProject, shareUrl } from "./share";
 import { resolveClosure } from "./library";
 import {
   isTauri,
@@ -84,9 +85,12 @@ export function App() {
   const lastPositions = useRef<Float32Array>(new Float32Array(0));
   const debounceTimer = useRef<number | undefined>(undefined);
 
-  // File + customizer state, restored from localStorage if present. Refs mirror
-  // state so imperative render/edit paths never see a stale closure.
-  const saved = useRef(loadProject()).current;
+  // File + customizer state. A `#code/…` share link (browser only) wins over
+  // the autosaved localStorage project, so opening a shared URL always shows
+  // that project. Refs mirror state so imperative render/edit paths never see a
+  // stale closure.
+  const sharedRef = useRef(TAURI ? null : decodeSharedProject());
+  const saved = useRef(sharedRef.current ?? loadProject()).current;
   const filesRef = useRef<File[]>(saved?.files ?? DEFAULT_FILES.map((f) => ({ ...f })));
   const activeRef = useRef(saved?.active ?? 0);
   const suppressRef = useRef(false);
@@ -111,6 +115,7 @@ export function App() {
   const [exportFmt, setExportFmt] = useState<"stl" | "off" | "obj">("stl");
   const [schema, setSchema] = useState<Param[]>([]);
   const [overrides, setOverrides] = useState<Record<string, ParamValue>>(overridesRef.current);
+  const [shareMsg, setShareMsg] = useState("");
 
   function persist() {
     saveProject({
@@ -194,6 +199,10 @@ export function App() {
 
     renderNow(); // initial render
 
+    // A project opened from a share link isn't in localStorage yet — persist it
+    // now so a plain reload (or losing the hash) keeps the shared work.
+    if (sharedRef.current) persist();
+
     // Live-reload the main file when it's edited in an external editor (desktop).
     let unlisten: (() => void) | undefined;
     if (TAURI) {
@@ -250,9 +259,37 @@ export function App() {
     persist();
   }
 
+  async function onShare() {
+    const url = shareUrl({
+      files: filesRef.current,
+      overrides: overridesRef.current,
+      active: activeRef.current,
+    });
+    // Reflect the link in the address bar (replaceState avoids a scroll/nav).
+    try {
+      window.history.replaceState(null, "", url);
+    } catch {
+      /* ignore */
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+      setShareMsg("Link copied!");
+    } catch {
+      setShareMsg("Link in address bar");
+    }
+    window.setTimeout(() => setShareMsg(""), 2000);
+  }
+
   function newProject() {
     if (!window.confirm("Discard the current project and start fresh?")) return;
     clearProject();
+    // Drop any share-link hash so a reload doesn't restore the shared project.
+    sharedRef.current = null;
+    try {
+      window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    } catch {
+      /* ignore */
+    }
     const fresh = DEFAULT_FILES.map((f) => ({ ...f }));
     filesRef.current = fresh;
     overridesRef.current = {};
@@ -404,6 +441,11 @@ export function App() {
         <div className="actions">
           <button onClick={newProject}>New</button>
           {TAURI && <button onClick={openNative}>Open…</button>}
+          {!TAURI && (
+            <button onClick={onShare} title="Copy a shareable link to this project">
+              {shareMsg || "Share"}
+            </button>
+          )}
           <button onClick={() => viewerRef.current?.resetView()}>Reset view</button>
           <div className="export">
             <button onClick={() => onDownload(exportFmt)} disabled={status.triangleCount === 0}>
