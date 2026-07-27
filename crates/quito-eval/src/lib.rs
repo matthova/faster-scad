@@ -842,6 +842,13 @@ fn builtin_fn(name: &str, args: &[Value], warnings: &mut Vec<String>) -> Value {
             }
             Value::Vector(out)
         }
+        "is_undef" => Value::Bool(matches!(args.first(), Some(Value::Undef) | None)),
+        "is_num" => Value::Bool(matches!(args.first(), Some(Value::Number(_)))),
+        "is_bool" => Value::Bool(matches!(args.first(), Some(Value::Bool(_)))),
+        "is_string" => Value::Bool(matches!(args.first(), Some(Value::Str(_)))),
+        "is_list" => Value::Bool(matches!(args.first(), Some(Value::Vector(_)))),
+        "lookup" => lookup(args),
+        "search" => search(args),
         "str" => {
             let mut s = String::new();
             for a in args {
@@ -874,6 +881,118 @@ fn reduce_num(args: &[Value], f: fn(f64, f64) -> f64) -> Value {
     match nums.split_first() {
         Some((first, rest)) => Value::Number(rest.iter().fold(*first, |a, b| f(a, *b))),
         None => Value::Undef,
+    }
+}
+
+/// `lookup(key, table)` — linear interpolation over a `[[k, v], ...]` table.
+fn lookup(args: &[Value]) -> Value {
+    let Some(key) = args.first().and_then(Value::as_number) else {
+        return Value::Undef;
+    };
+    let Some(Value::Vector(table)) = args.get(1) else {
+        return Value::Undef;
+    };
+    let mut pairs: Vec<(f64, f64)> = table
+        .iter()
+        .filter_map(|e| {
+            if let Value::Vector(p) = e {
+                Some((p.first()?.as_number()?, p.get(1)?.as_number()?))
+            } else {
+                None
+            }
+        })
+        .collect();
+    if pairs.is_empty() {
+        return Value::Undef;
+    }
+    pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    if key <= pairs[0].0 {
+        return Value::Number(pairs[0].1);
+    }
+    let last = *pairs.last().unwrap();
+    if key >= last.0 {
+        return Value::Number(last.1);
+    }
+    for w in pairs.windows(2) {
+        let (k0, v0) = w[0];
+        let (k1, v1) = w[1];
+        if key >= k0 && key <= k1 {
+            if k1 == k0 {
+                return Value::Number(v0);
+            }
+            let t = (key - k0) / (k1 - k0);
+            return Value::Number(v0 + t * (v1 - v0));
+        }
+    }
+    Value::Undef
+}
+
+/// `search(find, list, num_returns=1, index=0)`.
+fn search(args: &[Value]) -> Value {
+    let Some(find) = args.first() else {
+        return Value::Undef;
+    };
+    let Some(list) = args.get(1) else {
+        return Value::Undef;
+    };
+    let num_returns = args.get(2).and_then(Value::as_number).unwrap_or(1.0) as usize;
+    let index = args.get(3).and_then(Value::as_number).unwrap_or(0.0) as usize;
+
+    let entries: Vec<Value> = match list {
+        Value::Vector(v) => v.clone(),
+        Value::Str(s) => s.chars().map(|c| Value::Str(c.to_string())).collect(),
+        _ => return Value::Undef,
+    };
+    let compare_val = |entry: &Value| -> Value {
+        match entry {
+            Value::Vector(row) => row.get(index).cloned().unwrap_or(Value::Undef),
+            other => other.clone(),
+        }
+    };
+    let match_indices = |needle: &Value| -> Vec<usize> {
+        let mut out = Vec::new();
+        for (i, e) in entries.iter().enumerate() {
+            if value::value_eq(&compare_val(e), needle) {
+                out.push(i);
+                if num_returns != 0 && out.len() >= num_returns {
+                    break;
+                }
+            }
+        }
+        out
+    };
+    // With the default num_returns == 1, OpenSCAD collapses each per-element
+    // result to a single index (or an empty list when there is no match);
+    // otherwise each result is the full list of indices.
+    let pack = |idxs: Vec<usize>| -> Value {
+        if num_returns == 1 {
+            match idxs.first() {
+                Some(i) => Value::Number(*i as f64),
+                None => Value::Vector(Vec::new()),
+            }
+        } else {
+            Value::Vector(idxs.into_iter().map(|i| Value::Number(i as f64)).collect())
+        }
+    };
+
+    match find {
+        // A single scalar returns a flat list of indices.
+        Value::Number(_) | Value::Bool(_) => Value::Vector(
+            match_indices(find)
+                .into_iter()
+                .map(|i| Value::Number(i as f64))
+                .collect(),
+        ),
+        // A string searches per character; a list searches per element.
+        Value::Str(s) => Value::Vector(
+            s.chars()
+                .map(|c| pack(match_indices(&Value::Str(c.to_string()))))
+                .collect(),
+        ),
+        Value::Vector(vs) => {
+            Value::Vector(vs.iter().map(|n| pack(match_indices(n))).collect())
+        }
+        _ => Value::Undef,
     }
 }
 
@@ -1008,6 +1127,20 @@ mod tests {
             vec!["ECHO: 0.333333, 1e+10, 1e+6, 3, 0"]
         );
         assert_eq!(echoes("echo(sign(-4), sign(0), sign(4));"), vec!["ECHO: -1, 0, 1"]);
+    }
+
+    #[test]
+    fn list_builtins() {
+        assert_eq!(echoes("echo(search(3,[1,2,3,4]));"), vec!["ECHO: [2]"]);
+        assert_eq!(echoes("echo(search(\"b\",\"abcabc\"));"), vec!["ECHO: [1]"]);
+        assert_eq!(
+            echoes("echo(lookup(2.5,[[0,0],[1,10],[2,20],[3,30]]));"),
+            vec!["ECHO: 25"]
+        );
+        assert_eq!(
+            echoes("echo(is_undef(undef), is_list([1]), is_num(1), is_string(\"s\"));"),
+            vec!["ECHO: true, true, true, true"]
+        );
     }
 
     #[test]

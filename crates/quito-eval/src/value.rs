@@ -214,7 +214,7 @@ fn zip_map(a: Vec<Value>, b: Vec<Value>, op: BinOp) -> Vec<Value> {
     a.into_iter().zip(b).map(|(x, y)| binary(op, x, y)).collect()
 }
 
-fn value_eq(a: &Value, b: &Value) -> bool {
+pub fn value_eq(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Number(x), Value::Number(y)) => x == y,
         (Value::Bool(x), Value::Bool(y)) => x == y,
