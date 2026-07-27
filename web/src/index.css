@@ -255,6 +255,21 @@ body {
   width: 46px;
 }
 
+.anim {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-family: ui-monospace, Menlo, monospace;
+  color: var(--muted, #999);
+}
+.anim input[type="range"] {
+  width: 90px;
+}
+.anim-val {
+  min-width: 30px;
+}
+
 .export {
   display: inline-flex;
 }

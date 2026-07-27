@@ -97,6 +97,7 @@ export function App() {
   const overridesRef = useRef<Record<string, ParamValue>>(saved?.overrides ?? {});
   const paramsJsonRef = useRef("");
   const requestRenderRef = useRef<() => void>(() => {});
+  const timeRef = useRef(0); // $t for animation
 
   const [files, setFiles] = useState<File[]>(filesRef.current);
   const [active, setActive] = useState(activeRef.current);
@@ -113,6 +114,7 @@ export function App() {
   const [version, setVersion] = useState("");
   const [consoleOpen, setConsoleOpen] = useState(false);
   const [exportFmt, setExportFmt] = useState<"stl" | "off" | "obj">("stl");
+  const [time, setTime] = useState(0);
   const [schema, setSchema] = useState<Param[]>([]);
   const [overrides, setOverrides] = useState<Record<string, ParamValue>>(overridesRef.current);
   const [shareMsg, setShareMsg] = useState("");
@@ -141,6 +143,10 @@ export function App() {
       const ov = overridesRef.current;
       const names = Object.keys(ov);
       const values = names.map((n) => toLiteral(ov[n]));
+      if (timeRef.current !== 0) {
+        names.push("$t");
+        values.push(String(timeRef.current));
+      }
       const libs = fs.slice(1);
       if (TAURI) {
         // Native engine resolves include/use from disk (OPENSCADPATH) + the
@@ -447,6 +453,23 @@ export function App() {
             </button>
           )}
           <button onClick={() => viewerRef.current?.resetView()}>Reset view</button>
+          <label className="anim" title="Animation time $t (0–1)">
+            $t
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.01}
+              value={time}
+              onChange={(e) => {
+                const t = parseFloat(e.target.value);
+                setTime(t);
+                timeRef.current = t;
+                requestRenderRef.current();
+              }}
+            />
+            <span className="anim-val">{time.toFixed(2)}</span>
+          </label>
           <div className="export">
             <button onClick={() => onDownload(exportFmt)} disabled={status.triangleCount === 0}>
               Export

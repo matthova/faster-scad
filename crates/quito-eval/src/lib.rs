@@ -207,6 +207,13 @@ pub fn eval_program_with_params(
     globals.insert("$fs".to_string(), Value::Number(2.0));
     globals.insert("$t".to_string(), Value::Number(0.0));
     globals.insert("$preview".to_string(), Value::Bool(true));
+    // A `$`-named override (e.g. `$t` for animation, `$fn`) seeds the global
+    // special-variable frame rather than a top-level assignment.
+    for (name, value) in overrides {
+        if name.starts_with('$') {
+            globals.insert(name.clone(), value.clone());
+        }
+    }
 
     let mut interp = Interp {
         scopes: vec![Rc::new(RefCell::new(base))],
