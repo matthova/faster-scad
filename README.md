@@ -24,6 +24,20 @@ against stock OpenSCAD.
 Desktop links always fetch the latest release, and the app auto-updates in place.
 Need `.deb` / `.rpm` / `.msi` or an older version? [Browse all downloads][releases].
 
+> **macOS: "Quito is damaged and can't be opened"?** The app isn't damaged —
+> it's [not yet notarized][notarize], so Gatekeeper blocks the quarantined
+> download. Drag Quito to your Applications folder, then run this once in
+> Terminal to clear the quarantine flag:
+>
+> ```sh
+> xattr -cr /Applications/Quito.app
+> ```
+>
+> Then open it normally. (Right-click → Open won't clear the "damaged" state on
+> recent macOS — use the command above.)
+
+[notarize]: https://support.apple.com/guide/security/gatekeeper-and-runtime-protection-sec5599b66df/web
+
 [web]: https://matthova.github.io/faster-scad/
 [dl-linux]: https://github.com/matthova/faster-scad/releases/latest/download/Quito-linux-x86_64.AppImage
 [dl-win]: https://github.com/matthova/faster-scad/releases/latest/download/Quito-windows-x64-setup.exe
