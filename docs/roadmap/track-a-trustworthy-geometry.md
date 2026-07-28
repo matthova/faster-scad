@@ -10,83 +10,20 @@ is the one surface with no oracle. The bugs below are exactly the kind that
 burn early adopters, because they don't error: they quietly produce a
 different shape.
 
-**Status:** A1 (transform argument binding + axis-angle `rotate`) is **done** —
-named/positional/mixed args now bind on all four transforms and `rotate(a, v)`
-lowers to `MultMatrix` via Rodrigues; covered by eval- and geometry-level
-regression tests (the latter blessed against OpenSCAD 2024.12). The remaining
-items below are still open.
+**Status:**
+- **A1** (transform argument binding + axis-angle `rotate`) is **done** —
+  named/positional/mixed args now bind on all four transforms and `rotate(a, v)`
+  lowers to `MultMatrix` via Rodrigues; covered by eval- and geometry-level
+  regression tests.
+- **A2** (geometry oracle harness) is **done** — `xtask bless-geom` / `xtask geom`
+  diff quito's native render against a 60-case corpus blessed from OpenSCAD 2024.12
+  (volume, bbox, signed centroid, connected-component count, watertight+2-manifold,
+  and opt-in triangle count), enforced in CI. A3/A4/A5 add their cases to this
+  corpus as they land.
 
-**Effort:** ~3 weeks remaining (A2–A6). **Exit criterion** at the bottom.
+The remaining items (A3–A6) are still open.
 
----
-
-## A2. Build the geometry oracle harness (`xtask geom` / `xtask bless-geom`)
-
-### What exists today
-
-- Echo oracle only: `xtask echo`/`bless-echo`, 24 cases in `corpus/echo`,
-  goldens in `corpus/golden/echo`. No geometry equivalent — `corpus/golden/`
-  contains only echo text.
-- Geometry regression = 8 hand-written tests in `xtask/tests/render.rs` with
-  manually transcribed volume/tri-count constants, plus a 3-case internal
-  Manifold-vs-boolmesh differential (`crates/quito-geom/src/lib.rs:~916`).
-  That is not an OpenSCAD oracle: it checks self-consistency, not compat.
-- CONTRIBUTING.md names a "mesh oracle harness" that was never built.
-
-### Design
-
-Mirror the echo oracle's shape exactly — it's proven and clean-room-safe:
-
-- **`xtask bless-geom`** (dev machine only, needs `openscad` on PATH): for each
-  `corpus/geom/*.scad`, render with OpenSCAD 2024.12 (`openscad -o tmp.stl
-  --export-format binstl`), compute metrics from the mesh, and write a small
-  golden text file to `corpus/golden/geom/<case>.txt`.
-- **`xtask geom`** (runs everywhere, incl. CI, no OpenSCAD needed): render each
-  case with quito's native pipeline, compute the same metrics, compare against
-  the committed golden.
-
-**Metrics per case** (tolerance-based, not vertex-exact — per COMPAT.md's
-"tolerance-level mesh equivalence" compat bar):
-
-| metric | tolerance | catches |
-|---|---|---|
-| volume | ±0.1% | wrong booleans, dropped geometry, wrong transforms |
-| bbox (6 floats) | ±0.01 mm | wrong axis/center/orientation |
-| watertight + 2-manifold | exact | degenerate output |
-| connected-component count | exact | dropped/merged solids |
-| triangle count | exact only for `$fn`-pinned tessellation cases | fragment-formula drift |
-
-Volume+bbox alone would pass a mirror-image error; consider adding the signed
-centroid (±0.01 mm) — cheap to compute from the same mesh integral as volume,
-and it catches reflections and wrong-direction offsets.
-
-**Corpus seeding (~60 cases)**, grouped so failures localize:
-
-- Primitives with `$fn/$fa/$fs` variations (sphere/cylinder/cube/square/circle
-  /polygon/polyhedron/text) — include tessellation-count cases pinning the
-  fragment formula.
-- Transforms: named/positional/mixed forms of translate/rotate/scale/mirror,
-  axis-angle `rotate(a, v)` (already implemented — see the eval and render tests),
-  multmatrix, resize with `auto`.
-- Booleans: nested union/difference/intersection, coplanar-face cases, empty
-  results (difference removing everything → 0 components).
-- Extrudes: linear_extrude twist/scale/slices/center, rotate_extrude angle,
-  extruded 2D booleans (the `extrude_csg` distribution trick needs coverage).
-- 2D pipeline: offset r/delta/chamfer (incl. the concave cases from A3),
-  projection cut=true/false (incl. inside 2D booleans, A4), 2D booleans,
-  shapes with holes at odd nesting depth.
-- hull/minkowski (convex cases now; non-convex cases land with A5).
-- import round-trips: a committed small STL/OFF/3MF/DXF/SVG fixture imported
-  and measured.
-- `surface()` from a `.dat` fixture.
-- A couple of macro cases: `examples/lamp.scad`, the benchmark models — these
-  replace the hand-transcribed constants in `xtask/tests/render.rs` over time.
-
-**CI:** add `cargo run -p xtask -- geom` to `ci.yml`. Like `xtask echo`, it
-must exit nonzero on any mismatch **and on an empty/missing corpus** (see the
-0/0 failure mode in A6).
-
-**Effort: ~1 week**, dominated by corpus authoring and blessing.
+**Effort:** ~2 weeks remaining (A3–A6). **Exit criterion** at the bottom.
 
 ---
 
@@ -240,7 +177,9 @@ is open-ended and can trail.**
 > counts exact where pinned) blessed against OpenSCAD 2024.12, **and**
 > `cargo run -p xtask -- bosl2` reports **16/16 with assertion-output
 > checking**, both enforced in CI on every PR (0/0, skipped files, or missing
-> corpus = red). Named-arg and axis-angle transforms are already closed (A1);
-> offset self-intersection and projection-in-2D-boolean are closed and covered
-> by corpus cases; non-convex minkowski at minimum emits a user-visible warning.
-> COMPAT.md accurately lists every remaining known divergence.
+> corpus = red). The geom harness + a 60-case corpus are already in place and
+> green in CI (A2), and named-arg/axis-angle transforms are closed (A1). Still
+> open: offset self-intersection (A3), projection-in-2D-boolean (A4), non-convex
+> minkowski at minimum emitting a user-visible warning (A5), and BOSL2
+> assertion-output checking (A6). COMPAT.md accurately lists every remaining
+> known divergence.

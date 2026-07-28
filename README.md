@@ -15,7 +15,8 @@ in your browser: <https://matthova.github.io/faster-scad/>.**
 > **customizer** (annotation-driven parameter UI), **multi-file projects** with
 > in-browser `include`/`use` and lazy library fetching, **STL/OFF/OBJ export**, a
 > **console**, **localStorage persistence**, and an installable/offline **PWA**.
-> An echo oracle (24/24) diffs the language against real OpenSCAD and BOSL2's
+> An echo oracle (24/24) diffs the language against real OpenSCAD, a geometry
+> oracle (60/60) diffs rendered meshes against OpenSCAD 2024.12, and BOSL2's
 > function suite passes 15/15. The full plan is in
 > `.context/attachments/HoR0PL/plan.md`; research is in `.context/research/`.
 
@@ -104,11 +105,17 @@ models the meshes are **bit-for-bit identical in topology and volume**:
 | `demo.scad` (union/difference/for/modules) | 12119.0398 (1164 tris) | 12119.0399 (1164 tris) | 0.0000% |
 
 Output meshes are watertight and 2-manifold (every edge shared by exactly two
-triangles). As a larger end-to-end check, the parametric *draped/fluted dome
-lamp shade* (`examples/lamp.scad`) — a single analytic-surface `polyhedron`
-built with C-style-`for` comprehensions — renders to **17,408 triangles,
-watertight, volume 13.596**, identical in triangle count and matching in volume
-to OpenSCAD 2024.12 (regression-tested in CI).
+triangles). This is enforced continuously by the **geometry oracle**
+(`cargo run -p xtask -- geom`): a 60-case corpus (`corpus/geom`) spanning
+primitives, transforms, booleans, extrudes, the 2D pipeline, hull/minkowski,
+imports, and `surface`, each blessed from OpenSCAD 2024.12 and checked in CI on
+volume (±0.1%), bbox and signed centroid (±0.01 mm), connected-component count,
+watertight+2-manifoldness, and opt-in triangle count. Goldens are committed, so
+CI needs no OpenSCAD; regenerate them with `xtask bless-geom` on a dev machine.
+As a larger end-to-end check, the parametric *draped/fluted dome lamp shade*
+(`examples/lamp.scad`) — a single analytic-surface `polyhedron` built with
+C-style-`for` comprehensions — renders to **17,408 triangles, watertight, volume
+13.596**, identical in triangle count and matching in volume to OpenSCAD 2024.12.
 
 ### Benchmarks (dual baseline)
 
