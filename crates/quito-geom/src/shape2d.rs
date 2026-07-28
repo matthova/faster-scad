@@ -294,9 +294,11 @@ pub fn render2d(node: &Node) -> Vec<Contour> {
                 .collect();
             minkowski_2d(sets)
         }
-        // Display attributes are transparent to 2D geometry; `%` background is
-        // excluded from the fused/exported profile.
-        Node::Color { child, .. } | Node::Highlight(child) => render2d(child),
+        // Display attributes and provenance are transparent to 2D geometry; `%`
+        // background is excluded from the fused/exported profile.
+        Node::Color { child, .. } | Node::Highlight(child) | Node::Provenance { child, .. } => {
+            render2d(child)
+        }
         Node::Background(_) => Vec::new(),
         // A projection anywhere in a 2D subtree flattens its 3D child; rendered
         // via the geometry layer, not here (needs a mesh). Handled by render_node.

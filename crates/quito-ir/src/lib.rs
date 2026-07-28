@@ -166,6 +166,17 @@ pub enum Node {
     /// `%` background — child is drawn translucent-gray in the preview and is
     /// **excluded** from the rendered/exported mesh (documented OpenSCAD `%`).
     Background(Box<Node>),
+
+    // --- provenance (preview only; transparent to fused geometry) ---
+    /// Source provenance: tags the child's geometry with a source byte-span for
+    /// editor↔preview linking. Transparent to the fused geometry, the structural
+    /// hash, and all mesh I/O (like [`Node::Color`]); only the separate
+    /// provenance partition pass reads the span, emitting a per-statement pickable
+    /// group. Wrapped around each `ModuleCall` result during evaluation.
+    Provenance {
+        span: core::ops::Range<usize>,
+        child: Box<Node>,
+    },
 }
 
 impl Node {

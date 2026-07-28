@@ -332,6 +332,15 @@ struct PreviewGroups {
     groups: serde_json::Value,
 }
 
+/// The provenance channel: a per-statement triangle soup plus a JSON array of
+/// `{start, count, span}` ranges for editor↔preview linking. Present for 3D
+/// models with geometry.
+struct ProvenanceChannel {
+    positions: Vec<f32>,
+    normals: Vec<f32>,
+    groups: serde_json::Value,
+}
+
 /// A `quito/preview` payload: either a rendered mesh or an error message.
 enum PreviewMsg {
     Ok {
@@ -345,7 +354,10 @@ enum PreviewMsg {
         volume: f64,
         area: f64,
         /// Colored preview channel, when the model uses `color()`/`#`/`%`.
-        groups: Option<PreviewGroups>,
+        /// Boxed to keep the `Ok` variant small (both channels carry full soups).
+        groups: Option<Box<PreviewGroups>>,
+        /// Provenance channel for editor↔preview linking (3D models). Boxed too.
+        provenance: Option<Box<ProvenanceChannel>>,
     },
     Err(String),
 }
@@ -362,6 +374,7 @@ impl PreviewMsg {
                 volume,
                 area,
                 groups,
+                provenance,
             } => {
                 let mut v = json!({
                     "uri": uri.to_string(),
@@ -373,16 +386,25 @@ impl PreviewMsg {
                     "volume": volume,
                     "area": area,
                 });
+                let obj = v.as_object_mut().unwrap();
                 // Attach the colored channel only when present; the client falls
                 // back to the plain mesh otherwise.
                 if let Some(g) = groups {
-                    let obj = v.as_object_mut().unwrap();
                     obj.insert(
                         "previewPositions".into(),
                         json!(f32_slice_b64(&g.positions)),
                     );
                     obj.insert("previewNormals".into(), json!(f32_slice_b64(&g.normals)));
                     obj.insert("groups".into(), g.groups.clone());
+                }
+                // Attach the provenance channel for editor↔preview linking.
+                if let Some(p) = provenance {
+                    obj.insert(
+                        "provenancePositions".into(),
+                        json!(f32_slice_b64(&p.positions)),
+                    );
+                    obj.insert("provenanceNormals".into(), json!(f32_slice_b64(&p.normals)));
+                    obj.insert("provenance".into(), p.groups.clone());
                 }
                 v
             }
@@ -427,13 +449,33 @@ fn render_preview(source: &str, base_dir: &str, overlay: Overlay) -> PreviewMsg 
             Ok(g) => {
                 let (positions, normals, json) = quito_geom::preview_channel(&g);
                 let groups = serde_json::from_str(&json).unwrap_or_else(|_| json!([]));
-                Some(PreviewGroups {
+                Some(Box::new(PreviewGroups {
                     positions,
                     normals,
                     groups,
-                })
+                }))
             }
             // A grouped-render failure just drops color; the plain mesh still shows.
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+
+    // Provenance channel for editor↔preview linking — 3D models with geometry.
+    // Shares the cache with the fused render, so opaque leaf meshes aren't
+    // recomputed just to tag them with a span. 2D picking is out of scope.
+    let provenance = if !mesh.tris.is_empty() && !quito_geom::is_2d(&out.node) {
+        match quito_geom::render_provenance_cached(&out.node, &kernel, &mut cache) {
+            Ok(g) => {
+                let (positions, normals, json) = quito_geom::provenance_channel(&g);
+                let groups = serde_json::from_str(&json).unwrap_or_else(|_| json!([]));
+                Some(Box::new(ProvenanceChannel {
+                    positions,
+                    normals,
+                    groups,
+                }))
+            }
             Err(_) => None,
         }
     } else {
@@ -448,6 +490,7 @@ fn render_preview(source: &str, base_dir: &str, overlay: Overlay) -> PreviewMsg 
         volume: mesh.volume(),
         area: mesh.surface_area(),
         groups,
+        provenance,
     }
 }
 

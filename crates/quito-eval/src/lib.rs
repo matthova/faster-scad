@@ -825,6 +825,22 @@ impl Interp<'_> {
             _ => node,
         };
 
+        // Tag the produced geometry with this statement's source span so the
+        // preview can map a picked face back to the code (and the editor cursor
+        // to geometry). Transparent to the fused mesh, the geometry cache, and
+        // all mesh I/O — only the provenance partition pass reads the span. The
+        // outermost (call-site) wrapper wins when partitioning, so a user module
+        // call highlights its call site rather than the module body. Skipped when
+        // no main-source span is available (spliced `include`/`use` statements)
+        // or the call produced nothing.
+        let node = match &self.cur_span {
+            Some(span) if !matches!(node, Node::Empty) => Node::Provenance {
+                span: span.clone(),
+                child: Box::new(node),
+            },
+            _ => node,
+        };
+
         if modifier == Some(Modifier::Root) {
             self.root = Some(node.clone());
         }
@@ -2820,8 +2836,101 @@ mod tests {
             .expect("adversarial inputs must not panic or overflow the stack");
     }
 
+    /// Recursively remove the transparent [`Node::Provenance`] wrappers the
+    /// evaluator now inserts around every module call, so the structural
+    /// assertions below match the underlying geometry tree.
+    fn strip_provenance(node: Node) -> Node {
+        use Node::*;
+        let b = |n: Node| Box::new(strip_provenance(n));
+        let each = |cs: Vec<Node>| cs.into_iter().map(strip_provenance).collect();
+        match node {
+            Provenance { child, .. } => strip_provenance(*child),
+            Group(cs) => Group(each(cs)),
+            Union(cs) => Union(each(cs)),
+            Difference(cs) => Difference(each(cs)),
+            Intersection(cs) => Intersection(each(cs)),
+            Hull(cs) => Hull(each(cs)),
+            Minkowski(cs) => Minkowski(each(cs)),
+            Translate { v, child } => Translate {
+                v,
+                child: b(*child),
+            },
+            Rotate { deg, child } => Rotate {
+                deg,
+                child: b(*child),
+            },
+            Scale { v, child } => Scale {
+                v,
+                child: b(*child),
+            },
+            Mirror { v, child } => Mirror {
+                v,
+                child: b(*child),
+            },
+            MultMatrix { m, child } => MultMatrix {
+                m,
+                child: b(*child),
+            },
+            Resize { new, auto, child } => Resize {
+                new,
+                auto,
+                child: b(*child),
+            },
+            LinearExtrude {
+                height,
+                center,
+                twist,
+                scale,
+                slices,
+                child,
+            } => LinearExtrude {
+                height,
+                center,
+                twist,
+                scale,
+                slices,
+                child: b(*child),
+            },
+            RotateExtrude {
+                angle,
+                frags,
+                child,
+            } => RotateExtrude {
+                angle,
+                frags,
+                child: b(*child),
+            },
+            Offset {
+                r,
+                delta,
+                chamfer,
+                frags,
+                child,
+            } => Offset {
+                r,
+                delta,
+                chamfer,
+                frags,
+                child: b(*child),
+            },
+            Projection { cut, child } => Projection {
+                cut,
+                child: b(*child),
+            },
+            Color { rgba, child } => Color {
+                rgba,
+                child: b(*child),
+            },
+            Highlight(child) => Highlight(b(*child)),
+            Background(child) => Background(b(*child)),
+            leaf => leaf,
+        }
+    }
+
     fn eval(src: &str) -> EvalOutput {
-        eval_program(&parse(src).unwrap()).unwrap()
+        let mut out = eval_program(&parse(src).unwrap()).unwrap();
+        out.node = strip_provenance(out.node);
+        out
     }
 
     #[test]
@@ -3318,7 +3427,7 @@ mod tests {
         // A non-bundled font warns (spanned) but still renders.
         let src = "text(\"A\", font=\"Arial\");";
         let out = eval_program(&parse(src).unwrap()).unwrap();
-        assert!(matches!(out.node, Node::Polygon { .. }));
+        assert!(matches!(strip_provenance(out.node), Node::Polygon { .. }));
         let w = out
             .warnings
             .iter()

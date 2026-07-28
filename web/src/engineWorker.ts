@@ -41,6 +41,12 @@ export interface RenderResponse {
   previewPositions: Float32Array;
   previewNormals: Float32Array;
   groups: string;
+  /** Provenance channel for editor↔preview linking (3D models): a per-statement
+   *  triangle soup plus a JSON array of `{start,count,span}` (span = `[s,e]` byte
+   *  offsets into the source, or `null`). Empty for 2D/empty models. */
+  provenancePositions: Float32Array;
+  provenanceNormals: Float32Array;
+  provenance: string;
   /** `$vp*` viewport variables as JSON, or "" when the source has no `$vp`. */
   viewport: string;
 }
@@ -89,6 +95,9 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
       previewPositions: new Float32Array(0),
       previewNormals: new Float32Array(0),
       groups: "",
+      provenancePositions: new Float32Array(0),
+      provenanceNormals: new Float32Array(0),
+      provenance: "",
       viewport: "",
     } satisfies RenderResponse);
     return;
@@ -98,6 +107,8 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
   const normals = res.normals;
   const previewPositions = res.preview_positions;
   const previewNormals = res.preview_normals;
+  const provenancePositions = res.provenance_positions;
+  const provenanceNormals = res.provenance_normals;
   const msg: RenderResponse = {
     seq,
     ok: res.ok,
@@ -118,6 +129,9 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
     previewPositions,
     previewNormals,
     groups: res.groups,
+    provenancePositions,
+    provenanceNormals,
+    provenance: res.provenance,
     viewport: res.viewport,
   };
   res.free();
@@ -126,5 +140,7 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
     normals.buffer,
     previewPositions.buffer,
     previewNormals.buffer,
+    provenancePositions.buffer,
+    provenanceNormals.buffer,
   ]);
 };

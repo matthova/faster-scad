@@ -169,6 +169,15 @@ pub struct ColoredMesh {
     pub mode: DisplayMode,
 }
 
+/// A geometry group tagged with the source byte-span that produced it, for
+/// editor↔preview linking. `span` is `None` for geometry with no attributable
+/// main-source span (e.g. from an `include`d/`use`d file) — still emitted so the
+/// soup is complete, but not pickable.
+pub struct TaggedMesh {
+    pub mesh: Mesh,
+    pub span: Option<std::ops::Range<usize>>,
+}
+
 /// Default preview color for uncolored geometry (the viewer's gold).
 pub const DEFAULT_COLOR: [f32; 4] = [0.961, 0.647, 0.137, 1.0];
 
@@ -190,7 +199,8 @@ pub fn has_display_attrs(node: &Node) -> bool {
         | LinearExtrude { child, .. }
         | RotateExtrude { child, .. }
         | Offset { child, .. }
-        | Projection { child, .. } => has_display_attrs(child),
+        | Projection { child, .. }
+        | Provenance { child, .. } => has_display_attrs(child),
         _ => false,
     }
 }
@@ -298,6 +308,163 @@ pub fn preview_channel(groups: &[ColoredMesh]) -> (Vec<f32>, Vec<f32>, String) {
     (positions, normals, json)
 }
 
+/// Render per-statement provenance groups using the default kernel (no persistent
+/// cache). See [`render_provenance_cached`].
+#[cfg(not(target_arch = "wasm32"))]
+pub fn render_provenance(node: &Node) -> Result<Vec<TaggedMesh>, GeomError> {
+    let mut cache = GeomCache::new();
+    render_provenance_cached(node, &ManifoldKernel::new(), &mut cache)
+}
+
+/// See [`render_provenance`]. wasm target uses the pure-Rust kernel.
+#[cfg(target_arch = "wasm32")]
+pub fn render_provenance(node: &Node) -> Result<Vec<TaggedMesh>, GeomError> {
+    let mut cache = GeomCache::new();
+    render_provenance_cached(node, &RustManifoldKernel::new(), &mut cache)
+}
+
+/// Render the tree into per-statement provenance groups: each `ModuleCall`'s
+/// geometry (the [`Node::Provenance`] wrappers the evaluator inserts) becomes one
+/// [`TaggedMesh`] carrying that statement's source span. **Outermost-wins**: the
+/// first provenance wrapper seen on the way down owns everything beneath it, so a
+/// `translate(...) cube(...)` (or a user module call) is one group spanning the
+/// whole statement / call site. Booleans/hull/minkowski/extrude/resize/import are
+/// opaque leaves fused into one mesh taking the enclosing span — mirroring the
+/// color path. Unlike colors, groups are **not** coalesced (each statement stays
+/// its own group). Shares the cache with [`render_cached`], so the opaque leaf
+/// meshes are reused (never recomputed just because they carry a span).
+pub fn render_provenance_cached(
+    node: &Node,
+    kernel: &dyn Kernel,
+    cache: &mut GeomCache,
+) -> Result<Vec<TaggedMesh>, GeomError> {
+    let mut hashes = HashMap::new();
+    hash_all(node, &mut hashes);
+    let mut warnings = Vec::new();
+    let mut ctx = Ctx {
+        kernel,
+        cache,
+        hashes: &hashes,
+        warnings: &mut warnings,
+    };
+    let mut out = Vec::new();
+    partition_provenance(node, None, &mut ctx, &mut out)?;
+    Ok(out)
+}
+
+/// Flatten provenance groups into one triangle soup plus a JSON array of
+/// per-group ranges — the provenance channel shipped across the wasm/Tauri
+/// boundary. `start`/`count` are **vertex** offsets into the soup (three.js
+/// `addGroup` units, same as [`preview_channel`]); `span` is `[start,end]` byte
+/// offsets into the main source, or `null` when unattributable.
+pub fn provenance_channel(groups: &[TaggedMesh]) -> (Vec<f32>, Vec<f32>, String) {
+    let mut positions: Vec<f32> = Vec::new();
+    let mut normals: Vec<f32> = Vec::new();
+    let mut json = String::from("[");
+    for (i, g) in groups.iter().enumerate() {
+        let (p, n) = g.mesh.to_triangle_soup_f32();
+        let start = positions.len() / 3;
+        let count = g.mesh.tris.len() * 3;
+        positions.extend_from_slice(&p);
+        normals.extend_from_slice(&n);
+        if i > 0 {
+            json.push(',');
+        }
+        match &g.span {
+            Some(s) => json.push_str(&format!(
+                "{{\"start\":{start},\"count\":{count},\"span\":[{},{}]}}",
+                s.start, s.end
+            )),
+            None => json.push_str(&format!(
+                "{{\"start\":{start},\"count\":{count},\"span\":null}}"
+            )),
+        }
+    }
+    json.push(']');
+    (positions, normals, json)
+}
+
+/// Walk the tree, emitting one [`TaggedMesh`] per statement (see
+/// [`render_provenance_cached`]). `span` is the enclosing (outermost) provenance
+/// span, if any. Transparent through provenance/color/group/union and affine
+/// transforms (which mutate produced sub-meshes exactly as [`partition_groups`]
+/// does); everything else is an opaque leaf fused into one mesh.
+fn partition_provenance(
+    node: &Node,
+    span: Option<&std::ops::Range<usize>>,
+    ctx: &mut Ctx,
+    out: &mut Vec<TaggedMesh>,
+) -> Result<(), GeomError> {
+    match node {
+        Node::Empty => {}
+        // The outermost provenance wins: adopt this span only if none is set yet.
+        Node::Provenance { span: s, child } => {
+            partition_provenance(child, span.or(Some(s)), ctx, out)?
+        }
+        // Display attributes are transparent to provenance (picking spans a
+        // statement regardless of its color/`#`/`%`). `%` background geometry is
+        // rendered here (it's shown, translucent, in the preview) so it stays
+        // pickable — unlike the fused/exported mesh, which excludes it.
+        Node::Color { child, .. } | Node::Highlight(child) | Node::Background(child) => {
+            partition_provenance(child, span, ctx, out)?
+        }
+        // Transparent containers: recurse so each child keeps its own group.
+        Node::Group(children) | Node::Union(children) => {
+            for c in children {
+                partition_provenance(c, span, ctx, out)?;
+            }
+        }
+        // Affine transforms distribute over sub-meshes: recurse, then transform
+        // each produced mesh (reusing the fused path's vertex mutators).
+        Node::Translate { v, child } => {
+            let start = out.len();
+            partition_provenance(child, span, ctx, out)?;
+            out[start..]
+                .iter_mut()
+                .for_each(|t| translate(&mut t.mesh, *v));
+        }
+        Node::Rotate { deg, child } => {
+            let start = out.len();
+            partition_provenance(child, span, ctx, out)?;
+            out[start..]
+                .iter_mut()
+                .for_each(|t| rotate(&mut t.mesh, *deg));
+        }
+        Node::Scale { v, child } => {
+            let start = out.len();
+            partition_provenance(child, span, ctx, out)?;
+            out[start..].iter_mut().for_each(|t| scale(&mut t.mesh, *v));
+        }
+        Node::Mirror { v, child } => {
+            let start = out.len();
+            partition_provenance(child, span, ctx, out)?;
+            out[start..]
+                .iter_mut()
+                .for_each(|t| mirror(&mut t.mesh, *v));
+        }
+        Node::MultMatrix { m, child } => {
+            let start = out.len();
+            partition_provenance(child, span, ctx, out)?;
+            out[start..]
+                .iter_mut()
+                .for_each(|t| mult_matrix(&mut t.mesh, m));
+        }
+        // Everything else (booleans, hull, minkowski, resize, extrudes,
+        // projection, primitives, import, and 2D booleans) is opaque: one fused
+        // mesh taking the enclosing span.
+        _ => {
+            let mesh = render_node(node, ctx)?;
+            if !mesh.tris.is_empty() {
+                out.push(TaggedMesh {
+                    mesh,
+                    span: span.cloned(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 fn partition_groups(
     node: &Node,
     color: [f32; 4],
@@ -313,6 +480,9 @@ fn partition_groups(
         Node::Background(child) => {
             partition_groups(child, color, DisplayMode::Background, ctx, out)?
         }
+        // Provenance is transparent to color: recurse so the child keeps its own
+        // colored regions. (The span is only read by the provenance partition.)
+        Node::Provenance { child, .. } => partition_groups(child, color, mode, ctx, out)?,
         // Transparent to color: recurse so each child keeps its own regions.
         Node::Group(children) | Node::Union(children) => {
             for c in children {
@@ -446,9 +616,10 @@ pub fn is_2d(node: &Node) -> bool {
         Group(cs) | Union(cs) | Difference(cs) | Intersection(cs) | Hull(cs) | Minkowski(cs) => {
             cs.iter().any(is_2d)
         }
-        // Display attributes are transparent to geometry; `%` background is
-        // excluded from the fused output, so it never contributes 2D-ness.
-        Color { child, .. } | Highlight(child) => is_2d(child),
+        // Display attributes and provenance are transparent to geometry; `%`
+        // background is excluded from the fused output, so it never contributes
+        // 2D-ness.
+        Color { child, .. } | Highlight(child) | Provenance { child, .. } => is_2d(child),
         Background(_) => false,
     }
 }
@@ -507,6 +678,11 @@ fn lower_projections(node: &Node, ctx: &mut Ctx) -> Result<Node, GeomError> {
         Resize { new, auto, child } => Resize {
             new: *new,
             auto: *auto,
+            child: lower(child, ctx)?,
+        },
+        // Transparent: keep the wrapper so provenance survives, lower the child.
+        Provenance { span, child } => Provenance {
+            span: span.clone(),
             child: lower(child, ctx)?,
         },
         Group(cs) => Group(lower_children(cs, ctx)?),
@@ -700,6 +876,8 @@ fn render_uncached(node: &Node, ctx: &mut Ctx) -> Result<Mesh, GeomError> {
         Node::Color { child, .. } => render_node(child, ctx),
         Node::Highlight(child) => render_node(child, ctx),
         Node::Background(_) => Ok(Mesh::new()),
+        // Provenance is transparent to the fused geometry: render the child.
+        Node::Provenance { child, .. } => render_node(child, ctx),
     }
 }
 
@@ -864,6 +1042,11 @@ fn hash_all(node: &Node, out: &mut HashMap<*const Node, u64>) -> u64 {
         Node::Highlight(child) | Node::Background(child) => {
             hash_all(child, out).hash(&mut h);
         }
+        // Hash only the child (skip the span) so identical geometry at different
+        // source lines dedupes in `GeomCache` — provenance never pollutes it.
+        Node::Provenance { child, .. } => {
+            hash_all(child, out).hash(&mut h);
+        }
     }
     let val = h.finish();
     out.insert(node as *const Node, val);
@@ -915,6 +1098,9 @@ fn extrude_csg(
 ) -> Result<Mesh, GeomError> {
     match node {
         Node::Empty => Ok(Mesh::new()),
+        // Provenance is transparent to geometry: unwrap so the 2D-CSG
+        // distribution arms below still see the underlying boolean/leaf.
+        Node::Provenance { child, .. } => extrude_csg(child, extrude, ctx),
         Node::Union(children) | Node::Group(children) => {
             let meshes = children
                 .iter()
@@ -1988,6 +2174,180 @@ mod tests {
             (area - (16.0 - std::f64::consts::PI)).abs() < 0.05,
             "area {area}"
         );
+    }
+
+    // ---- provenance partition (editor↔preview linking) ---------------------
+
+    /// Wrap a node in a provenance span, mirroring what the evaluator emits for
+    /// each `ModuleCall`.
+    fn prov(span: std::ops::Range<usize>, child: Node) -> Node {
+        Node::Provenance {
+            span,
+            child: Box::new(child),
+        }
+    }
+
+    fn sphere8() -> Node {
+        Node::Sphere {
+            r: 8.0,
+            frags: FragmentSpec {
+                fn_: 24.0,
+                fa: 12.0,
+                fs: 2.0,
+            },
+        }
+    }
+
+    #[test]
+    fn provenance_difference_is_one_group_with_the_difference_span() {
+        // `difference(){ cube(20); translate([5,5,5]) sphere(8); }` — a boolean is
+        // opaque, so the whole result is ONE group spanning the difference stmt.
+        let diff_span = 0..60;
+        let node = prov(
+            diff_span.clone(),
+            Node::Difference(vec![
+                prov(
+                    12..20,
+                    Node::Cube {
+                        size: [20.0, 20.0, 20.0],
+                        center: false,
+                    },
+                ),
+                prov(
+                    22..48,
+                    Node::Translate {
+                        v: [5.0, 5.0, 5.0],
+                        child: Box::new(prov(35..43, sphere8())),
+                    },
+                ),
+            ]),
+        );
+        let mut cache = GeomCache::new();
+        let groups =
+            render_provenance_cached(&node, &RustManifoldKernel::new(), &mut cache).unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].span, Some(diff_span));
+        // Geometry is the true fused difference: less than the whole 20³ cube
+        // (the sphere took a bite) but still a positive solid.
+        let vol = groups[0].mesh.volume();
+        assert!(vol > 0.0 && vol < 8000.0, "difference volume {vol}");
+    }
+
+    #[test]
+    fn provenance_two_objects_are_two_groups_with_their_spans() {
+        // Two top-level statements → two groups, each with its own span, and the
+        // second's mesh translated.
+        let node = Node::Group(vec![
+            prov(0..8, unit_cube()),
+            prov(
+                10..40,
+                Node::Translate {
+                    v: [5.0, 0.0, 0.0],
+                    child: Box::new(prov(30..38, unit_cube())),
+                },
+            ),
+        ]);
+        let mut cache = GeomCache::new();
+        let groups =
+            render_provenance_cached(&node, &RustManifoldKernel::new(), &mut cache).unwrap();
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].span, Some(0..8));
+        assert_eq!(groups[1].span, Some(10..40));
+        // The second group was translated +5 in x.
+        let min_x = groups[1]
+            .mesh
+            .verts
+            .iter()
+            .map(|v| v[0])
+            .fold(f64::MAX, f64::min);
+        assert!(min_x >= 5.0 - 1e-6, "second group not translated: {min_x}");
+    }
+
+    #[test]
+    fn provenance_is_transparent_to_the_fused_render() {
+        // A provenance-wrapped tree renders a byte-identical fused mesh to the
+        // bare tree (provenance never touches the fused geometry or its normals).
+        let bare = Node::Difference(vec![
+            Node::Cube {
+                size: [20.0, 20.0, 20.0],
+                center: true,
+            },
+            sphere8(),
+        ]);
+        let wrapped = prov(
+            0..40,
+            Node::Difference(vec![
+                prov(5..13, {
+                    Node::Cube {
+                        size: [20.0, 20.0, 20.0],
+                        center: true,
+                    }
+                }),
+                prov(15..24, sphere8()),
+            ]),
+        );
+        let kernel = RustManifoldKernel::new();
+        let a = render_with(&bare, &kernel).unwrap().to_triangle_soup_f32();
+        let b = render_with(&wrapped, &kernel)
+            .unwrap()
+            .to_triangle_soup_f32();
+        assert_eq!(a.0, b.0, "positions differ");
+        assert_eq!(a.1, b.1, "normals differ");
+    }
+
+    #[test]
+    fn provenance_does_not_pollute_the_geometry_cache() {
+        // Two identical cubes on different source lines dedupe in the cache
+        // (the span is skipped when hashing) yet stay two independent groups.
+        let node = Node::Group(vec![prov(0..8, unit_cube()), prov(10..18, unit_cube())]);
+        let kernel = RustManifoldKernel::new();
+        let mut cache = GeomCache::new();
+        // Fused render: cache has the cube (shared), the provenance node (shared,
+        // same hash), and the group — 3 entries, cube rendered once.
+        render_cached(&node, &kernel, &mut cache).unwrap();
+        assert_eq!(cache.len(), 3, "identical cubes should share cache entries");
+        // Provenance partition still yields two distinct groups.
+        let groups = render_provenance_cached(&node, &kernel, &mut cache).unwrap();
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].span, Some(0..8));
+        assert_eq!(groups[1].span, Some(10..18));
+    }
+
+    #[test]
+    fn provenance_channel_serializes_ranges_and_spans() {
+        let node = Node::Group(vec![
+            prov(0..8, unit_cube()),
+            prov(
+                10..18,
+                Node::Translate {
+                    v: [3.0, 0.0, 0.0],
+                    child: Box::new(prov(11..17, unit_cube())),
+                },
+            ),
+        ]);
+        let mut cache = GeomCache::new();
+        let groups =
+            render_provenance_cached(&node, &RustManifoldKernel::new(), &mut cache).unwrap();
+        let (positions, normals, json) = provenance_channel(&groups);
+        // Each unit cube is 12 triangles = 36 vertices; two groups = 72 vertices.
+        assert_eq!(positions.len(), 72 * 3);
+        assert_eq!(normals.len(), 72 * 3);
+        assert!(json.contains("\"span\":[0,8]"), "{json}");
+        assert!(json.contains("\"span\":[10,18]"), "{json}");
+        assert!(json.contains("\"start\":36,\"count\":36"), "{json}");
+    }
+
+    #[test]
+    fn provenance_group_from_include_has_null_span() {
+        // Geometry with no enclosing provenance (e.g. spliced from an `include`d
+        // file) is still emitted, but with a null span (not pickable).
+        let node = Node::Group(vec![unit_cube(), prov(5..13, unit_cube())]);
+        let mut cache = GeomCache::new();
+        let groups =
+            render_provenance_cached(&node, &RustManifoldKernel::new(), &mut cache).unwrap();
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].span, None);
+        assert_eq!(groups[1].span, Some(5..13));
     }
 
     #[test]
