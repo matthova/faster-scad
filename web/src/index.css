@@ -95,6 +95,12 @@ body {
   cursor: default;
 }
 
+/* Pressed state for toggle buttons (e.g. projection). */
+.actions button.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .examples-select {
   background: #23272f;
   color: var(--text);

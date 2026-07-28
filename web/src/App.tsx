@@ -230,6 +230,7 @@ export function App() {
   const [exportFmt, setExportFmt] = useState<ExportFmt>("stl");
   const [is2D, setIs2D] = useState(false);
   const [dims, setDims] = useState<MeshInfo | null>(null);
+  const [ortho, setOrtho] = useState(false);
   const [time, setTime] = useState(sharedAnim?.t ?? 0);
   const [playing, setPlaying] = useState(sharedAnim?.playing ?? false);
   const [fps, setFps] = useState(sharedAnim?.fps ?? 15);
@@ -1124,6 +1125,21 @@ export function App() {
             ))}
           </span>
           <button onClick={() => viewerRef.current?.resetView()}>Reset view</button>
+          <button
+            className={ortho ? "active" : undefined}
+            onClick={() => {
+              const next = !ortho;
+              viewerRef.current?.setProjection(next ? "orthographic" : "perspective");
+              setOrtho(next);
+            }}
+            title={
+              ortho
+                ? "Orthographic projection (parallel) — click for perspective"
+                : "Perspective projection — click for orthographic (isometric)"
+            }
+          >
+            {ortho ? "Ortho" : "Persp"}
+          </button>
           <button onClick={onSavePng} title="Save the current view as a PNG image">
             PNG
           </button>
