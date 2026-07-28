@@ -53,10 +53,11 @@ Geometry booleans run behind a `Kernel` trait with two backends:
 ### Browser playground
 
 The engine runs as wasm in a Web Worker with a three.js preview; edits re-render
-live in single-digit milliseconds, with worker-terminate cancellation and parse
-errors reported in the status bar and console (inline editor squiggles are still
-to come). Run it locally with `cd web && npm install && npm run build:wasm &&
-npm run dev`; see [`web/`](web/README.md).
+live in single-digit milliseconds, with worker-terminate cancellation and errors
+reported in the status bar and console **and as inline editor squiggles** (red
+for errors, yellow for warnings, cleared on success). Run it locally with
+`cd web && npm install && npm run build:wasm && npm run dev`; see
+[`web/`](web/README.md).
 
 **Product features (M5):**
 

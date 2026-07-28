@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { EditorView, keymap } from "@codemirror/view";
 import { EditorState } from "@codemirror/state";
+import { setDiagnostics, type Diagnostic } from "@codemirror/lint";
 import { basicSetup } from "codemirror";
 import { indentWithTab } from "@codemirror/commands";
 import { openscad } from "./lang/openscad";
@@ -86,6 +87,50 @@ function basename(path: string): string {
   return seg && seg.length ? seg : path;
 }
 
+/** A structured diagnostic from the engine (byte offsets into the main source). */
+interface EngineDiag {
+  severity: "error" | "warning";
+  message: string;
+  start: number; // UTF-8 byte offset, or -1 when unknown
+  end: number;
+}
+
+/** UTF-8 byte length of a Unicode code point. */
+function utf8Len(cp: number): number {
+  return cp <= 0x7f ? 1 : cp <= 0x7ff ? 2 : cp <= 0xffff ? 3 : 4;
+}
+
+/** Map a UTF-8 byte offset (engine spans) to a UTF-16 index (CodeMirror), since
+ *  the engine measures the source as UTF-8 bytes but JS strings are UTF-16. */
+function byteToChar(source: string, byte: number): number {
+  if (byte <= 0) return 0;
+  let b = 0;
+  let i = 0;
+  while (i < source.length) {
+    if (b >= byte) return i;
+    const cp = source.codePointAt(i)!;
+    b += utf8Len(cp);
+    i += cp > 0xffff ? 2 : 1;
+  }
+  return source.length;
+}
+
+/** Convert engine diagnostics (with byte spans) to CodeMirror lint diagnostics,
+ *  mapped against `source` (the main file). Entries without a span are dropped
+ *  (they still show in the console). */
+function toCmDiagnostics(diags: EngineDiag[], source: string): Diagnostic[] {
+  const out: Diagnostic[] = [];
+  for (const d of diags) {
+    if (d.start < 0 || d.end < 0) continue;
+    let from = byteToChar(source, d.start);
+    let to = byteToChar(source, d.end);
+    if (to < from) to = from;
+    if (to === from) to = Math.min(source.length, from + 1); // widen a point marker
+    out.push({ from, to, severity: d.severity, message: d.message });
+  }
+  return out;
+}
+
 // Formats offered per model dimensionality — 2D profiles export to vector
 // formats, 3D solids to mesh formats.
 const FORMATS_3D: ExportFmt[] = ["stl", "off", "obj", "3mf", "amf"];
@@ -130,6 +175,9 @@ export function App() {
   const saveActiveRef = useRef<() => void>(() => {});
   const saveAsRef = useRef<() => void>(() => {});
   const menuExportRef = useRef<() => void>(() => {}); // File ▸ Export (latest closure)
+  // Latest engine diagnostics (for the main file) — squiggled in the editor when
+  // the main tab is active, and badged on the tab otherwise.
+  const diagRef = useRef<EngineDiag[]>([]);
   // Animation playback: a share link may carry $t/fps/steps/play-state so the
   // recipient opens on the same frame and speed.
   const sharedAnim = sharedRef.current?.anim;
@@ -160,6 +208,11 @@ export function App() {
   const [schema, setSchema] = useState<Param[]>([]);
   const [overrides, setOverrides] = useState<Record<string, ParamValue>>(overridesRef.current);
   const [shareMsg, setShareMsg] = useState("");
+  // Diagnostic counts for the main file (error/warning), for the tab badge.
+  const [diagCounts, setDiagCounts] = useState<{ errors: number; warnings: number }>({
+    errors: 0,
+    warnings: 0,
+  });
 
   function persist() {
     saveProject({
@@ -465,6 +518,19 @@ export function App() {
     }
   }
 
+  /** Push the current engine diagnostics into the editor — but only when the
+   *  main file (index 0) is showing, since spans index into the main source. On
+   *  any other tab, clear the squiggles (the main tab shows a badge instead). */
+  function applyDiagnostics() {
+    const view = viewRef.current;
+    if (!view) return;
+    const diags =
+      activeRef.current === 0
+        ? toCmDiagnostics(diagRef.current, filesRef.current[0].content)
+        : [];
+    view.dispatch(setDiagnostics(view.state, diags));
+  }
+
   function switchTo(idx: number) {
     if (idx === activeRef.current || !viewRef.current) return;
     activeRef.current = idx;
@@ -475,6 +541,7 @@ export function App() {
       changes: { from: 0, to: view.state.doc.length, insert: filesRef.current[idx].content },
     });
     suppressRef.current = false;
+    applyDiagnostics();
     view.focus();
     persist();
   }
@@ -591,6 +658,21 @@ export function App() {
 
   function onResult(r: RenderResponse) {
     if (r.version) setVersion(r.version);
+
+    // Inline diagnostics: parse the structured channel, remember it (for the
+    // tab badge), and squiggle it in the editor when the main tab is showing.
+    let diags: EngineDiag[] = [];
+    try {
+      diags = JSON.parse(r.diagnostics || "[]") as EngineDiag[];
+    } catch {
+      diags = [];
+    }
+    diagRef.current = diags;
+    setDiagCounts({
+      errors: diags.filter((d) => d.severity === "error").length,
+      warnings: diags.filter((d) => d.severity === "warning").length,
+    });
+    applyDiagnostics();
 
     if (r.params && r.params !== paramsJsonRef.current) {
       paramsJsonRef.current = r.params;
@@ -854,6 +936,16 @@ export function App() {
           <div className="tabs">
             {files.map((f, i) => {
               const dirty = TAURI && !!f.path && f.content !== savedRef.current[f.name];
+              // The engine reports errors/warnings against the main file; when
+              // it's not the active tab, badge it so the squiggles aren't missed.
+              const diagKind =
+                i === 0 && active !== 0
+                  ? diagCounts.errors > 0
+                    ? "error"
+                    : diagCounts.warnings > 0
+                      ? "warn"
+                      : ""
+                  : "";
               return (
               <div
                 key={i}
@@ -862,6 +954,15 @@ export function App() {
                 onDoubleClick={() => renameFile(i)}
                 title={i === 0 ? "main (rendered)" : "double-click to rename"}
               >
+                {diagKind && (
+                  <span
+                    className={`tab-diag ${diagKind}`}
+                    title={diagKind === "error" ? "Errors in this file" : "Warnings in this file"}
+                    aria-label={diagKind === "error" ? "Errors" : "Warnings"}
+                  >
+                    ●
+                  </span>
+                )}
                 {dirty && (
                   <span className="tab-dirty" title="Unsaved changes" aria-label="Unsaved changes">
                     ●

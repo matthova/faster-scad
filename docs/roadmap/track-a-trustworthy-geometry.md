@@ -18,55 +18,20 @@ different shape.
 - **A2** (geometry oracle harness) is **done** — `xtask bless-geom` / `xtask geom`
   diff quito's native render against a 60-case corpus blessed from OpenSCAD 2024.12
   (volume, bbox, signed centroid, connected-component count, watertight+2-manifold,
-  and opt-in triangle count), enforced in CI. A3/A4/A5 add their cases to this
+  and opt-in triangle count), enforced in CI. A4/A5 add their cases to this
   corpus as they land.
+- **A3** (clip `offset()` self-intersections) is **done** — `offset` now assembles
+  the result from convex pieces (an offset slab per edge + a join cap per corner)
+  unioned/subtracted through the `geo` clipper, so a concave inset larger than a
+  local feature collapses to empty instead of filling a self-intersecting bowtie.
+  Covered by new `corpus/geom` cases (concave inset/collapse/grow, hole-close) and
+  `shape2d` unit tests. (Note: the doc's original "self-union" suggestion does not
+  work in geo 0.29, which has no `unary_union` and does not resolve a
+  self-intersecting input ring — hence the convex-piece construction.)
 
-The remaining items (A3–A6) are still open.
+The remaining items (A4–A6) are still open.
 
-**Effort:** ~2 weeks remaining (A3–A6). **Exit criterion** at the bottom.
-
----
-
-## A3. Clip `offset()` self-intersections
-
-### The bug
-
-`offset_one` (`crates/quito-geom/src/shape2d.rs:466-539`) does per-vertex
-normal offsetting with miter/chamfer/round join fill, but never removes
-self-intersections or collapsed regions — the doc comment at lines 442–445
-says so explicitly ("does not clip self-intersections from large concave
-offsets (a 2D-clipper refinement)"). The `Node::Offset` arm in `render2d`
-(lines ~205–207) uses the result raw.
-
-Failure modes: a negative offset that pinches a concave shape (e.g. an
-L-shape inset past its notch width) or any offset larger than a local feature
-yields a self-intersecting contour; earcut then fills the bowtie regions, and
-extrusion of that fill produces wrong solids. Chamfer mode itself is
-implemented correctly (lines 521–523) — the gap is purely the missing cleanup
-pass.
-
-### The fix
-
-The crate already depends on `geo` 0.29 with `BooleanOps` (used for
-`union_all`, 2D booleans, and projection). Apply it to offset output:
-self-union the offset contours (union of the multipolygon with itself resolves
-self-intersections and drops inverted/collapsed loops under the even-odd/
-positive-winding rules), then re-run the existing hole-nesting normalization
-before fill. Degenerate results (fully collapsed shape) must yield an empty
-2D shape, not a panic — OpenSCAD renders nothing for a fully-inset shape.
-
-Also verify hole behavior: offset of a shape with holes grows the outer
-contour and shrinks holes (the existing odd-nesting-depth negation at the
-render2d call site handles direction; the cleanup pass must preserve it).
-
-### Regression protection
-
-Corpus cases: concave polygon with negative offset at three magnitudes (mild /
-pinching / fully collapsing), offset-with-hole where the hole closes up,
-round-join offset on a star polygon. Blessed against OpenSCAD (which uses
-Clipper — our post-clip output should agree in area/bbox within tolerance).
-
-**Effort: ~2–3 days.**
+**Effort:** ~1.5 weeks remaining (A4–A6). **Exit criterion** at the bottom.
 
 ---
 
@@ -177,9 +142,8 @@ is open-ended and can trail.**
 > counts exact where pinned) blessed against OpenSCAD 2024.12, **and**
 > `cargo run -p xtask -- bosl2` reports **16/16 with assertion-output
 > checking**, both enforced in CI on every PR (0/0, skipped files, or missing
-> corpus = red). The geom harness + a 60-case corpus are already in place and
-> green in CI (A2), and named-arg/axis-angle transforms are closed (A1). Still
-> open: offset self-intersection (A3), projection-in-2D-boolean (A4), non-convex
-> minkowski at minimum emitting a user-visible warning (A5), and BOSL2
-> assertion-output checking (A6). COMPAT.md accurately lists every remaining
-> known divergence.
+> corpus = red). The geom harness + corpus are already in place and green in CI
+> (A2); named-arg/axis-angle transforms (A1) and offset self-intersection (A3)
+> are closed. Still open: projection-in-2D-boolean (A4), non-convex minkowski at
+> minimum emitting a user-visible warning (A5), and BOSL2 assertion-output
+> checking (A6). COMPAT.md accurately lists every remaining known divergence.

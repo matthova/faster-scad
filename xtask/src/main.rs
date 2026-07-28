@@ -111,7 +111,7 @@ fn run_bosl2(root: &Path) -> bool {
             Ok(prog) => match quito_eval::eval_program_with(&prog, &DiskResolver, &dir_str) {
                 Ok(out) if out.asserts_run > 0 => Ok(()),
                 Ok(_) => Err("evaluated but ran zero asserts (vacuous)".to_string()),
-                Err(e) => Err(format!("eval error: {}", e.0)),
+                Err(e) => Err(format!("eval error: {}", e.message)),
             },
             Err(e) => Err(format!("parse error: {}", e.message)),
         };
@@ -303,7 +303,7 @@ fn run_warm_gate(root: &Path) -> bool {
         let out = match eval() {
             Ok(o) => o,
             Err(e) => {
-                eprintln!("warm-gate: {name}: eval failed: {}", e.0);
+                eprintln!("warm-gate: {name}: eval failed: {}", e.message);
                 all_ok = false;
                 continue;
             }
@@ -323,7 +323,7 @@ fn run_warm_gate(root: &Path) -> bool {
             let out2 = match eval() {
                 Ok(o) => o,
                 Err(e) => {
-                    eprintln!("warm-gate: {name}: re-eval failed: {}", e.0);
+                    eprintln!("warm-gate: {name}: re-eval failed: {}", e.message);
                     render_failed = true;
                     break;
                 }
@@ -487,7 +487,7 @@ fn quito_echo(case: &Path) -> Vec<String> {
     match quito_syntax::parse(&src) {
         Ok(prog) => match quito_eval::eval_program_with(&prog, &DiskResolver, &dir) {
             Ok(out) => out.echoes,
-            Err(e) => vec![format!("ERROR: {}", e.0)],
+            Err(e) => vec![format!("ERROR: {}", e.message)],
         },
         Err(e) => vec![format!("ERROR: parse: {}", e.message)],
     }
@@ -898,7 +898,7 @@ fn quito_mesh(case: &Path) -> Result<Mesh, String> {
         .unwrap_or_else(|| ".".into());
     let prog = quito_syntax::parse(&src).map_err(|e| format!("parse: {}", e.message))?;
     let out = quito_eval::eval_program_with(&prog, &DiskResolver, &dir)
-        .map_err(|e| format!("eval: {}", e.0))?;
+        .map_err(|e| format!("eval: {}", e.message))?;
     quito_geom::render(&out.node).map_err(|e| format!("render: {e}"))
 }
 
