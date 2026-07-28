@@ -18,7 +18,7 @@ Update artifacts per platform:
 
 | OS      | First install     | Self-updates?                        |
 | ------- | ----------------- | ------------------------------------ |
-| macOS   | `.dmg`            | ✅ (universal `.app.tar.gz`)          |
+| macOS   | `.dmg`            | ✅ (per-arch `.app.tar.gz`)           |
 | Windows | NSIS `.exe`       | ✅ (re-runs the signed installer)     |
 | Linux   | `.AppImage`       | ✅ AppImage only                      |
 | Linux   | `.deb` / `.rpm`   | ❌ update via the package manager     |
@@ -31,11 +31,12 @@ Update artifacts per platform:
    - `desktop/src-tauri/Cargo.toml` → `version`
    Then `cargo build --manifest-path desktop/src-tauri/Cargo.toml` to refresh
    `desktop/src-tauri/Cargo.lock`, and commit.
-2. Tag and push:
-   ```sh
-   git tag v0.1.0          # must match tauri.conf.json version
-   git push origin v0.1.0
-   ```
+2. Run the release workflow **manually** (it does not trigger on tag push):
+   - GitHub → **Actions** → **Release desktop app** → **Run workflow**, and
+     enter the version tag (e.g. `v0.1.0`, must match `tauri.conf.json`), or
+   - from the CLI: `gh workflow run "Release desktop app" -f tag=v0.1.0`
+
+   The workflow creates the tag for you as part of drafting the release.
 3. The **Release desktop app** workflow builds + signs on all three OSes and
    creates a **draft** GitHub Release with the installers and `latest.json`.
 4. Review the draft release, then **Publish** it. Publishing is what exposes the

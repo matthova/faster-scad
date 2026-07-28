@@ -1,10 +1,13 @@
 name: Release desktop app
 
-# Cut a desktop release by pushing a version tag, e.g.:
-#   git tag v0.1.0 && git push origin v0.1.0
-# The tag's version should match `version` in desktop/src-tauri/tauri.conf.json.
+# Cut a desktop release MANUALLY from the Actions tab (or `gh workflow run`):
+#   Actions → "Release desktop app" → Run workflow → enter the version tag,
+#   e.g. v0.1.0. The tag must match `version` in
+#   desktop/src-tauri/tauri.conf.json.
 #
-# This builds + signs the app on each OS, then creates a DRAFT GitHub Release
+# This runs ONLY on manual dispatch — pushing a tag does NOT start a release.
+#
+# It builds + signs the app on each OS, then creates a DRAFT GitHub Release
 # with the installers and the updater manifest (latest.json). Review the draft,
 # then PUBLISH it: the in-app updater reads
 #   https://github.com/matthova/faster-scad/releases/latest/download/latest.json
@@ -16,10 +19,12 @@ name: Release desktop app
 # Optional (OS code-signing / notarization) are documented in docs/RELEASING.md.
 
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (must match tauri.conf.json version), e.g. v0.1.0"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -30,10 +35,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Universal macOS binary (Intel + Apple Silicon).
+          # macOS is built per-arch on native runners rather than as one
+          # universal binary: quito-geom links the native Manifold C++ kernel,
+          # whose CMake build only produces the runner's host arch, so a
+          # cross-compiled `universal-apple-darwin` fails to link the x86_64
+          # slice. macos-latest is Apple Silicon; macos-13 is Intel. Each emits
+          # its own updater entry (darwin-aarch64 / darwin-x86_64) in latest.json.
           - platform: macos-latest
-            args: "--target universal-apple-darwin"
-            rust-targets: "aarch64-apple-darwin,x86_64-apple-darwin"
+            args: "--target aarch64-apple-darwin"
+            rust-targets: "aarch64-apple-darwin"
+          - platform: macos-13
+            args: "--target x86_64-apple-darwin"
+            rust-targets: "x86_64-apple-darwin"
           - platform: ubuntu-22.04
             args: ""
             rust-targets: ""
@@ -111,6 +124,9 @@ jobs:
       - name: Build, sign, and draft release
         uses: tauri-apps/tauri-action@v0
         env:
+          # tauri-action creates the GitHub Release via the API and needs a token
+          # with `contents: write` (granted in the job `permissions` above).
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Updater signing (minisign). Without these the updater artifacts are
           # unsigned and the app refuses them.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -125,7 +141,7 @@ jobs:
         with:
           # desktop/ holds package.json; tauri finds src-tauri/tauri.conf.json.
           projectPath: desktop
-          tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', github.run_number) }}
+          tagName: ${{ inputs.tag }}
           releaseName: "Quito __VERSION__"
           releaseBody: "See the assets below to download and install Quito."
           # Draft so a human can review before publishing. `releases/latest`
