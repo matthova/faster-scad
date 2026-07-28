@@ -1,283 +1,153 @@
 # Quito
 
 [![playground: live](https://img.shields.io/badge/playground-live-2ea44f)](https://matthova.github.io/faster-scad/)
+[![license: Apache-2.0 OR MIT](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue)](#license)
 
-A fast, greenfield reimplementation of the [OpenSCAD](https://openscad.org)
-language — same language spirit, a modern geometry kernel, one Rust core
-shipping to the browser (wasm) and desktop (Tauri). **Try it live, no install,
-in your browser: <https://matthova.github.io/faster-scad/>.**
+**Code your models. Quito turns `.scad` scripts into solid 3D geometry —
+instantly, everywhere.**
 
-> **Status: M4 met, M5 (playground → product) landing.**
-> M0–M2 (native skeleton, playground+kernel bake-off, full language) and M3 (full
-> geometry) are complete; M4 met both perf exits (warm-edit <100 ms via a
-> geometry cache; ~25× geomean vs OpenSCAD 2021.01/CGAL including an eval-bound
-> model, via a bytecode VM). M5 has turned the playground into a product: a
-> **customizer** (annotation-driven parameter UI), **multi-file projects** with
-> in-browser `include`/`use` and lazy library fetching, **STL/OFF/OBJ export**, a
-> **console**, **localStorage persistence**, and an installable/offline **PWA**.
-> An echo oracle (24/24) diffs the language against real OpenSCAD, a geometry
-> oracle (69/69) diffs rendered meshes against OpenSCAD 2024.12, and BOSL2's
-> function suite runs every `[[test]]` block (422/513 pass, baseline-gated in CI
-> so a regression can't hide behind a green file). The full plan is in
-> `.context/attachments/HoR0PL/plan.md`; research is in `.context/research/`.
+Quito is a fast, from-scratch reimplementation of the
+[OpenSCAD](https://openscad.org) language: the same script-it-yourself CAD
+workflow, a modern geometry kernel, and a single Rust core that runs in your
+browser, on your desktop, in your editor, and on the command line. Edits
+re-render in single-digit milliseconds, and output is verified bit-for-bit
+against stock OpenSCAD.
 
-## What works today (M0 native)
+**[▶ Try it live in your browser — no install](https://matthova.github.io/faster-scad/)**
 
-A `.scad` file flows end-to-end through the native pipeline:
+---
 
-```
-source → lex/parse (quito-syntax) → tree-walk eval (quito-eval)
-       → CSG tree (quito-ir) → tessellate + kernel booleans (quito-geom)
-       → mesh → STL (quito-cli)
-```
+## Run it anywhere
 
-Language subset: `cube` / `sphere` / `cylinder` (incl. cones, `d`/`r1`/`r2`),
-`translate` / `rotate` / `scale`, `union` / `difference` / `intersection`,
-`for` / `if` / `else`, variables with last-assignment-wins hoisting, user
-`module`s and `function`s (incl. recursion), `let`, ranges, vectors, the full
-expression language (arithmetic, comparison with undef propagation, ternary,
-indexing, `.x/.y/.z`), a core set of math/list builtins, `echo`, `assert`, and
-the debug modifiers `* ! # %`. `color()` (named/hex/vector + alpha) and the
-`#`/`%` modifiers are rendered in the preview — colored subtrees, `#` highlight
-(translucent red), `%` background (translucent gray, excluded from export) — and
-`color()` carries into per-object 3MF export. Curved primitives use the bit-exact
-`$fn/$fa/$fs` fragment formula.
+One engine, five ways to reach it. Pick the surface that fits and start modeling.
 
-### Kernel bake-off (resolved)
+| Surface | For whom | Get started |
+|---|---|---|
+| **Web** | Anyone — zero install | [Open the playground](https://matthova.github.io/faster-scad/) |
+| **Mobile / offline** | On the go | Same URL in any modern mobile browser; **install as a PWA** for offline use |
+| **Desktop** | Native, no browser | Tauri app for macOS / Linux / Windows, with in-app auto-update |
+| **VS Code** | Editor-native | Extension with a live 3D preview + export |
+| **Any LSP editor** | Neovim, Helix, Zed, Emacs… | `quito-lsp` — diagnostics, hover, completion |
+| **CLI** | Scripts & CI | `quito model.scad -o out.stl` |
 
-Geometry booleans run behind a `Kernel` trait with two backends:
+All of them drive the exact same Rust core, so a model behaves identically no
+matter where you open it.
 
-- **Native:** C++ [Manifold](https://github.com/elalish/manifold) via
-  `manifold-csg` — fast and battle-tested.
-- **Browser (wasm):** pure-Rust [`manifold-rust`](https://crates.io/crates/manifold-rust)
-  — compiles clean to `wasm32-unknown-unknown` (no Emscripten). A differential
-  test confirms the two backends agree to within 0.5% on
-  union/difference/intersection.
+## What you can do
 
-### Browser playground
+- **Write OpenSCAD-style scripts** — primitives, transforms, CSG booleans
+  (`union`/`difference`/`intersection`), `hull`, `minkowski`, 2D profiles and
+  extrudes, `for`/`if`, variables, user `module`s and `function`s (with
+  recursion), the full expression language, `echo`/`assert`, and the `* ! # %`
+  debug modifiers.
+- **See it instantly** — a live 3D preview re-renders as you type, with errors
+  and warnings shown inline as editor squiggles and in a console. `color()`,
+  `#` highlight, and `%` background all render.
+- **Tune parameters visually** — annotated variables become a **customizer**
+  panel (sliders, dropdowns, checkboxes, vectors), and named **parameter sets**
+  save/load presets (compatible with OpenSCAD's `.json` files).
+- **Build multi-file projects** — a tab bar for several files; `include`/`use`
+  resolve in-browser, and libraries like **BOSL2** are fetched on demand.
+- **Animate** — `$t` playback plus frame export, with script-driven camera
+  (`$vpr`/`$vpt`/`$vpd`/`$vpf`).
+- **Export real files** — 3D solids to **STL / OFF / OBJ / 3MF / AMF**, 2D
+  profiles to **DXF / SVG**, and rendered **PNG** images (headless on the CLI,
+  no GPU required). `import()` reads meshes and 2D profiles back in.
+- **Keep your work** — files, parameters, and the active tab autosave locally
+  and restore on reload.
 
-The engine runs as wasm in a Web Worker with a three.js preview; edits re-render
-live in single-digit milliseconds, with worker-terminate cancellation and errors
-reported in the status bar and console **and as inline editor squiggles** (red
-for errors, yellow for warnings, cleared on success). Run it locally with
-`cd web && npm install && npm run build:wasm && npm run dev`; see
-[`web/`](web/README.md).
+## Fast, and verifiably correct
 
-**Product features (M5):**
+- **~25× faster** than OpenSCAD's CGAL renderer across a five-model benchmark
+  (geometric mean), and ~3–5× ahead of OpenSCAD's newest Manifold backend.
+- **Warm edits render incrementally** — a content-addressed geometry cache
+  recomputes only the subtrees that changed, so re-renders after a typical edit
+  land in well under a millisecond.
+- **Bit-for-bit verified** — a geometry oracle diffs rendered meshes against
+  stock **OpenSCAD 2024.12** across a 69-case corpus (volume, bounding box,
+  centroid, component count, watertight + 2-manifoldness), and BOSL2's function
+  suite runs its `[[test]]` blocks in CI. Output meshes are always watertight
+  and 2-manifold.
 
-- **Customizer** — annotated top-level variables become an editable control
-  panel (grouped), and changes re-render live. Supported annotations:
+Compatibility is "OpenSCAD in spirit," not bug-for-bug. Known gaps and
+intentional divergences are documented in [COMPAT.md](COMPAT.md) — a switcher
+hits a documented limitation, never a silently wrong answer.
 
-  | annotation | control |
-  |---|---|
-  | `x = 5;` | number spinbox |
-  | `x = 5;  // [0:10]` | slider |
-  | `x = 5;  // [0:0.5:10]` | slider with step |
-  | `x = 2;  // [0, 1, 2, 3]` | dropdown (values) |
-  | `m = 1;  // [0:Off, 1:On]` | dropdown (labelled) |
-  | `on = true;` | checkbox |
-  | `s = "hi"; // 8` | text (max length) |
-  | `v = [1,2,3];` | vector |
+## Build from source
 
-  `/* [Group] */` starts a group (`[Hidden]` drops params); a `//` comment on the
-  line above a variable becomes its label. The same overrides are available on
-  the CLI: `quito model.scad -D width=20 -o out.stl`.
-- **Parameter sets** — save/apply named presets in the UI and import/export
-  OpenSCAD's `.json` parameter-set files; on the CLI, `quito model.scad -p
-  sets.json -P Big -o out.stl`.
-- **Animation** — `$t` playback in the UI, plus frame export: an **Export frames**
-  button (zip of PNGs) and the CLI `quito model.scad -o out.png --animate 60`.
-  Scripts can read and drive the camera via `$vpr`/`$vpt`/`$vpd`/`$vpf`.
-- **Multi-file projects** — a tab bar for several files; the first is rendered
-  and the rest are libraries. `include`/`use` resolve between files in-browser,
-  and unknown paths are fetched lazily (bundled `/lib/`, or a CDN by prefix —
-  e.g. `BOSL2/…` from jsDelivr) with transitive resolution + caching.
-- **Export** — the format dropdown adapts to the model: 3D solids export to STL
-  (binary), OFF, OBJ, 3MF, or AMF; 2D profiles export to DXF or SVG. Available
-  in the playground, the desktop app, and the CLI. `import()` reads meshes
-  (STL/OFF/OBJ/3MF/AMF, including OpenSCAD's ZIP64+deflate 3MF) and 2D profiles
-  (DXF/SVG).
-- **PNG image export** — a **Save PNG** button captures the viewer in the
-  playground and desktop app, and the CLI renders headlessly (no GPU) with a
-  pure-Rust rasterizer: `quito model.scad -o out.png --imgsize 800,600
-  --camera=…` (OpenSCAD-style `--camera`/`--projection`/`--viewall`/
-  `--autocenter`), colored to match the preview.
-- **Console** — echo / warnings / errors, color-coded.
-- **Examples** — an Examples menu loads curated sample projects (CSG, twisted
-  extrusion, text, a 2D gasket for DXF/SVG, a `$t` animation, and a BOSL2 model).
-- **Persistence** — files, parameter values, and the active tab autosave to
-  `localStorage` and restore on reload.
-- **PWA** — installable, and the app shell + engine are cached for offline use.
-
-### Oracle verification
-
-Rendered output is validated against stock **OpenSCAD 2024.12**. On the sample
-models the meshes are **bit-for-bit identical in topology and volume**:
-
-| model | quito | OpenSCAD | Δ volume |
-|---|---|---|---|
-| `sphere($fn=48)` | 4158.9810 (2300 tris) | 4158.9810 (2300 tris) | 0.0000% |
-| `cylinder(h=20,r=7)` | 3037.0769 (84 tris) | 3037.0770 (84 tris) | 0.0000% |
-| `demo.scad` (union/difference/for/modules) | 12119.0398 (1164 tris) | 12119.0399 (1164 tris) | 0.0000% |
-
-Output meshes are watertight and 2-manifold (every edge shared by exactly two
-triangles). This is enforced continuously by the **geometry oracle**
-(`cargo run -p xtask -- geom`): a 69-case corpus (`corpus/geom`) spanning
-primitives, transforms, booleans, extrudes, the 2D pipeline, hull/minkowski,
-imports, and `surface`, each blessed from OpenSCAD 2024.12 and checked in CI on
-volume (±0.1%), bbox and signed centroid (±0.01 mm), connected-component count,
-watertight+2-manifoldness, and opt-in triangle count. Goldens are committed, so
-CI needs no OpenSCAD; regenerate them with `xtask bless-geom` on a dev machine.
-As a larger end-to-end check, the parametric *draped/fluted dome lamp shade*
-(`examples/lamp.scad`) — a single analytic-surface `polyhedron` built with
-C-style-`for` comprehensions — renders to **17,408 triangles, watertight, volume
-13.596**, identical in triangle count and matching in volume to OpenSCAD 2024.12.
-
-### Benchmarks (dual baseline)
-
-Full-process wall-clock, best of 3 runs, on an Apple Silicon laptop, comparing
-the release `quito` binary against OpenSCAD 2024.12's two render backends on the
-same `.scad` files (`cargo build --release && cargo run -p xtask -- bench`):
-
-| model | quito | OpenSCAD (CGAL) | speed-up | OpenSCAD (Manifold) | speed-up |
-|---|--:|--:|--:|--:|--:|
-| lamp shade (analytic polyhedron) | 34 ms | 172 ms | **5.1×** | 180 ms | **5.3×** |
-| booleans (grid of holes in a slab) | 53 ms | 20,000 ms | **377×** | 172 ms | **3.2×** |
-| rounded (minkowski + hull) | 24 ms | 350 ms | **14×** | 52 ms | **2.1×** |
-| gears (extrude/revolve heavy) | 17 ms | 1,925 ms | **113×** | 60 ms | **3.5×** |
-| eval-bound (heavy compute, tiny mesh) | 97 ms | 517 ms | **5.3×** | 516 ms | **5.3×** |
-
-The **geometric mean across all five models is ~25× vs CGAL** (OpenSCAD
-2021.01's renderer) — clearing the ≥10× goal *including the eval-bound model* —
-and Quito stays **~3–5× ahead of OpenSCAD's newest Manifold backend**. Both
-baselines still pay process-startup overhead that dominates the smallest models,
-so these are conservative. Models live in [`benches/models/`](benches/models/).
-
-The **eval-bound** row — a model that is nearly all interpretation and almost no
-geometry — was a published loss until the M4 **bytecode VM** landed: function
-bodies compile to slot-based bytecode (tail-calls become jumps), with an inlined
-number-op-number fast path and a hoisted self-call check, taking it from parity
-(1.1×) to **5.3×**. The tree-walk interpreter remains the reference semantics,
-the fallback for anything the VM doesn't compile (comprehensions, closures over
-locals, named-argument calls), and the differential oracle — so the VM only
-changes timing, never results (24/24 echo oracle unchanged).
-
-#### Warm-edit latency (M4 cache)
-
-A content-addressed geometry cache (`GeomCache`, keyed by a structural hash of
-each CSG subtree) makes re-renders incremental: only subtrees whose structure
-changed are recomputed, the rest are `Mesh` clones, and identical subtrees in one
-render are deduplicated (CSE). Re-rendering after an edit that doesn't change
-geometry (in-process, native kernel):
-
-| model | cold | warm (cache reused) | speed-up |
-|---|--:|--:|--:|
-| booleans | 47 ms | 0.08 ms | 597× |
-| rounded (minkowski) | 159 ms | 0.01 ms | 14,000× |
-| gears | 6.8 ms | 0.04 ms | 153× |
-
-Comfortably inside the **<100 ms warm-edit** M4 target. The cache is persisted
-across edits in the playground's Web Worker; a real geometry edit re-renders only
-the changed root-to-leaf path.
-
-## Build & run
+Everything is one Rust workspace plus a couple of Node front-ends.
 
 ### Prerequisites
 
-Install these once. Commands are shown for macOS (Homebrew), with equivalents
-noted for Linux/Windows. The CLI/engine needs only steps 1–2; the browser
-playground adds 3–4; the desktop app adds 5.
+Install once. The CLI/engine needs only steps 1–2; the web playground adds 3–4;
+the desktop app adds 5. Commands shown for macOS (Homebrew), with Linux/Windows
+notes.
 
-1. **Rust** (stable, 1.85+) via [rustup](https://rustup.rs):
+1. **Rust** (stable, 1.85+) via [rustup](https://rustup.rs).
+2. **cmake + a C/C++ compiler** — builds the native Manifold geometry kernel.
+   macOS: `brew install cmake` (compiler ships with the Xcode CLT from step 5).
+   Debian/Ubuntu: `apt install cmake build-essential`. Windows: CMake + the MSVC
+   "Desktop development with C++" workload.
+3. **Node.js 18+ and npm** — for the web and desktop UIs (`brew install node`).
+4. **wasm-pack + the wasm target** — compiles the engine to wasm:
    ```sh
-   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+   rustup target add wasm32-unknown-unknown && cargo install wasm-pack
    ```
-2. **cmake + a C/C++ compiler** — builds the C++ Manifold kernel used by the
-   native engine:
-   ```sh
-   brew install cmake          # macOS — the compiler comes with the Xcode CLT (step 5)
-   # Debian/Ubuntu: sudo apt install cmake build-essential
-   # Windows:       install CMake + the MSVC "Desktop development with C++" workload
-   ```
-3. **Node.js 18+ and npm** — for the browser playground and the desktop UI:
-   ```sh
-   brew install node           # macOS (or use nvm / your OS package manager)
-   ```
-4. **wasm-pack + the wasm target** — compiles the engine to wasm for the UI:
-   ```sh
-   rustup target add wasm32-unknown-unknown
-   cargo install wasm-pack
-   ```
-5. **Desktop only — Tauri platform deps:**
-   - **macOS:** `xcode-select --install` (Xcode command-line tools).
-   - **Linux/Windows:** see the
-     [Tauri prerequisites](https://tauri.app/start/prerequisites/) —
-     `webkit2gtk` + `build-essential` on Linux; the WebView2 runtime + MSVC
-     build tools on Windows.
+5. **Desktop only — Tauri deps:** macOS `xcode-select --install`; otherwise see
+   the [Tauri prerequisites](https://tauri.app/start/prerequisites/).
 
-### CLI / engine (prereqs 1–2)
+### CLI / engine
 
 ```sh
 cargo build --release
 ./target/release/quito examples/demo.scad -o out.stl
-./target/release/quito examples/demo.scad --check        # echo/warnings only
-cargo test                                               # unit + kernel tests
+cargo test
 ```
 
-### Browser playground (prereqs 1–4)
+### Web playground
 
 ```sh
-cd web
-npm install
-npm run build:wasm    # compile the Rust engine to wasm
-npm run dev           # serves http://localhost:5173
+cd web && npm install
+npm run build:wasm      # compile the Rust engine to wasm
+npm run dev             # http://localhost:5173
 ```
 
-### Desktop app — Tauri (prereqs 1–5)
-
-The desktop build compiles the web UI (and wasm engine) for you.
+### Desktop app (Tauri)
 
 ```sh
-cd desktop
-npm install           # first time only — installs the Tauri CLI
-npm run dev           # launch the native app with hot-reload
-npm run build         # bundle installers → src-tauri/target/release/bundle/…
+cd desktop && npm install
+npm run dev             # native app with hot-reload
+npm run build           # installers → src-tauri/target/release/bundle/…
 ```
+
+### Editors
+
+The `quito-lsp` language server works in any LSP-capable editor, and
+`editors/vscode` bundles it with a live 3D preview. Setup for Neovim, Helix,
+Zed, Emacs, VS Code, and a CLI file-watch loop is in
+[`docs/ide-integration.md`](docs/ide-integration.md).
 
 ## Repo layout
 
 | crate | responsibility |
 |---|---|
-| `quito-syntax` | logos lexer + recursive-descent parser → typed AST; customizer schema |
+| `quito-syntax` | lexer + parser → typed AST; customizer schema |
 | `quito-ir` | CSG tree/DAG node types |
 | `quito-eval` | tree-walk interpreter + bytecode VM: AST → CSG tree; `text()` |
-| `quito-geom` | fragment formula, tessellation, `Kernel` trait, Manifold backend, mesh/2D I/O |
+| `quito-geom` | fragments, tessellation, `Kernel` trait, Manifold backend, mesh/2D I/O |
 | `quito-cli` | the `quito` binary |
 | `quito-wasm` | wasm-bindgen engine surface (`render(source)` → mesh + diagnostics) |
-| `quito-lsp` | LSP language server (`quito-lsp`): diagnostics, hover, completion, render command |
+| `quito-lsp` | LSP language server: diagnostics, hover, completion, render command |
 
-The `web/` playground is live at <https://matthova.github.io/faster-scad/>, and
-the `desktop/` Tauri shell ships alongside it — both drive the same Rust core.
+`web/` (live at <https://matthova.github.io/faster-scad/>), `desktop/` (Tauri),
+and `editors/vscode/` are thin front-ends over the same core.
 
-### Editor / IDE integration
+## Contributing
 
-Prefer working in a code editor over the web GUI? Three front-ends drive the same
-engine: the `quito` CLI with a file watcher, the `quito-lsp` language server
-(diagnostics/hover/completion in any LSP editor), and a VS Code extension
-(`editors/vscode`) with a live 3D preview. See
-[`docs/ide-integration.md`](docs/ide-integration.md).
-
-## Roadmap
-
-M0–M5 are complete (native skeleton, playground + kernel bake-off, full language,
-full geometry, perf, and the M5 product surface). The candidate post-M5 tracks —
-trustworthy geometry (a geometry oracle), the switcher experience (desktop Save,
-inline diagnostics, `color`/`#`/`%` rendering), and CI hardening — are written up
-in [`docs/roadmap/`](docs/roadmap/). Known compatibility gaps and intentional
-divergences are tracked in [COMPAT.md](COMPAT.md).
+Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). Quito is a
+clean-room reimplementation: **no OpenSCAD (GPL) source is ever consulted.**
 
 ## License
 
-Dual-licensed under either of Apache-2.0 or MIT at your option. Quito is a
-clean-room reimplementation — see [CONTRIBUTING.md](CONTRIBUTING.md). No
-OpenSCAD (GPL) source is ever consulted.
+Dual-licensed under either [Apache-2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT) at
+your option.
