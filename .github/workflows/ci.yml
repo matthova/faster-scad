@@ -11,6 +11,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The BOSL2 corpus is a git submodule; the oracle step below fails
+          # hard if it is absent, so it must be checked out.
+          submodules: true
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -39,6 +43,12 @@ jobs:
       # The echo oracle runs against committed goldens (no OpenSCAD needed).
       - name: Echo oracle
         run: cargo run -p xtask -- echo
+
+      # The BOSL2 function suite runs against the corpus/BOSL2 submodule
+      # (parse+eval only, no OpenSCAD needed). Hard-fails if any listed test
+      # is missing, errors, or executes zero assertions.
+      - name: BOSL2 function suite
+        run: cargo run -p xtask -- bosl2
 
       # The wasm engine must keep compiling for the browser target.
       - name: Build wasm engine target

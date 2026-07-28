@@ -28,7 +28,11 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        "bosl2" => run_bosl2(&root),
+        "bosl2" => {
+            if !run_bosl2(&root) {
+                std::process::exit(1);
+            }
+        }
         "bench" => run_bench(&root),
         other => {
             eprintln!("unknown command: {other}");
@@ -40,38 +44,85 @@ fn main() {
 
 /// Run BOSL2's function-oriented test suite (BSD-licensed submodule) through
 /// quito and report the pass rate — the M2 exit metric.
-fn run_bosl2(root: &Path) {
+///
+/// Returns `true` only if every listed test file exists, parses, evaluates
+/// without error, and actually executed at least one `assert()` (a test that
+/// runs zero assertions is a vacuous pass and is rejected). A missing file or
+/// an empty subset is a hard failure — this is what makes the check meaningful
+/// in CI, where the submodule not being checked out would otherwise report
+/// 0/0 and exit 0.
+fn run_bosl2(root: &Path) -> bool {
     let dir = root.join("corpus/BOSL2/tests");
+    // Function-oriented subset (M2). `test_quaternions` is intentionally absent:
+    // it does not exist in the pinned BOSL2 submodule. Adding a name here that
+    // has no `.scadtest` file is now a hard failure rather than a silent skip.
     let subset = [
         "test_math", "test_lists", "test_comparisons", "test_strings", "test_vectors",
         "test_linalg", "test_trigonometry", "test_utility", "test_fnliterals", "test_structs",
-        "test_coords", "test_affine", "test_quaternions", "test_geometry", "test_paths",
-        "test_regions",
+        "test_coords", "test_affine", "test_geometry", "test_paths", "test_regions",
     ];
     let dir_str = dir.to_string_lossy().into_owned();
     let mut pass = 0;
     let mut total = 0;
-    let mut failed = Vec::new();
+    let mut missing = Vec::new();
+    let mut failed: Vec<(&str, String)> = Vec::new();
+
     for name in subset {
         let path = dir.join(format!("{name}.scadtest"));
-        let Ok(raw) = fs::read_to_string(&path) else { continue };
-        let Some(script) = extract_script(&raw) else { continue };
-        total += 1;
-        let ok = match quito_syntax::parse(&script) {
-            Ok(prog) => quito_eval::eval_program_with(&prog, &DiskResolver, &dir_str).is_ok(),
-            Err(_) => false,
+        let raw = match fs::read_to_string(&path) {
+            Ok(raw) => raw,
+            Err(e) => {
+                // Missing/unreadable file: hard failure, not a silent skip.
+                missing.push((name, e.to_string()));
+                continue;
+            }
         };
-        if ok {
-            pass += 1;
-        } else {
-            failed.push(name);
+        let Some(script) = extract_script(&raw) else {
+            failed.push((name, "no `script = '''...'''` block".into()));
+            total += 1;
+            continue;
+        };
+        total += 1;
+        let result = match quito_syntax::parse(&script) {
+            Ok(prog) => match quito_eval::eval_program_with(&prog, &DiskResolver, &dir_str) {
+                Ok(out) if out.asserts_run > 0 => Ok(()),
+                Ok(_) => Err("evaluated but ran zero asserts (vacuous)".to_string()),
+                Err(e) => Err(format!("eval error: {}", e.0)),
+            },
+            Err(e) => Err(format!("parse error: {}", e.message)),
+        };
+        match result {
+            Ok(()) => {
+                pass += 1;
+                println!("  PASS {name}");
+            }
+            Err(reason) => {
+                println!("  FAIL {name} ({reason})");
+                failed.push((name, reason));
+            }
         }
     }
-    let pct = if total == 0 { 0.0 } else { pass as f64 / total as f64 * 100.0 };
-    println!("BOSL2 function tests: {pass}/{total} ({pct:.0}%)");
-    if !failed.is_empty() {
-        println!("  failing: {}", failed.join(", "));
+
+    for (name, e) in &missing {
+        println!("  MISSING {name}.scadtest ({e})");
     }
+
+    let pct = if total == 0 { 0.0 } else { pass as f64 / total as f64 * 100.0 };
+    println!("\nBOSL2 function tests: {pass}/{total} ({pct:.0}%)");
+
+    let ok = missing.is_empty() && failed.is_empty() && total > 0;
+    if !ok {
+        if !missing.is_empty() {
+            eprintln!(
+                "error: {} test file(s) missing — is the corpus/BOSL2 submodule checked out?",
+                missing.len()
+            );
+        }
+        if total == 0 {
+            eprintln!("error: no BOSL2 tests executed (0/0 is never a pass)");
+        }
+    }
+    ok
 }
 
 /// Dual-baseline benchmark (M3 exit): time the release `quito` binary against
