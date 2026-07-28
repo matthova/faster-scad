@@ -34,6 +34,7 @@ import {
   type ParamValue,
 } from "./customizer";
 import { loadProject, saveProject, clearProject, type File } from "./project";
+import { loadPrefs, savePrefs } from "./prefs";
 import { EXAMPLES } from "./examples";
 import { decodeSharedProject, shareUrl } from "./share";
 import { resolveClosure } from "./library";
@@ -203,6 +204,9 @@ export function App() {
   // viewer owns the pick geometry; this resolves the cursor → span, code→model).
   const provenanceRef = useRef<ProvenanceGroup[]>([]);
   const highlightFromCursorRef = useRef<() => void>(() => {});
+  // Editor↔preview highlighting toggle. Mirrored to a ref so the once-wired pick
+  // handler (in useEffect) reads the live value, not a stale closure.
+  const linkHighlightRef = useRef(loadPrefs().linkHighlight);
 
   // File + customizer state. A `#code/…` share link (browser only) wins over
   // the autosaved localStorage project, so opening a shared URL always shows
@@ -256,6 +260,7 @@ export function App() {
   const [is2D, setIs2D] = useState(false);
   const [dims, setDims] = useState<MeshInfo | null>(null);
   const [ortho, setOrtho] = useState(false);
+  const [linkHighlight, setLinkHighlight] = useState(linkHighlightRef.current);
   const [time, setTime] = useState(sharedAnim?.t ?? 0);
   const [playing, setPlaying] = useState(sharedAnim?.playing ?? false);
   const [fps, setFps] = useState(sharedAnim?.fps ?? 15);
@@ -290,7 +295,7 @@ export function App() {
     // Model → code: clicking a face selects the source statement that produced
     // it. Spans index into the main file, so switch to it first if needed.
     const unsubPick = viewer.onPick((span) => {
-      if (!span) return;
+      if (!span || !linkHighlightRef.current) return;
       const view = viewRef.current;
       if (!view) return;
       if (activeRef.current !== 0) switchTo(0);
@@ -645,7 +650,7 @@ export function App() {
     const viewer = viewerRef.current;
     const view = viewRef.current;
     if (!viewer || !view) return;
-    if (activeRef.current !== 0) {
+    if (!linkHighlightRef.current || activeRef.current !== 0) {
       viewer.highlightSpan(null);
       return;
     }
@@ -655,6 +660,18 @@ export function App() {
       (gr) => gr.span != null && byte >= gr.span[0] && byte < gr.span[1],
     );
     viewer.highlightSpan(g?.span ?? null);
+  }
+
+  /** Toggle editor↔preview highlighting (both directions) and remember the
+   *  choice. Turning it off clears any live overlay; turning it on re-applies
+   *  the highlight for the current cursor. */
+  function toggleLinkHighlight() {
+    const next = !linkHighlightRef.current;
+    linkHighlightRef.current = next;
+    setLinkHighlight(next);
+    savePrefs({ linkHighlight: next });
+    if (next) highlightFromCursor();
+    else viewerRef.current?.highlightSpan(null);
   }
 
   function switchTo(idx: number) {
@@ -1218,6 +1235,17 @@ export function App() {
             }
           >
             {ortho ? "Ortho" : "Persp"}
+          </button>
+          <button
+            className={linkHighlight ? "active" : undefined}
+            onClick={toggleLinkHighlight}
+            title={
+              linkHighlight
+                ? "Editor↔preview highlighting on — click to disable"
+                : "Editor↔preview highlighting off — click to enable"
+            }
+          >
+            Link
           </button>
           <button onClick={onSavePng} title="Save the current view as a PNG image">
             PNG
