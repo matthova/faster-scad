@@ -470,9 +470,14 @@ pub(crate) fn chain_segments(segs: Vec<(Point2, Point2)>) -> Vec<Contour> {
 }
 
 /// 2D offset of contours. `r` rounds convex corners; `delta` mitres (or
-/// chamfers). Positive grows, negative shrinks. Works on simple contours; it
-/// does not clip self-intersections from large concave offsets (a 2D-clipper
-/// refinement).
+/// chamfers). Positive grows, negative shrinks.
+///
+/// The offset region is assembled from **convex pieces** (an offset slab per
+/// edge plus a join cap per corner) unioned/subtracted through the `geo`
+/// clipper, rather than a single per-vertex ring — a folding ring
+/// self-intersects on concave insets and would fill the bowtie. Growing is
+/// `solid ∪ band`; shrinking is `solid − band`, so an inset larger than a local
+/// feature collapses to empty (matching OpenSCAD) instead of a wrong solid.
 pub fn offset(
     contours: &[Contour],
     r: f64,
@@ -481,46 +486,66 @@ pub fn offset(
     frags: FragmentSpec,
 ) -> Vec<Contour> {
     let (amt, rounded) = if r != 0.0 { (r, true) } else { (delta, false) };
-    // Holes (odd nesting depth) offset the opposite way: growing the solid
-    // outward shrinks its holes.
-    let valid: Vec<&Contour> = contours.iter().filter(|c| c.len() >= 3).collect();
-    let n = valid.len();
-    let rep: Vec<Point2> = valid.iter().map(|c| c[0]).collect();
-    let depth: Vec<usize> = (0..n)
-        .map(|i| {
-            (0..n)
-                .filter(|&j| j != i && point_in_polygon(valid[j], rep[i]))
-                .count()
-        })
-        .collect();
-    valid
-        .iter()
-        .enumerate()
-        .map(|(i, c)| {
-            let a = if depth[i] % 2 == 1 { -amt } else { amt };
-            offset_one(c, a, rounded, chamfer, frags)
-        })
-        .collect()
+    let solid = to_multipolygon(contours);
+    if amt == 0.0 {
+        return from_multipolygon(solid);
+    }
+    // Orient each boundary (outer CCW, holes CW) so the edge normal points out
+    // of the solid; the band then grows/shrinks holes correctly too.
+    let mut pieces: Vec<Contour> = Vec::new();
+    for (outer, holes) in group_contours(contours) {
+        offset_pieces(&outer, amt, rounded, chamfer, frags, &mut pieces);
+        for h in &holes {
+            offset_pieces(h, amt, rounded, chamfer, frags, &mut pieces);
+        }
+    }
+    let band = clean_union(&pieces);
+    let result = if amt > 0.0 {
+        solid.union(&band)
+    } else {
+        solid.difference(&band)
+    };
+    from_multipolygon(result)
 }
 
-fn offset_one(
-    contour: &[Point2],
+/// Union a set of convex pieces (each taken as a filled CCW region) through the
+/// clipper into a clean multipolygon. The pieces are convex, so no
+/// self-intersection can arise.
+fn clean_union(pieces: &[Contour]) -> MultiPolygon<f64> {
+    let mps: Vec<MultiPolygon<f64>> = pieces
+        .iter()
+        .filter(|c| c.len() >= 3 && signed_area(c).abs() > 1e-12)
+        .map(|c| {
+            let ccw: Contour = if signed_area(c) < 0.0 {
+                c.iter().rev().cloned().collect()
+            } else {
+                c.clone()
+            };
+            MultiPolygon::new(vec![Polygon::new(to_linestring(&ccw), vec![])])
+        })
+        .collect();
+    union_multi(mps).unwrap_or_else(|| MultiPolygon::new(Vec::new()))
+}
+
+/// Emit the convex offset pieces for one oriented boundary contour into `out`:
+/// an offset slab quad per edge, plus a join cap (round arc / miter / chamfer)
+/// at each corner whose outer side gaps open. `poly` must be oriented so that
+/// its right-hand edge normal points out of the solid (outer CCW, holes CW);
+/// `amt` is signed (outward slabs when growing, inward when shrinking).
+fn offset_pieces(
+    poly: &[Point2],
     amt: f64,
     rounded: bool,
     chamfer: bool,
     frags: FragmentSpec,
-) -> Contour {
-    // Work CCW; reverse the result if the input was CW.
-    let cw = signed_area(contour) < 0.0;
-    let poly: Vec<Point2> = if cw {
-        contour.iter().rev().cloned().collect()
-    } else {
-        contour.to_vec()
-    };
+    out: &mut Vec<Contour>,
+) {
     let n = poly.len();
+    if n < 3 {
+        return;
+    }
     let seg_full = fragments(amt.abs(), frags).max(3) as f64;
 
-    // Outward unit normal of edge i (poly[i]->poly[i+1]) for a CCW polygon.
     let edge_normal = |i: usize| -> Point2 {
         let a = poly[i];
         let b = poly[(i + 1) % n];
@@ -529,7 +554,19 @@ fn offset_one(
         [d[1] / len, -d[0] / len]
     };
 
-    let mut out: Contour = Vec::new();
+    // One slab per edge: the edge and its offset copy.
+    for i in 0..n {
+        let a = poly[i];
+        let b = poly[(i + 1) % n];
+        let nrm = edge_normal(i);
+        let ao = [a[0] + amt * nrm[0], a[1] + amt * nrm[1]];
+        let bo = [b[0] + amt * nrm[0], b[1] + amt * nrm[1]];
+        out.push(vec![a, b, bo, ao]);
+    }
+
+    // One join cap per corner that gaps open on its outer side (convex when
+    // growing, reflex when shrinking) — reflex/convex on the other side is
+    // already covered by the overlapping slabs.
     for i in 0..n {
         let vi = poly[i];
         let n_in = edge_normal((i + n - 1) % n);
@@ -537,52 +574,44 @@ fn offset_one(
         let p_in = [vi[0] + amt * n_in[0], vi[1] + amt * n_in[1]];
         let p_out = [vi[0] + amt * n_out[0], vi[1] + amt * n_out[1]];
 
-        // Convex (left turn) for a CCW polygon.
         let din = [
             vi[0] - poly[(i + n - 1) % n][0],
             vi[1] - poly[(i + n - 1) % n][1],
         ];
         let dout = [poly[(i + 1) % n][0] - vi[0], poly[(i + 1) % n][1] - vi[1]];
-        let turn = din[0] * dout[1] - din[1] * dout[0];
-        let convex = turn > 0.0;
-
-        // A corner needs "filling" on its outer side: convex when growing,
-        // reflex when shrinking.
+        let convex = din[0] * dout[1] - din[1] * dout[0] > 0.0;
         let fill = (amt > 0.0 && convex) || (amt < 0.0 && !convex);
-        if fill && rounded {
+        if !fill {
+            continue;
+        }
+
+        if rounded {
             let a0 = n_in[1].atan2(n_in[0]);
             let a1 = n_out[1].atan2(n_out[0]);
             let mut da = a1 - a0;
-            while da <= -std::f64::consts::PI {
-                da += 2.0 * std::f64::consts::PI;
+            while da <= -PI {
+                da += 2.0 * PI;
             }
-            while da > std::f64::consts::PI {
-                da -= 2.0 * std::f64::consts::PI;
+            while da > PI {
+                da -= 2.0 * PI;
             }
-            let steps =
-                ((seg_full * (da.abs() / (2.0 * std::f64::consts::PI))).ceil() as usize).max(1);
+            let steps = ((seg_full * (da.abs() / (2.0 * PI))).ceil() as usize).max(1);
+            let mut cap = vec![vi];
             for s in 0..=steps {
                 let a = a0 + da * (s as f64 / steps as f64);
-                out.push([vi[0] + amt * a.cos(), vi[1] + amt * a.sin()]);
+                cap.push([vi[0] + amt * a.cos(), vi[1] + amt * a.sin()]);
             }
-        } else if fill && chamfer {
-            out.push(p_in);
-            out.push(p_out);
+            out.push(cap);
+        } else if chamfer {
+            out.push(vec![vi, p_in, p_out]);
         } else {
-            // miter: intersection of the two offset lines
+            // miter: apex is where the two offset edge-lines meet.
             match line_intersect(p_in, din, p_out, dout) {
-                Some(p) => out.push(p),
-                None => {
-                    out.push(p_in);
-                    out.push(p_out);
-                }
+                Some(m) => out.push(vec![vi, p_in, m, p_out]),
+                None => out.push(vec![vi, p_in, p_out]),
             }
         }
     }
-    if cw {
-        out.reverse();
-    }
-    out
 }
 
 /// Intersection of line (p1, dir d1) with line (p2, dir d2).
@@ -910,5 +939,38 @@ fn revolve_one(mesh: &mut Mesh, contour: &[Point2], angle: f64, steps: u32, full
                 ring(steps, tri[2]),
             ]);
         }
+    }
+}
+
+#[cfg(test)]
+mod offset_tests {
+    use super::*;
+
+    fn square(s: f64) -> Contour {
+        vec![[0.0, 0.0], [s, 0.0], [s, s], [0.0, s]]
+    }
+    /// Net filled area (outers positive, holes negative).
+    fn area(cs: &[Contour]) -> f64 {
+        cs.iter().map(|c| signed_area(c)).sum::<f64>().abs()
+    }
+
+    #[test]
+    fn offset_grow_miter_square() {
+        let r = offset(&[square(10.0)], 0.0, 2.0, false, FragmentSpec::default());
+        assert!((area(&r) - 196.0).abs() < 1e-6, "grow area {}", area(&r));
+    }
+
+    #[test]
+    fn offset_mild_inset_square() {
+        let r = offset(&[square(10.0)], 0.0, -2.0, false, FragmentSpec::default());
+        assert!((area(&r) - 36.0).abs() < 1e-6, "inset area {}", area(&r));
+    }
+
+    /// An inset larger than the shape must collapse to nothing, not a
+    /// self-intersecting bowtie (the A3 bug).
+    #[test]
+    fn offset_over_inset_collapses_to_empty() {
+        let r = offset(&[square(10.0)], 0.0, -10.0, false, FragmentSpec::default());
+        assert!(r.is_empty(), "over-inset should be empty, got {r:?}");
     }
 }
