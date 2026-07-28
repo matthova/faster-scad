@@ -103,6 +103,13 @@ workflow (`.github/workflows/release.yml` has the macOS env block commented in).
 
 ### Optional / nice-to-have
 
-- [ ] Decide whether Linux users should be steered to the **AppImage** (the only
+- [x] Decide whether Linux users should be steered to the **AppImage** (the only
       self-updating Linux format) vs. `.deb`/`.rpm` in the README/download page.
-- [ ] Add a download/landing page linking to the latest release assets.
+      The README download table links the AppImage; `.deb`/`.rpm` stay reachable
+      via the "Browse all downloads" release-page link.
+- [x] Add a download/landing page linking to the latest release assets — the
+      README's **Download** table links each platform via stable, version-less
+      asset aliases (`Quito-<platform>...`) uploaded by the release workflow, so
+      `releases/latest/download/<name>` always resolves to the newest build.
+- [ ] Add an in-app download/callout in the **web playground** (`web/src/App.tsx`,
+      gated to the non-Tauri build) linking to the desktop downloads.

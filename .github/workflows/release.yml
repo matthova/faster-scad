@@ -52,15 +52,27 @@ jobs:
           - platform: macos-latest
             args: "--target aarch64-apple-darwin"
             rust-targets: "aarch64-apple-darwin"
+            # Stable, version-less alias uploaded alongside the versioned .dmg so
+            # the README can link releases/latest/download/<name> permanently.
+            bundle-glob: "desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg"
+            stable-name: "Quito-macos-aarch64.dmg"
           - platform: macos-13
             args: "--target x86_64-apple-darwin"
             rust-targets: "x86_64-apple-darwin"
+            bundle-glob: "desktop/src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg"
+            stable-name: "Quito-macos-x64.dmg"
           - platform: ubuntu-22.04
             args: ""
             rust-targets: ""
+            # AppImage is the only self-updating Linux format, so that's what the
+            # download table links; .deb/.rpm stay reachable via the release page.
+            bundle-glob: "desktop/src-tauri/target/release/bundle/appimage/*.AppImage"
+            stable-name: "Quito-linux-x86_64.AppImage"
           - platform: windows-latest
             args: ""
             rust-targets: ""
+            bundle-glob: "desktop/src-tauri/target/release/bundle/nsis/*-setup.exe"
+            stable-name: "Quito-windows-x64-setup.exe"
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -182,3 +194,22 @@ jobs:
           # Emits latest.json (the updater manifest) alongside the installers.
           includeUpdaterJson: true
           args: ${{ matrix.args }}
+
+      # tauri-action names installers with the version embedded
+      # (Quito_0.0.4_aarch64.dmg), so there's no stable URL to link from a static
+      # README. Upload a version-less COPY of this platform's installer to the
+      # same release so releases/latest/download/<stable-name> always resolves to
+      # the newest build. --clobber keeps manual re-runs idempotent. Runs after
+      # the build above, so the bundle exists and the release already has assets.
+      - name: Upload stable-named alias
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.event.release.tag_name || inputs.tag }}"
+          src=$(ls ${{ matrix.bundle-glob }} 2>/dev/null | head -n1)
+          if [ -z "$src" ]; then
+            echo "::error::No bundle matched ${{ matrix.bundle-glob }}"; exit 1
+          fi
+          cp "$src" "${{ matrix.stable-name }}"
+          gh release upload "$TAG" "${{ matrix.stable-name }}" --clobber --repo "$GITHUB_REPOSITORY"

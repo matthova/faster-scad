@@ -15,6 +15,22 @@ against stock OpenSCAD.
 
 **[▶ Try it live in your browser — no install](https://matthova.github.io/faster-scad/)**
 
+## Download
+
+| Browser | Linux | Windows | Mac (native) | Mac (Intel) |
+|---|---|---|---|---|
+| [Open playground][web] | [AppImage][dl-linux] | [Installer][dl-win] | [Apple Silicon][dl-mac-arm] | [Intel][dl-mac-x64] |
+
+Desktop links always fetch the latest release, and the app auto-updates in place.
+Need `.deb` / `.rpm` / `.msi` or an older version? [Browse all downloads][releases].
+
+[web]: https://matthova.github.io/faster-scad/
+[dl-linux]: https://github.com/matthova/faster-scad/releases/latest/download/Quito-linux-x86_64.AppImage
+[dl-win]: https://github.com/matthova/faster-scad/releases/latest/download/Quito-windows-x64-setup.exe
+[dl-mac-arm]: https://github.com/matthova/faster-scad/releases/latest/download/Quito-macos-aarch64.dmg
+[dl-mac-x64]: https://github.com/matthova/faster-scad/releases/latest/download/Quito-macos-x64.dmg
+[releases]: https://github.com/matthova/faster-scad/releases/latest
+
 ---
 
 ## Run it anywhere
