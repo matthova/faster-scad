@@ -303,7 +303,7 @@ fn run_warm_gate(root: &Path) -> bool {
         let out = match eval() {
             Ok(o) => o,
             Err(e) => {
-                eprintln!("warm-gate: {name}: eval failed: {}", e.0);
+                eprintln!("warm-gate: {name}: eval failed: {}", e.message);
                 all_ok = false;
                 continue;
             }
@@ -323,7 +323,7 @@ fn run_warm_gate(root: &Path) -> bool {
             let out2 = match eval() {
                 Ok(o) => o,
                 Err(e) => {
-                    eprintln!("warm-gate: {name}: re-eval failed: {}", e.0);
+                    eprintln!("warm-gate: {name}: re-eval failed: {}", e.message);
                     render_failed = true;
                     break;
                 }
@@ -590,9 +590,15 @@ struct Directives {
 }
 
 fn parse_directives(src: &str) -> Directives {
-    let mut d = Directives { pin_tris: false, vol_tol: VOL_REL, bbox_tol: BBOX_ABS };
+    let mut d = Directives {
+        pin_tris: false,
+        vol_tol: VOL_REL,
+        bbox_tol: BBOX_ABS,
+    };
     for line in src.lines() {
-        let Some(rest) = line.trim().strip_prefix("// oracle:") else { continue };
+        let Some(rest) = line.trim().strip_prefix("// oracle:") else {
+            continue;
+        };
         let toks: Vec<&str> = rest.split_whitespace().collect();
         let mut i = 0;
         while i < toks.len() {
@@ -828,30 +834,47 @@ fn compare(g: &Golden, m: &GeomMetrics, d: &Directives) -> Vec<String> {
     let mut f = Vec::new();
     let vtol = (g.volume.abs() * d.vol_tol).max(VOL_ABS);
     if (g.volume - m.volume).abs() > vtol {
-        f.push(format!("volume {:.6} vs {:.6} (tol {:.6})", m.volume, g.volume, vtol));
+        f.push(format!(
+            "volume {:.6} vs {:.6} (tol {:.6})",
+            m.volume, g.volume, vtol
+        ));
     }
     match (g.bbox, m.bbox) {
         (Some(gb), Some((lo, hi))) => {
             let got = [lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]];
             for i in 0..6 {
                 if (gb[i] - got[i]).abs() > d.bbox_tol {
-                    f.push(format!("bbox[{i}] {:.4} vs {:.4} (tol {})", got[i], gb[i], d.bbox_tol));
+                    f.push(format!(
+                        "bbox[{i}] {:.4} vs {:.4} (tol {})",
+                        got[i], gb[i], d.bbox_tol
+                    ));
                 }
             }
         }
         (None, None) => {}
-        (g, a) => f.push(format!("bbox present: golden {} actual {}", g.is_some(), a.is_some())),
+        (g, a) => f.push(format!(
+            "bbox present: golden {} actual {}",
+            g.is_some(),
+            a.is_some()
+        )),
     }
     match (g.centroid, m.centroid) {
         (Some(gc), Some(c)) => {
             for i in 0..3 {
                 if (gc[i] - c[i]).abs() > d.bbox_tol {
-                    f.push(format!("centroid[{i}] {:.4} vs {:.4} (tol {})", c[i], gc[i], d.bbox_tol));
+                    f.push(format!(
+                        "centroid[{i}] {:.4} vs {:.4} (tol {})",
+                        c[i], gc[i], d.bbox_tol
+                    ));
                 }
             }
         }
         (None, None) => {}
-        (g, a) => f.push(format!("centroid present: golden {} actual {}", g.is_some(), a.is_some())),
+        (g, a) => f.push(format!(
+            "centroid present: golden {} actual {}",
+            g.is_some(),
+            a.is_some()
+        )),
     }
     if g.components != m.components {
         f.push(format!("components {} vs {}", m.components, g.components));
@@ -874,7 +897,8 @@ fn quito_mesh(case: &Path) -> Result<Mesh, String> {
         .map(|d| d.to_string_lossy().into_owned())
         .unwrap_or_else(|| ".".into());
     let prog = quito_syntax::parse(&src).map_err(|e| format!("parse: {}", e.message))?;
-    let out = quito_eval::eval_program_with(&prog, &DiskResolver, &dir).map_err(|e| format!("eval: {}", e.0))?;
+    let out = quito_eval::eval_program_with(&prog, &DiskResolver, &dir)
+        .map_err(|e| format!("eval: {}", e.message))?;
     quito_geom::render(&out.node).map_err(|e| format!("render: {e}"))
 }
 
@@ -901,16 +925,27 @@ fn bless_geom(cases: &Path, goldens: &Path) {
         if !out.status.success() && !mesh.tris.is_empty() {
             eprintln!("  !  {name}: openscad exited nonzero but wrote geometry");
         }
-        fs::write(goldens.join(format!("{name}.txt")), metrics_to_golden(&metrics(&mesh))).unwrap();
+        fs::write(
+            goldens.join(format!("{name}.txt")),
+            metrics_to_golden(&metrics(&mesh)),
+        )
+        .unwrap();
         n += 1;
     }
     eprintln!("blessed {n} geom goldens into {}", goldens.display());
 }
 
 fn check_geom(cases: &Path, goldens: &Path) -> bool {
-    let case_list = if cases.is_dir() { scad_cases(cases) } else { Vec::new() };
+    let case_list = if cases.is_dir() {
+        scad_cases(cases)
+    } else {
+        Vec::new()
+    };
     if case_list.is_empty() {
-        eprintln!("geom oracle: no cases in {} — corpus missing or empty", cases.display());
+        eprintln!(
+            "geom oracle: no cases in {} — corpus missing or empty",
+            cases.display()
+        );
         return false;
     }
     let mut pass = 0;
@@ -950,7 +985,11 @@ fn check_geom(cases: &Path, goldens: &Path) -> bool {
         }
     }
 
-    let pct = if total == 0 { 0.0 } else { pass as f64 / total as f64 * 100.0 };
+    let pct = if total == 0 {
+        0.0
+    } else {
+        pass as f64 / total as f64 * 100.0
+    };
     println!("\ngeom oracle: {pass}/{total} passed ({pct:.0}%)");
     pass == total && total > 0
 }

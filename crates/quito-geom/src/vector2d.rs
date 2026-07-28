@@ -822,17 +822,22 @@ fn iter_tags(text: &str) -> Vec<(&'static str, String)> {
     let mut out = Vec::new();
     let bytes = text.as_bytes();
     let mut i = 0;
-    while i < text.len() {
+    while i < bytes.len() {
         if bytes[i] == b'<' {
-            let rest = &text[i + 1..];
+            // Match on bytes, not a `&str` slice: `text[i+1..]` can start with a
+            // multibyte char, and slicing it at `nm.len()` would panic on a
+            // non-char-boundary (found by fuzzing). Tag names are ASCII.
+            let rest = &bytes[i + 1..];
             for &nm in &NAMES {
-                if rest.len() >= nm.len()
-                    && rest[..nm.len()].eq_ignore_ascii_case(nm)
-                    && rest[nm.len()..]
-                        .starts_with(|c: char| c.is_ascii_whitespace() || c == '>' || c == '/')
+                let nb = nm.as_bytes();
+                if rest.len() > nb.len()
+                    && rest[..nb.len()].eq_ignore_ascii_case(nb)
+                    && matches!(rest[nb.len()], b' ' | b'\t' | b'\r' | b'\n' | b'>' | b'/')
                 {
-                    if let Some(rel_end) = rest.find('>') {
-                        out.push((nm, rest[..rel_end].to_string()));
+                    if let Some(rel_end) = rest.iter().position(|&b| b == b'>') {
+                        // `i+1` sits just after '<' and `i+1+rel_end` just before
+                        // '>', both ASCII → valid `&str` boundaries.
+                        out.push((nm, text[i + 1..i + 1 + rel_end].to_string()));
                         i += 1 + rel_end;
                     }
                     break;

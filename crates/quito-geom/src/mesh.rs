@@ -324,15 +324,25 @@ impl Mesh {
         let nv: usize = nums.next().and_then(|t| t.parse().ok()).unwrap_or(0);
         let nf: usize = nums.next().and_then(|t| t.parse().ok()).unwrap_or(0);
         let _edges = nums.next();
+        // Bound the loops by the tokens actually present, not by the (untrusted)
+        // header counts — a bogus `nv`/`nf` of billions must not push billions
+        // of default vertices/faces and OOM.
         for _ in 0..nv {
-            let x = nums.next().and_then(|t| t.parse().ok()).unwrap_or(0.0);
+            let Some(x) = nums.next().map(|t| t.parse().unwrap_or(0.0)) else {
+                break;
+            };
             let y = nums.next().and_then(|t| t.parse().ok()).unwrap_or(0.0);
             let z = nums.next().and_then(|t| t.parse().ok()).unwrap_or(0.0);
             mesh.verts.push([x, y, z]);
         }
         for _ in 0..nf {
-            let k: usize = nums.next().and_then(|t| t.parse().ok()).unwrap_or(0);
-            let idx: Vec<u32> = (0..k).filter_map(|_| nums.next()?.parse().ok()).collect();
+            let Some(k) = nums.next().map(|t| t.parse::<usize>().unwrap_or(0)) else {
+                break;
+            };
+            let idx: Vec<u32> = (0..k)
+                .map_while(|_| nums.next())
+                .filter_map(|t| t.parse().ok())
+                .collect();
             for j in 1..idx.len().saturating_sub(1) {
                 mesh.tris.push([idx[0], idx[j], idx[j + 1]]);
             }
@@ -401,7 +411,11 @@ fn parse_binary_stl(bytes: &[u8]) -> Vec<[[f64; 3]; 3]> {
         return Vec::new();
     }
     let n = u32::from_le_bytes([bytes[80], bytes[81], bytes[82], bytes[83]]) as usize;
-    let mut out = Vec::with_capacity(n);
+    // Don't trust the header count: cap the pre-allocation to the triangles the
+    // input could actually hold (50 bytes each after the 84-byte header), so a
+    // bogus count can't request a multi-gigabyte allocation.
+    let max_tris = bytes.len().saturating_sub(84) / 50;
+    let mut out = Vec::with_capacity(n.min(max_tris));
     let f = |b: &[u8]| f32::from_le_bytes([b[0], b[1], b[2], b[3]]) as f64;
     for i in 0..n {
         let o = 84 + i * 50;
@@ -580,16 +594,19 @@ fn crc32(data: &[u8]) -> u32 {
 /// directory. Handles stored (method 0) and deflate (method 8). Returns None on
 /// any malformation or if the entry is absent.
 fn zip_read_entry(zip: &[u8], name: &str) -> Option<Vec<u8>> {
+    // Offsets below come straight from the (untrusted) archive, so every
+    // addition is checked: a bogus 64-bit offset must yield None, not an
+    // arithmetic-overflow panic (found by fuzzing).
     let rd_u16 = |o: usize| -> Option<usize> {
-        zip.get(o..o + 2)
+        zip.get(o..o.checked_add(2)?)
             .map(|b| u16::from_le_bytes([b[0], b[1]]) as usize)
     };
     let rd_u32 = |o: usize| -> Option<usize> {
-        zip.get(o..o + 4)
+        zip.get(o..o.checked_add(4)?)
             .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize)
     };
     let rd_u64 = |o: usize| -> Option<usize> {
-        zip.get(o..o + 8)
+        zip.get(o..o.checked_add(8)?)
             .map(|b| u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]) as usize)
     };
     // Find the End Of Central Directory record (scan backward for its signature).
@@ -609,71 +626,83 @@ fn zip_read_entry(zip: &[u8], name: &str) -> Option<Vec<u8>> {
         {
             let z64 = rd_u64(loc + 8)?;
             if zip
-                .get(z64..z64 + 4)?
+                .get(z64..z64.checked_add(4)?)?
                 .starts_with(&[0x50, 0x4b, 0x06, 0x06])
             {
-                count = rd_u64(z64 + 32)?;
-                cd = rd_u64(z64 + 48)?;
+                count = rd_u64(z64.checked_add(32)?)?;
+                cd = rd_u64(z64.checked_add(48)?)?;
             }
         }
     }
     const Z64: usize = 0xFFFF_FFFF;
     for _ in 0..count {
-        if !zip.get(cd..cd + 4)?.starts_with(&[0x50, 0x4b, 0x01, 0x02]) {
+        if !zip
+            .get(cd..cd.checked_add(4)?)?
+            .starts_with(&[0x50, 0x4b, 0x01, 0x02])
+        {
             return None;
         }
-        let method = rd_u16(cd + 10)?;
-        let mut comp_size = rd_u32(cd + 20)?;
-        let raw_ucomp = rd_u32(cd + 24)?;
-        let name_len = rd_u16(cd + 28)?;
-        let extra_len = rd_u16(cd + 30)?;
-        let comment_len = rd_u16(cd + 32)?;
-        let mut local_off = rd_u32(cd + 42)?;
-        let entry_name = std::str::from_utf8(zip.get(cd + 46..cd + 46 + name_len)?).ok()?;
+        let method = rd_u16(cd.checked_add(10)?)?;
+        let mut comp_size = rd_u32(cd.checked_add(20)?)?;
+        let raw_ucomp = rd_u32(cd.checked_add(24)?)?;
+        let name_len = rd_u16(cd.checked_add(28)?)?;
+        let extra_len = rd_u16(cd.checked_add(30)?)?;
+        let comment_len = rd_u16(cd.checked_add(32)?)?;
+        let mut local_off = rd_u32(cd.checked_add(42)?)?;
+        let name_start = cd.checked_add(46)?;
+        let entry_name =
+            std::str::from_utf8(zip.get(name_start..name_start.checked_add(name_len)?)?).ok()?;
         // ZIP64 extended-information extra field (id 0x0001): the sentinel
         // fields are stored here, in order (uncompressed, compressed, offset).
         if comp_size == Z64 || local_off == Z64 {
-            let mut e = cd + 46 + name_len;
-            let extra_end = e + extra_len;
-            while e + 4 <= extra_end {
+            let mut e = name_start.checked_add(name_len)?;
+            let extra_end = e.checked_add(extra_len)?;
+            while e.checked_add(4)? <= extra_end {
                 let id = rd_u16(e)?;
-                let sz = rd_u16(e + 2)?;
+                let sz = rd_u16(e.checked_add(2)?)?;
                 if id == 0x0001 {
-                    let mut p = e + 4;
+                    let mut p = e.checked_add(4)?;
                     if raw_ucomp == Z64 {
-                        p += 8; // skip uncompressed size
+                        p = p.checked_add(8)?; // skip uncompressed size
                     }
                     if comp_size == Z64 {
                         comp_size = rd_u64(p)?;
-                        p += 8;
+                        p = p.checked_add(8)?;
                     }
                     if local_off == Z64 {
                         local_off = rd_u64(p)?;
                     }
                     break;
                 }
-                e += 4 + sz;
+                e = e.checked_add(4)?.checked_add(sz)?;
             }
         }
         if entry_name == name {
             // Jump to the local header to find where the data begins.
             if !zip
-                .get(local_off..local_off + 4)?
+                .get(local_off..local_off.checked_add(4)?)?
                 .starts_with(&[0x50, 0x4b, 0x03, 0x04])
             {
                 return None;
             }
-            let lh_name = rd_u16(local_off + 26)?;
-            let lh_extra = rd_u16(local_off + 28)?;
-            let data_start = local_off + 30 + lh_name + lh_extra;
-            let data = zip.get(data_start..data_start + comp_size)?;
+            let lh_name = rd_u16(local_off.checked_add(26)?)?;
+            let lh_extra = rd_u16(local_off.checked_add(28)?)?;
+            let data_start = local_off
+                .checked_add(30)?
+                .checked_add(lh_name)?
+                .checked_add(lh_extra)?;
+            let data = zip.get(data_start..data_start.checked_add(comp_size)?)?;
             return match method {
                 0 => Some(data.to_vec()),
                 8 => miniz_oxide::inflate::decompress_to_vec(data).ok(),
                 _ => None,
             };
         }
-        cd += 46 + name_len + extra_len + comment_len;
+        cd = cd
+            .checked_add(46)?
+            .checked_add(name_len)?
+            .checked_add(extra_len)?
+            .checked_add(comment_len)?;
     }
     None
 }
