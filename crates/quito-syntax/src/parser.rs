@@ -1,11 +1,11 @@
 //! Recursive-descent parser producing the typed AST.
 
 use crate::ast::*;
-use crate::lexer::{Spanned, Token};
+use crate::lexer::{SpannedToken, Token};
 use crate::SyntaxError;
 
 pub struct Parser<'a> {
-    tokens: Vec<Spanned>,
+    tokens: Vec<SpannedToken>,
     pos: usize,
     /// Source text, for reconstructing `<include paths>` and EOF spans.
     src: &'a str,
@@ -22,7 +22,7 @@ fn describe(tok: Option<&Token>) -> String {
 }
 
 impl<'a> Parser<'a> {
-    pub fn new(tokens: Vec<Spanned>, src: &'a str) -> Self {
+    pub fn new(tokens: Vec<SpannedToken>, src: &'a str) -> Self {
         Parser {
             tokens,
             pos: 0,
@@ -43,6 +43,24 @@ impl<'a> Parser<'a> {
             .get(self.pos)
             .map(|s| s.span.clone())
             .unwrap_or(self.src.len()..self.src.len())
+    }
+
+    /// End byte offset of the most recently consumed token (0 at the very start).
+    fn prev_end(&self) -> usize {
+        self.pos
+            .checked_sub(1)
+            .and_then(|i| self.tokens.get(i))
+            .map(|s| s.span.end)
+            .unwrap_or(0)
+    }
+
+    /// Parse a statement, recording its source byte span (first token start ..
+    /// last token end) so the evaluator can attribute diagnostics to it.
+    fn parse_statement_spanned(&mut self) -> PResult<Spanned<Stmt>> {
+        let start = self.span_here().start;
+        let node = self.parse_statement()?;
+        let end = self.prev_end().max(start);
+        Ok(Spanned::new(node, start..end))
     }
 
     fn at_end(&self) -> bool {
@@ -125,7 +143,7 @@ impl<'a> Parser<'a> {
             if self.eat(&Token::Semi) {
                 continue;
             }
-            stmts.push(self.parse_statement()?);
+            stmts.push(self.parse_statement_spanned()?);
         }
         Ok(stmts)
     }
@@ -185,17 +203,17 @@ impl<'a> Parser<'a> {
     /// Parse the "body" that follows a construct like `translate(...)`, `if(...)`,
     /// `for(...)`, or `module foo()`: either a `{ block }`, a single statement, or
     /// an empty `;`.
-    fn parse_child_body(&mut self) -> PResult<Vec<Stmt>> {
+    fn parse_child_body(&mut self) -> PResult<Vec<Spanned<Stmt>>> {
         if self.peek() == Some(&Token::LBrace) {
             self.parse_block()
         } else if self.eat(&Token::Semi) {
             Ok(Vec::new())
         } else {
-            Ok(vec![self.parse_statement()?])
+            Ok(vec![self.parse_statement_spanned()?])
         }
     }
 
-    fn parse_block(&mut self) -> PResult<Vec<Stmt>> {
+    fn parse_block(&mut self) -> PResult<Vec<Spanned<Stmt>>> {
         self.expect(&Token::LBrace)?;
         let mut stmts = Vec::new();
         while self.peek() != Some(&Token::RBrace) {
@@ -208,7 +226,7 @@ impl<'a> Parser<'a> {
             if self.eat(&Token::Semi) {
                 continue;
             }
-            stmts.push(self.parse_statement()?);
+            stmts.push(self.parse_statement_spanned()?);
         }
         self.expect(&Token::RBrace)?;
         Ok(stmts)

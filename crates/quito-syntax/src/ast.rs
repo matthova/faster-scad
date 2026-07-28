@@ -1,5 +1,20 @@
 //! Typed AST for the OpenSCAD language (M0 subset).
 
+/// A syntax node together with its source byte span. Statement lists carry these
+/// so the evaluator can attribute a runtime error/warning to the offending
+/// statement's source range (used for inline editor diagnostics).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Spanned<T> {
+    pub node: T,
+    pub span: std::ops::Range<usize>,
+}
+
+impl<T> Spanned<T> {
+    pub fn new(node: T, span: std::ops::Range<usize>) -> Self {
+        Spanned { node, span }
+    }
+}
+
 /// Binary operators, in the OpenSCAD sense.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinOp {
@@ -173,13 +188,13 @@ pub enum Stmt {
         modifier: Option<Modifier>,
         name: String,
         args: Vec<Arg>,
-        children: Vec<Stmt>,
+        children: Vec<Spanned<Stmt>>,
     },
     /// `module name(params) body`
     ModuleDef {
         name: String,
         params: Vec<Param>,
-        body: Vec<Stmt>,
+        body: Vec<Spanned<Stmt>>,
     },
     /// `function name(params) = expr;`
     FunctionDef {
@@ -190,26 +205,26 @@ pub enum Stmt {
     /// `for (var = range) body` (possibly nested over multiple bindings)
     For {
         bindings: Vec<(String, Expr)>,
-        body: Vec<Stmt>,
+        body: Vec<Spanned<Stmt>>,
     },
     /// `if (cond) then [else els]`
     If {
         cond: Expr,
-        then: Vec<Stmt>,
-        els: Vec<Stmt>,
+        then: Vec<Spanned<Stmt>>,
+        els: Vec<Spanned<Stmt>>,
     },
     /// `let (bindings) body` at statement level — binds variables for children.
     Let {
         bindings: Vec<(String, Expr)>,
-        body: Vec<Stmt>,
+        body: Vec<Spanned<Stmt>>,
     },
     /// A bare `{ ... }` block.
-    Block(Vec<Stmt>),
+    Block(Vec<Spanned<Stmt>>),
     /// `include <path>` — splice the file's top-level statements here.
     Include { path: String },
     /// `use <path>` — import only the file's module/function definitions.
     Use { path: String },
 }
 
-/// A parsed program: a sequence of top-level statements.
-pub type Program = Vec<Stmt>;
+/// A parsed program: a sequence of top-level statements, each with its span.
+pub type Program = Vec<Spanned<Stmt>>;

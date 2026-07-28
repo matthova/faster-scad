@@ -23,6 +23,7 @@ interface NativeResult {
   area: number;
   is2D: boolean;
   params: string;
+  diagnostics: string;
 }
 
 export class DesktopEngine {
@@ -71,6 +72,7 @@ export class DesktopEngine {
           ms: performance.now() - t0,
           version: "native",
           params: res.params,
+          diagnostics: res.diagnostics,
         });
       })
       .catch((e) => {
@@ -91,6 +93,7 @@ export class DesktopEngine {
           ms: performance.now() - t0,
           version: "native",
           params: `{"params":[]}`,
+          diagnostics: "[]",
         });
       });
   }

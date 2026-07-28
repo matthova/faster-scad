@@ -111,7 +111,7 @@ fn run_bosl2(root: &Path) -> bool {
             Ok(prog) => match quito_eval::eval_program_with(&prog, &DiskResolver, &dir_str) {
                 Ok(out) if out.asserts_run > 0 => Ok(()),
                 Ok(_) => Err("evaluated but ran zero asserts (vacuous)".to_string()),
-                Err(e) => Err(format!("eval error: {}", e.0)),
+                Err(e) => Err(format!("eval error: {}", e.message)),
             },
             Err(e) => Err(format!("parse error: {}", e.message)),
         };
@@ -487,7 +487,7 @@ fn quito_echo(case: &Path) -> Vec<String> {
     match quito_syntax::parse(&src) {
         Ok(prog) => match quito_eval::eval_program_with(&prog, &DiskResolver, &dir) {
             Ok(out) => out.echoes,
-            Err(e) => vec![format!("ERROR: {}", e.0)],
+            Err(e) => vec![format!("ERROR: {}", e.message)],
         },
         Err(e) => vec![format!("ERROR: parse: {}", e.message)],
     }

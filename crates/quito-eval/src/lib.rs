@@ -59,14 +59,96 @@ const MAX_RANGE_ITERS: usize = 10_000_000;
 /// just above OpenSCAD's own limit (it accepts ~5000-deep recursion).
 const MAX_CALL_DEPTH: usize = 6_000;
 
+/// An evaluation error, optionally carrying the byte span (into the *main*
+/// source) of the statement that produced it, for inline editor diagnostics.
 #[derive(Debug, Clone, thiserror::Error)]
-#[error("{0}")]
-pub struct EvalError(pub String);
+#[error("{message}")]
+pub struct EvalError {
+    pub message: String,
+    pub span: Option<std::ops::Range<usize>>,
+}
+
+impl EvalError {
+    pub fn new(message: impl Into<String>) -> Self {
+        EvalError {
+            message: message.into(),
+            span: None,
+        }
+    }
+
+    /// Fill in the span if not already set (the innermost statement wins).
+    fn or_span(mut self, span: Option<std::ops::Range<usize>>) -> Self {
+        if self.span.is_none() {
+            self.span = span;
+        }
+        self
+    }
+}
 
 type EResult<T> = Result<T, EvalError>;
 
 fn err<T>(msg: impl Into<String>) -> EResult<T> {
-    Err(EvalError(msg.into()))
+    Err(EvalError::new(msg))
+}
+
+/// A warning, optionally carrying the byte span (into the main source) of the
+/// statement that produced it.
+#[derive(Debug, Clone)]
+pub struct Warning {
+    pub message: String,
+    pub span: Option<std::ops::Range<usize>>,
+}
+
+/// A structured diagnostic for the frontend (inline squiggles). `start`/`end`
+/// are byte offsets into the main source, or `-1` when no span is available.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Diagnostic {
+    pub severity: &'static str, // "error" | "warning"
+    pub message: String,
+    pub start: i64,
+    pub end: i64,
+}
+
+impl Diagnostic {
+    fn from_span(
+        severity: &'static str,
+        message: String,
+        span: &Option<std::ops::Range<usize>>,
+    ) -> Self {
+        let (start, end) = match span {
+            Some(r) => (r.start as i64, r.end as i64),
+            None => (-1, -1),
+        };
+        Diagnostic {
+            severity,
+            message,
+            start,
+            end,
+        }
+    }
+}
+
+/// Serialize an optional error plus warnings into the diagnostics JSON the
+/// frontend consumes. Shared by the wasm and desktop boundaries.
+pub fn diagnostics_json(error: Option<&Diagnostic>, warnings: &[Warning]) -> String {
+    let mut all: Vec<Diagnostic> = Vec::new();
+    if let Some(e) = error {
+        all.push(e.clone());
+    }
+    for w in warnings {
+        all.push(Diagnostic::from_span("warning", w.message.clone(), &w.span));
+    }
+    serde_json::to_string(&all).unwrap_or_else(|_| "[]".to_string())
+}
+
+/// Build the error `Diagnostic` for a parse error (span into the main source).
+pub fn parse_error_diagnostic(message: String, span: std::ops::Range<usize>) -> Diagnostic {
+    Diagnostic::from_span("error", message, &Some(span))
+}
+
+/// Build the error `Diagnostic` for an evaluation error (span if known).
+pub fn eval_error_diagnostic(err: &EvalError) -> Diagnostic {
+    Diagnostic::from_span("error", err.message.clone(), &err.span)
 }
 
 /// Resolve `path` against directory `dir`, normalizing `.`/`..` segments. Used
@@ -125,8 +207,11 @@ enum TailResult {
 /// A module definition with its captured lexical environment.
 struct ModClosure {
     params: Vec<Param>,
-    body: Vec<Stmt>,
+    body: Vec<Spanned<Stmt>>,
     env: Vec<ScopeRef>,
+    /// Whether the module was defined in the main file — only then do its body's
+    /// statement spans index into the main source (used for diagnostics).
+    is_main: bool,
 }
 
 #[derive(Default)]
@@ -137,10 +222,11 @@ struct Scope {
 }
 
 /// The output of evaluating a program.
+#[derive(Debug)]
 pub struct EvalOutput {
     pub node: Node,
     pub echoes: Vec<String>,
-    pub warnings: Vec<String>,
+    pub warnings: Vec<Warning>,
     /// Number of `assert()`s that actually executed during evaluation. Used by
     /// the BOSL2 oracle to reject vacuous passes (eval succeeds but ran zero
     /// assertions, e.g. because a test module was never invoked).
@@ -154,14 +240,21 @@ struct Interp<'a> {
     /// on calls, giving `$vars` dynamic scoping).
     specials: Vec<FastMap<String, Value>>,
     echoes: Vec<String>,
-    warnings: Vec<String>,
+    warnings: Vec<Warning>,
     /// Count of `assert()`s that executed (see `EvalOutput::asserts_run`).
     asserts_run: usize,
     root: Option<Node>,
     depth: usize,
-    /// For each active module call: the child statements plus the caller's
-    /// lexical scope chain, so `children()` evaluates them in the call site.
-    children_stack: Vec<(Vec<Stmt>, Vec<ScopeRef>)>,
+    /// True while executing statements whose spans index into the *main* source
+    /// (the main program + modules defined in it); false inside `use`d/`include`d
+    /// files. Gates diagnostic span attribution.
+    in_main: bool,
+    /// Span of the main-source statement currently executing (for warnings/errors).
+    cur_span: Option<std::ops::Range<usize>>,
+    /// For each active module call: the child statements, the caller's lexical
+    /// scope chain (so `children()` evaluates them at the call site), and the
+    /// caller's `in_main` flag (so their spans attribute correctly).
+    children_stack: Vec<(Vec<Spanned<Stmt>>, Vec<ScopeRef>, bool)>,
     /// `include`/`use` file resolver.
     resolver: &'a dyn FileResolver,
     /// Directory of the file currently being evaluated (for relative includes).
@@ -237,6 +330,8 @@ pub fn eval_program_with_params(
         asserts_run: 0,
         root: None,
         depth: 0,
+        in_main: true,
+        cur_span: None,
         children_stack: Vec::new(),
         resolver,
         cur_dir: base_dir.to_string(),
@@ -320,15 +415,34 @@ impl Interp<'_> {
 
     // ---- statements ----------------------------------------------------
 
-    fn eval_stmts(&mut self, stmts: &[Stmt]) -> EResult<Vec<Node>> {
+    /// The diagnostic span for a statement: its byte range when we're executing
+    /// main-source statements and the span isn't a splice sentinel; else `None`.
+    fn stmt_span(&self, s: &Spanned<Stmt>) -> Option<std::ops::Range<usize>> {
+        if self.in_main && s.span.start != usize::MAX {
+            Some(s.span.clone())
+        } else {
+            None
+        }
+    }
+
+    /// Record a warning, tagged with the statement currently executing.
+    fn warn(&mut self, message: impl Into<String>) {
+        self.warnings.push(Warning {
+            message: message.into(),
+            span: self.cur_span.clone(),
+        });
+    }
+
+    fn eval_stmts(&mut self, stmts: &[Spanned<Stmt>]) -> EResult<Vec<Node>> {
         // Splice `include`d files in first (only when present, to avoid cloning).
         let expanded;
-        let effective: &[Stmt] = if stmts.iter().any(|s| matches!(s, Stmt::Include { .. })) {
-            expanded = self.expand_includes(stmts, false)?;
-            &expanded
-        } else {
-            stmts
-        };
+        let effective: &[Spanned<Stmt>] =
+            if stmts.iter().any(|s| matches!(s.node, Stmt::Include { .. })) {
+                expanded = self.expand_includes(stmts, false)?;
+                &expanded
+            } else {
+                stmts
+            };
 
         // Phases 1 (definitions + `use` imports) and 2 (assignments).
         self.eval_defs_and_assigns(effective)?;
@@ -336,13 +450,20 @@ impl Interp<'_> {
         // Phase 3: geometry.
         let mut out = Vec::new();
         for s in effective {
-            match s {
+            match s.node {
                 Stmt::Assign { .. }
                 | Stmt::FunctionDef { .. }
                 | Stmt::ModuleDef { .. }
                 | Stmt::Use { .. }
                 | Stmt::Include { .. } => {}
-                _ => out.extend(self.eval_geom(s)?),
+                _ => {
+                    let sp = self.stmt_span(s);
+                    let saved = self.cur_span.take();
+                    self.cur_span = sp.clone();
+                    let r = self.eval_geom(&s.node);
+                    self.cur_span = saved;
+                    out.extend(r.map_err(|e| e.or_span(sp))?);
+                }
             }
         }
         Ok(out)
@@ -350,9 +471,9 @@ impl Interp<'_> {
 
     /// Phase 1 (hoist definitions + process `use` imports) and phase 2 (hoist
     /// assignments, last write wins) into the current scope.
-    fn eval_defs_and_assigns(&mut self, stmts: &[Stmt]) -> EResult<()> {
+    fn eval_defs_and_assigns(&mut self, stmts: &[Spanned<Stmt>]) -> EResult<()> {
         for s in stmts {
-            match s {
+            match &s.node {
                 Stmt::FunctionDef { name, params, body } => {
                     let env = self.scopes.clone();
                     self.scopes.last().unwrap().borrow_mut().funcs.insert(
@@ -374,6 +495,7 @@ impl Interp<'_> {
                             params: params.clone(),
                             body: body.clone(),
                             env,
+                            is_main: self.in_main,
                         }),
                     );
                 }
@@ -386,11 +508,16 @@ impl Interp<'_> {
         // still, so their internal variables are never overridden.
         let top_level = self.scopes.len() == 1;
         for s in stmts {
-            if let Stmt::Assign { name, value } = s {
+            if let Stmt::Assign { name, value } = &s.node {
+                let sp = self.stmt_span(s);
+                let saved = self.cur_span.take();
+                self.cur_span = sp.clone();
                 let v = match self.overrides.get(name) {
-                    Some(ov) if top_level => ov.clone(),
-                    _ => self.eval_expr(value)?,
+                    Some(ov) if top_level => Ok(ov.clone()),
+                    _ => self.eval_expr(value),
                 };
+                self.cur_span = saved;
+                let v = v.map_err(|e| e.or_span(sp))?;
                 self.set_var(name, v);
             }
         }
@@ -405,21 +532,29 @@ impl Interp<'_> {
     /// against the *main* directory, so we rewrite the `use` path to an absolute
     /// one relative to the including file's directory. (Top-level `use`s are
     /// left relative so they still search library paths / the CDN registry.)
-    fn expand_includes(&mut self, stmts: &[Stmt], in_include: bool) -> EResult<Vec<Stmt>> {
+    fn expand_includes(
+        &mut self,
+        stmts: &[Spanned<Stmt>],
+        in_include: bool,
+    ) -> EResult<Vec<Spanned<Stmt>>> {
+        // Statements spliced in from an included file get a sentinel span so the
+        // evaluator never attributes a diagnostic to a library byte offset in the
+        // main editor.
+        const SENTINEL: std::ops::Range<usize> = usize::MAX..usize::MAX;
         let mut out = Vec::new();
         for s in stmts {
-            match s {
+            match &s.node {
                 Stmt::Include { path } => {
                     let Some(lf) = self.resolver.load(path, &self.cur_dir) else {
-                        self.warnings
-                            .push(format!("Can't open include file '{path}'"));
+                        self.warn(format!("Can't open include file '{path}'"));
                         continue;
                     };
                     if !self.loading.insert(lf.key.clone()) {
                         continue; // cycle: already loading this file
                     }
-                    let prog = quito_syntax::parse(&lf.source)
-                        .map_err(|e| EvalError(format!("in include '{path}': {}", e.message)))?;
+                    let prog = quito_syntax::parse(&lf.source).map_err(|e| {
+                        EvalError::new(format!("in include '{path}': {}", e.message))
+                    })?;
                     let prev = std::mem::replace(&mut self.cur_dir, lf.dir.clone());
                     let expanded = self.expand_includes(&prog, true);
                     self.cur_dir = prev;
@@ -427,11 +562,17 @@ impl Interp<'_> {
                     out.extend(expanded?);
                 }
                 Stmt::Use { path } if in_include => {
-                    out.push(Stmt::Use {
-                        path: join_dir(&self.cur_dir, path),
-                    });
+                    out.push(Spanned::new(
+                        Stmt::Use {
+                            path: join_dir(&self.cur_dir, path),
+                        },
+                        SENTINEL,
+                    ));
                 }
-                other => out.push(other.clone()),
+                node => {
+                    let span = if in_include { SENTINEL } else { s.span.clone() };
+                    out.push(Spanned::new(node.clone(), span));
+                }
             }
         }
         Ok(out)
@@ -442,25 +583,28 @@ impl Interp<'_> {
     /// over its own top-level scope so they can use its helpers/constants.
     fn import_use(&mut self, path: &str) -> EResult<()> {
         let Some(lf) = self.resolver.load(path, &self.cur_dir) else {
-            self.warnings
-                .push(format!("Can't open 'use' file '{path}'"));
+            self.warn(format!("Can't open 'use' file '{path}'"));
             return Ok(());
         };
         if !self.loading.insert(lf.key.clone()) {
             return Ok(()); // cycle
         }
         let prog = quito_syntax::parse(&lf.source)
-            .map_err(|e| EvalError(format!("in use '{path}': {}", e.message)))?;
+            .map_err(|e| EvalError::new(format!("in use '{path}': {}", e.message)))?;
 
         let file_scope: ScopeRef = Rc::new(RefCell::new(Scope::default()));
         let base = self.scopes[0].clone();
         let saved = std::mem::replace(&mut self.scopes, vec![base, file_scope.clone()]);
         let prev_dir = std::mem::replace(&mut self.cur_dir, lf.dir.clone());
         self.specials.push(FastMap::default());
+        // A `use`d file's statement spans index into that file, not the main
+        // source — don't attribute diagnostics to them.
+        let prev_main = std::mem::replace(&mut self.in_main, false);
 
         let expanded = self.expand_includes(&prog, true);
         let result = expanded.and_then(|eff| self.eval_defs_and_assigns(&eff));
 
+        self.in_main = prev_main;
         self.specials.pop();
         self.cur_dir = prev_dir;
         self.scopes = saved;
@@ -517,7 +661,11 @@ impl Interp<'_> {
         }
     }
 
-    fn eval_for(&mut self, bindings: &[(String, Expr)], body: &[Stmt]) -> EResult<Vec<Node>> {
+    fn eval_for(
+        &mut self,
+        bindings: &[(String, Expr)],
+        body: &[Spanned<Stmt>],
+    ) -> EResult<Vec<Node>> {
         let mut out = Vec::new();
         self.eval_for_rec(bindings, body, &mut out)?;
         Ok(out)
@@ -526,7 +674,7 @@ impl Interp<'_> {
     fn eval_for_rec(
         &mut self,
         bindings: &[(String, Expr)],
-        body: &[Stmt],
+        body: &[Spanned<Stmt>],
         out: &mut Vec<Node>,
     ) -> EResult<()> {
         if bindings.is_empty() {
@@ -554,7 +702,7 @@ impl Interp<'_> {
         modifier: Option<Modifier>,
         name: &str,
         args: &[Arg],
-        children: &[Stmt],
+        children: &[Spanned<Stmt>],
     ) -> EResult<Vec<Node>> {
         if modifier == Some(Modifier::Disable) {
             return Ok(Vec::new());
@@ -573,7 +721,12 @@ impl Interp<'_> {
         }
     }
 
-    fn dispatch_module(&mut self, name: &str, args: &[Arg], children: &[Stmt]) -> EResult<Node> {
+    fn dispatch_module(
+        &mut self,
+        name: &str,
+        args: &[Arg],
+        children: &[Spanned<Stmt>],
+    ) -> EResult<Node> {
         match name {
             "cube" => self.b_cube(args),
             "sphere" => self.b_sphere(args),
@@ -617,15 +770,14 @@ impl Interp<'_> {
                 if let Some(def) = self.lookup_module(name) {
                     self.instantiate_module(&def, args, children)
                 } else {
-                    self.warnings
-                        .push(format!("Ignoring unknown module '{name}'"));
+                    self.warn(format!("Ignoring unknown module '{name}'"));
                     Ok(Node::Empty)
                 }
             }
         }
     }
 
-    fn eval_children(&mut self, children: &[Stmt]) -> EResult<Vec<Node>> {
+    fn eval_children(&mut self, children: &[Spanned<Stmt>]) -> EResult<Vec<Node>> {
         self.push_scope();
         let r = self.eval_stmts(children);
         self.pop_scope();
@@ -636,7 +788,7 @@ impl Interp<'_> {
         &mut self,
         def: &Rc<ModClosure>,
         args: &[Arg],
-        children: &[Stmt],
+        children: &[Spanned<Stmt>],
     ) -> EResult<Node> {
         // Guard against unbounded module recursion (shared budget with function
         // calls) so a runaway library errors gracefully instead of overflowing
@@ -655,8 +807,13 @@ impl Interp<'_> {
             self.set_var(&k, v);
         }
         self.set_var("$children", Value::Number(children.len() as f64));
-        self.children_stack.push((children.to_vec(), caller_scopes));
+        self.children_stack
+            .push((children.to_vec(), caller_scopes, self.in_main));
+        // The body's spans index into the file the module was defined in, so only
+        // attribute diagnostics to them when that file is the main source.
+        let prev_main = std::mem::replace(&mut self.in_main, def.is_main);
         let r = self.eval_stmts(&def.body);
+        self.in_main = prev_main;
         self.children_stack.pop();
         self.pop_scope();
         self.scopes = saved;
@@ -674,16 +831,17 @@ impl Interp<'_> {
         let Some(frame) = self.children_stack.pop() else {
             return Ok(Node::Empty);
         };
-        let (kids, caller_scopes) = frame.clone();
-        let result = self.eval_children_frame(&kids, caller_scopes, args);
+        let (kids, caller_scopes, caller_main) = frame.clone();
+        let result = self.eval_children_frame(&kids, caller_scopes, caller_main, args);
         self.children_stack.push(frame);
         result
     }
 
     fn eval_children_frame(
         &mut self,
-        kids: &[Stmt],
+        kids: &[Spanned<Stmt>],
         caller_scopes: Vec<ScopeRef>,
+        caller_main: bool,
         args: &[Arg],
     ) -> EResult<Node> {
         let kids = kids.to_vec();
@@ -707,8 +865,10 @@ impl Interp<'_> {
                 _ => Vec::new(),
             })
         };
-        // Evaluate the child geometry in the caller's lexical environment.
+        // Evaluate the child geometry in the caller's lexical environment, with
+        // the caller's main-ness so diagnostic spans attribute to the call site.
         let saved = std::mem::replace(&mut self.scopes, caller_scopes);
+        let prev_main = std::mem::replace(&mut self.in_main, caller_main);
         self.push_scope();
         let result = (|| -> EResult<Node> {
             match idxs {
@@ -717,7 +877,7 @@ impl Interp<'_> {
                     let mut out = Vec::new();
                     for i in idxs {
                         if let Some(stmt) = kids.get(i) {
-                            out.extend(self.eval_geom(stmt)?);
+                            out.extend(self.eval_geom(&stmt.node)?);
                         }
                     }
                     Ok(Node::group(out))
@@ -726,6 +886,7 @@ impl Interp<'_> {
         })();
         self.pop_scope();
         self.scopes = saved;
+        self.in_main = prev_main;
         result
     }
 
@@ -801,8 +962,7 @@ impl Interp<'_> {
         match self.resolver.load_bytes(&path, &self.cur_dir) {
             Some(data) => Ok(Node::Import { data, format }),
             None => {
-                self.warnings
-                    .push(format!("Can't open import file '{path}'"));
+                self.warn(format!("Can't open import file '{path}'"));
                 Ok(Node::Empty)
             }
         }
@@ -819,21 +979,19 @@ impl Interp<'_> {
         let is_png = path.to_ascii_lowercase().ends_with(".png");
         let rows = if is_png {
             let Some(bytes) = self.resolver.load_bytes(&path, &self.cur_dir) else {
-                self.warnings
-                    .push(format!("Can't open surface file '{path}'"));
+                self.warn(format!("Can't open surface file '{path}'"));
                 return Ok(Node::Empty);
             };
             match png_heightmap(&bytes, invert) {
                 Ok(rows) => rows,
                 Err(e) => {
-                    self.warnings.push(format!("surface(): {e} in '{path}'"));
+                    self.warn(format!("surface(): {e} in '{path}'"));
                     return Ok(Node::Empty);
                 }
             }
         } else {
             let Some(lf) = self.resolver.load(&path, &self.cur_dir) else {
-                self.warnings
-                    .push(format!("Can't open surface file '{path}'"));
+                self.warn(format!("Can't open surface file '{path}'"));
                 return Ok(Node::Empty);
             };
             // Whitespace-separated rows of z-values; `#` lines are comments.
@@ -960,7 +1118,7 @@ impl Interp<'_> {
         Ok(Node::Polygon { points, paths })
     }
 
-    fn b_linear_extrude(&mut self, args: &[Arg], children: &[Stmt]) -> EResult<Node> {
+    fn b_linear_extrude(&mut self, args: &[Arg], children: &[Spanned<Stmt>]) -> EResult<Node> {
         let m = self.bind_named(&["height"], args)?;
         let height = m
             .get("height")
@@ -1000,7 +1158,7 @@ impl Interp<'_> {
         })
     }
 
-    fn b_offset(&mut self, args: &[Arg], children: &[Stmt]) -> EResult<Node> {
+    fn b_offset(&mut self, args: &[Arg], children: &[Spanned<Stmt>]) -> EResult<Node> {
         let m = self.bind_named(&["r", "delta"], args)?;
         let r = m.get("r").and_then(Value::as_number);
         let delta = m.get("delta").and_then(Value::as_number);
@@ -1021,7 +1179,7 @@ impl Interp<'_> {
         })
     }
 
-    fn b_rotate_extrude(&mut self, args: &[Arg], children: &[Stmt]) -> EResult<Node> {
+    fn b_rotate_extrude(&mut self, args: &[Arg], children: &[Spanned<Stmt>]) -> EResult<Node> {
         let m = self.bind_named(&["angle"], args)?;
         let angle = m.get("angle").and_then(Value::as_number).unwrap_or(360.0);
         let child = Box::new(Node::group(self.eval_children(children)?));
@@ -1047,7 +1205,12 @@ impl Interp<'_> {
         }
     }
 
-    fn transform(&mut self, args: &[Arg], children: &[Stmt], kind: TransformKind) -> EResult<Node> {
+    fn transform(
+        &mut self,
+        args: &[Arg],
+        children: &[Spanned<Stmt>],
+        kind: TransformKind,
+    ) -> EResult<Node> {
         let child = Node::group(self.eval_children(children)?);
         if matches!(child, Node::Empty) {
             return Ok(Node::Empty);
@@ -1059,7 +1222,10 @@ impl Interp<'_> {
         let node = match kind {
             TransformKind::Translate => {
                 let m = self.bind_named(&["v"], args)?;
-                let v = m.get("v").and_then(Value::as_vec3).unwrap_or([0.0, 0.0, 0.0]);
+                let v = m
+                    .get("v")
+                    .and_then(Value::as_vec3)
+                    .unwrap_or([0.0, 0.0, 0.0]);
                 Node::Translate { v, child }
             }
             TransformKind::Scale => {
@@ -1069,7 +1235,10 @@ impl Interp<'_> {
             }
             TransformKind::Mirror => {
                 let m = self.bind_named(&["v"], args)?;
-                let v = m.get("v").and_then(Value::as_vec3).unwrap_or([1.0, 0.0, 0.0]);
+                let v = m
+                    .get("v")
+                    .and_then(Value::as_vec3)
+                    .unwrap_or([1.0, 0.0, 0.0]);
                 Node::Mirror { v, child }
             }
             TransformKind::Rotate => {
@@ -1104,7 +1273,7 @@ impl Interp<'_> {
         Ok(node)
     }
 
-    fn b_multmatrix(&mut self, args: &[Arg], children: &[Stmt]) -> EResult<Node> {
+    fn b_multmatrix(&mut self, args: &[Arg], children: &[Spanned<Stmt>]) -> EResult<Node> {
         let child = Node::group(self.eval_children(children)?);
         if matches!(child, Node::Empty) {
             return Ok(Node::Empty);
@@ -1116,7 +1285,7 @@ impl Interp<'_> {
         })
     }
 
-    fn b_resize(&mut self, args: &[Arg], children: &[Stmt]) -> EResult<Node> {
+    fn b_resize(&mut self, args: &[Arg], children: &[Spanned<Stmt>]) -> EResult<Node> {
         let child = Node::group(self.eval_children(children)?);
         if matches!(child, Node::Empty) {
             return Ok(Node::Empty);
@@ -1155,7 +1324,7 @@ impl Interp<'_> {
         Ok(())
     }
 
-    fn b_echo(&mut self, args: &[Arg], children: &[Stmt]) -> EResult<Node> {
+    fn b_echo(&mut self, args: &[Arg], children: &[Spanned<Stmt>]) -> EResult<Node> {
         self.do_echo(args)?;
         Ok(Node::group(self.eval_children(children)?))
     }
@@ -1179,7 +1348,7 @@ impl Interp<'_> {
         Ok(())
     }
 
-    fn b_assert(&mut self, args: &[Arg], children: &[Stmt]) -> EResult<Node> {
+    fn b_assert(&mut self, args: &[Arg], children: &[Spanned<Stmt>]) -> EResult<Node> {
         self.do_assert(args)?;
         Ok(Node::group(self.eval_children(children)?))
     }
@@ -1458,7 +1627,18 @@ impl Interp<'_> {
         if let Value::Function(f) = self.lookup_var(name) {
             return self.call_function_values(&f, argv);
         }
-        Ok(builtin_fn(name, &argv, &mut self.warnings))
+        Ok(self.call_builtin_fn(name, &argv))
+    }
+
+    /// Invoke a builtin function, routing any warnings it emits through `warn`
+    /// so they pick up the current statement's span.
+    fn call_builtin_fn(&mut self, name: &str, args: &[Value]) -> Value {
+        let mut ws: Vec<String> = Vec::new();
+        let v = builtin_fn(name, args, &mut ws);
+        for m in ws {
+            self.warn(m);
+        }
+        v
     }
 
     /// Run a function whose parameters are already bound (by name → value),
@@ -1668,7 +1848,7 @@ impl Interp<'_> {
             .iter()
             .map(|a| self.eval_expr(&a.value))
             .collect::<EResult<_>>()?;
-        Ok(builtin_fn(name, &vals, &mut self.warnings))
+        Ok(self.call_builtin_fn(name, &vals))
     }
 }
 
@@ -2549,10 +2729,18 @@ mod tests {
         let expect = [[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]];
         for r in 0..3 {
             for c in 0..3 {
-                assert!((m[r][c] - expect[r][c]).abs() < 1e-12, "m[{r}][{c}]={}", m[r][c]);
+                assert!(
+                    (m[r][c] - expect[r][c]).abs() < 1e-12,
+                    "m[{r}][{c}]={}",
+                    m[r][c]
+                );
             }
         }
-        assert_eq!([m[0][3], m[1][3], m[2][3]], [0.0, 0.0, 0.0], "no translation");
+        assert_eq!(
+            [m[0][3], m[1][3], m[2][3]],
+            [0.0, 0.0, 0.0],
+            "no translation"
+        );
         assert_eq!(m[3], [0.0, 0.0, 0.0, 1.0], "affine bottom row");
 
         // Named form is identical to positional.
@@ -2574,7 +2762,10 @@ mod tests {
             m[2][0] * axis[0] + m[2][1] * axis[1] + m[2][2] * axis[2],
         ];
         for i in 0..3 {
-            assert!((mapped[i] - axis[i]).abs() < 1e-12, "axis not fixed: {mapped:?}");
+            assert!(
+                (mapped[i] - axis[i]).abs() < 1e-12,
+                "axis not fixed: {mapped:?}"
+            );
         }
     }
 
@@ -3051,6 +3242,63 @@ mod tests {
         let prog = quito_syntax::parse("include <lib.scad>\necho(sqr(4), K);").unwrap();
         let out = eval_program_with(&prog, &resolver, ".").unwrap();
         assert_eq!(out.echoes, vec!["ECHO: \"libran\"", "ECHO: 16, 7"]);
+    }
+
+    // ---- diagnostic spans (for inline editor squiggles) ----------------
+
+    #[test]
+    fn eval_error_carries_main_statement_span() {
+        let src = "cube(1);\nassert(false);";
+        let prog = quito_syntax::parse(src).unwrap();
+        let e = eval_program(&prog).unwrap_err();
+        let span = e.span.expect("eval error should carry a span");
+        assert_eq!(&src[span], "assert(false);");
+    }
+
+    #[test]
+    fn warning_carries_main_statement_span() {
+        let src = "nope();";
+        let prog = quito_syntax::parse(src).unwrap();
+        let out = eval_program(&prog).unwrap();
+        let w = out
+            .warnings
+            .iter()
+            .find(|w| w.message.contains("nope"))
+            .expect("unknown-module warning");
+        let span = w.span.clone().expect("warning should carry a span");
+        assert_eq!(&src[span], "nope();");
+    }
+
+    #[test]
+    fn library_error_attributes_to_main_call_site() {
+        // A `use`d module that fails: the error must be squiggled at the main
+        // call site, never at a (meaningless) offset into the library source.
+        let mut files = std::collections::HashMap::new();
+        files.insert(
+            "lib.scad".to_string(),
+            "module boom() { assert(false); }".to_string(),
+        );
+        let resolver = MapResolver(files);
+        let src = "use <lib.scad>\nboom();";
+        let prog = quito_syntax::parse(src).unwrap();
+        let e = eval_program_with(&prog, &resolver, ".").unwrap_err();
+        let span = e.span.expect("should attribute to the main call site");
+        assert_eq!(&src[span], "boom();");
+    }
+
+    #[test]
+    fn diagnostics_json_serializes_error_and_warnings() {
+        let err = Diagnostic::from_span("error", "boom".into(), &Some(3..8));
+        let warns = vec![Warning {
+            message: "w".into(),
+            span: None,
+        }];
+        let json = diagnostics_json(Some(&err), &warns);
+        assert!(json.contains("\"severity\":\"error\""), "{json}");
+        assert!(json.contains("\"start\":3"), "{json}");
+        assert!(json.contains("\"end\":8"), "{json}");
+        assert!(json.contains("\"severity\":\"warning\""), "{json}");
+        assert!(json.contains("\"start\":-1"), "{json}");
     }
 
     #[test]

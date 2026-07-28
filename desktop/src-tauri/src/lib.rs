@@ -69,6 +69,16 @@ struct RenderResult {
     is_2d: bool,
     /// Customizer schema JSON for the current source.
     params: String,
+    /// Structured diagnostics (JSON array) for inline editor squiggles.
+    diagnostics: String,
+}
+
+/// An engine error plus the structured diagnostic (with source span, if any) the
+/// frontend needs to squiggle it.
+#[derive(Debug)]
+struct EngineError {
+    message: String,
+    diagnostic: quito_eval::Diagnostic,
 }
 
 #[tauri::command]
@@ -181,21 +191,36 @@ fn eval_and_render(
     values: &[String],
     file_names: &[String],
     file_contents: &[String],
-) -> Result<(quito_geom::Mesh, Vec<String>, Vec<String>, bool), String> {
+) -> Result<(quito_geom::Mesh, Vec<String>, Vec<quito_eval::Warning>, bool), EngineError> {
     let program = quito_syntax::parse(source).map_err(|e| {
-        format!("parse error: {} (at {}..{})", e.message, e.span.start, e.span.end)
+        let message = format!("parse error: {}", e.message);
+        EngineError {
+            diagnostic: quito_eval::parse_error_diagnostic(message.clone(), e.span),
+            message,
+        }
     })?;
     let resolver = CombinedResolver {
         files: file_names.iter().cloned().zip(file_contents.iter().cloned()).collect(),
         disk: DiskResolver::new(),
     };
     let out = quito_eval::eval_program_with_params(&program, &resolver, dir, &overrides(names, values))
-        .map_err(|e| format!("evaluation error: {}", e.0))?;
+        .map_err(|e| EngineError {
+            message: format!("evaluation error: {}", e.message),
+            diagnostic: quito_eval::eval_error_diagnostic(&e),
+        })?;
     let is_2d = quito_geom::is_2d(&out.node);
     let kernel = quito_geom::ManifoldKernel::new();
     let mesh = {
         let mut cache = cache.lock().unwrap();
-        quito_geom::render_cached(&out.node, &kernel, &mut cache).map_err(|e| format!("geometry error: {e}"))?
+        quito_geom::render_cached(&out.node, &kernel, &mut cache).map_err(|e| {
+            let message = format!("geometry error: {e}");
+            EngineError {
+                diagnostic: quito_eval::eval_error_diagnostic(&quito_eval::EvalError::new(
+                    message.clone(),
+                )),
+                message,
+            }
+        })?
     };
     Ok((mesh, out.echoes, out.warnings, is_2d))
 }
@@ -218,11 +243,12 @@ fn render(
         match eval_and_render(&cache, &source, &dir, &param_names, &param_values, &file_names, &file_contents) {
             Ok((mesh, echoes, warnings, is_2d)) => {
                 let (positions, normals) = mesh.to_triangle_soup_f32();
+                let diagnostics = quito_eval::diagnostics_json(None, &warnings);
                 RenderResult {
                     ok: true,
                     error: String::new(),
                     echo: echoes.join("\n"),
-                    warnings: warnings.join("\n"),
+                    warnings: warnings.iter().map(|w| w.message.clone()).collect::<Vec<_>>().join("\n"),
                     triangle_count: mesh.tris.len() as u32,
                     vertex_count: mesh.verts.len() as u32,
                     volume: mesh.volume(),
@@ -231,9 +257,16 @@ fn render(
                     positions,
                     normals,
                     params,
+                    diagnostics,
                 }
             }
-            Err(e) => RenderResult { ok: false, error: e, params, ..Default::default() },
+            Err(e) => RenderResult {
+                ok: false,
+                error: e.message,
+                diagnostics: quito_eval::diagnostics_json(Some(&e.diagnostic), &[]),
+                params,
+                ..Default::default()
+            },
         }
     };
     run_big_stack(work)
@@ -271,7 +304,7 @@ fn save_model(
                 &dir,
                 &overrides(&param_names, &param_values),
             )
-            .map_err(|e| format!("evaluation error: {}", e.0))?;
+            .map_err(|e| format!("evaluation error: {}", e.message))?;
             let contours = quito_geom::render_contours(&out.node)
                 .ok_or_else(|| "export requires a 2D model".to_string())?;
             let text = if format == "dxf" {
@@ -289,7 +322,8 @@ fn save_model(
             &param_values,
             &file_names,
             &file_contents,
-        )?;
+        )
+        .map_err(|e| e.message)?;
         let bytes: Vec<u8> = match format.as_str() {
             "off" => mesh.to_off().into_bytes(),
             "obj" => mesh.to_obj().into_bytes(),
@@ -564,6 +598,19 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn engine_error_carries_span_for_parse_only() {
+        let cache = Arc::new(Mutex::new(quito_geom::GeomCache::new()));
+        // Parse error → the diagnostic carries a byte span.
+        let e = eval_and_render(&cache, "cube(", ".", &[], &[], &[], &[]).unwrap_err();
+        assert!(e.message.starts_with("parse error"));
+        assert!(e.diagnostic.start >= 0 && e.diagnostic.end >= e.diagnostic.start);
+        // Eval error (assert) → still surfaced, with the offending statement span.
+        let e = eval_and_render(&cache, "assert(false);", ".", &[], &[], &[], &[]).unwrap_err();
+        assert!(e.message.starts_with("evaluation error"));
+        assert!(e.diagnostic.start >= 0, "eval error should carry a statement span");
+    }
 
     #[test]
     fn native_render_command_logic() {

@@ -574,7 +574,7 @@ pub fn run(
                     }
                     iters += 1;
                     if iters > MAX_ITERS {
-                        return Err(EvalError("tail recursion exceeded iteration limit".into()));
+                        return Err(EvalError::new("tail recursion exceeded iteration limit"));
                     }
                     ip = 0;
                     continue;

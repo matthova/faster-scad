@@ -32,6 +32,9 @@ export interface RenderResponse {
   version: string;
   /** Customizer schema JSON (`{"params":[…]}`) for the current source. */
   params: string;
+  /** Structured diagnostics JSON (`[{severity,message,start,end}]`) for inline
+   *  editor squiggles; start/end are byte offsets into the source, or -1. */
+  diagnostics: string;
 }
 
 const ready = init();
@@ -74,6 +77,7 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
       ms: performance.now() - t0,
       version: "",
       params,
+      diagnostics: "[]",
     } satisfies RenderResponse);
     return;
   }
@@ -96,6 +100,7 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
     ms: performance.now() - t0,
     version: version(),
     params,
+    diagnostics: res.diagnostics,
   };
   res.free();
   (self as unknown as Worker).postMessage(msg, [positions.buffer, normals.buffer]);

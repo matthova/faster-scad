@@ -120,13 +120,13 @@ fn run() -> Result<()> {
     }
 
     let out = quito_eval::eval_program_with_params(&program, &resolver, &base_dir, &overrides)
-        .map_err(|e| anyhow::anyhow!("evaluation error: {}", e.0))?;
+        .map_err(|e| anyhow::anyhow!("evaluation error: {}", e.message))?;
 
     for line in &out.echoes {
         println!("{line}");
     }
     for w in &out.warnings {
-        eprintln!("WARNING: {w}");
+        eprintln!("WARNING: {}", w.message);
     }
 
     if cli.check {
