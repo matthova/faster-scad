@@ -9,8 +9,8 @@ rust-version.workspace = true
 [dependencies]
 quito-ir = { workspace = true }
 thiserror = { workspace = true }
-# Pure-Rust CSG kernel — builds on native and wasm32-unknown-unknown.
-boolmesh = "0.1"
+# Pure-Rust Manifold CSG kernel — builds on native and wasm32-unknown-unknown.
+manifold-rust = "0.9.2"
 # Robust polygon triangulation with holes (earcut) — for text glyphs / polygons.
 earcutr = { workspace = true }
 # 2D polygon boolean ops (union/difference/intersection) — for 2D CSG,

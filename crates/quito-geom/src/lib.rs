@@ -8,7 +8,7 @@ mod shape2d;
 mod tessellate;
 mod vector2d;
 
-pub use kernel::{BoolmeshKernel, Kernel};
+pub use kernel::{BoolmeshKernel, Kernel, RustManifoldKernel};
 #[cfg(not(target_arch = "wasm32"))]
 pub use kernel::ManifoldKernel;
 pub use mesh::Mesh;
@@ -70,17 +70,17 @@ struct Ctx<'a> {
 }
 
 /// Render a CSG tree to a mesh using the default kernel for the target:
-/// C++ Manifold on native, pure-Rust boolmesh on wasm.
+/// C++ Manifold on native, pure-Rust Manifold on wasm.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn render(node: &Node) -> Result<Mesh, GeomError> {
     render_with(node, &ManifoldKernel::new())
 }
 
 /// Render a CSG tree to a mesh using the default kernel for the target:
-/// C++ Manifold on native, pure-Rust boolmesh on wasm.
+/// C++ Manifold on native, pure-Rust Manifold on wasm.
 #[cfg(target_arch = "wasm32")]
 pub fn render(node: &Node) -> Result<Mesh, GeomError> {
-    render_with(node, &BoolmeshKernel::new())
+    render_with(node, &RustManifoldKernel::new())
 }
 
 /// Render a CSG tree to a mesh using the given kernel (no persistent cache).
@@ -867,7 +867,7 @@ mod tests {
                 Node::Sphere { r, frags },
             ])
         };
-        let kernel = ManifoldKernel::new();
+        let kernel = RustManifoldKernel::new();
         let mut cache = GeomCache::new();
 
         // Warm render matches a cold render.
@@ -904,16 +904,46 @@ mod tests {
                 child: Box::new(Node::Sphere { r: 5.0, frags }),
             },
         ]);
-        let kernel = ManifoldKernel::new();
+        let kernel = RustManifoldKernel::new();
         let mut cache = GeomCache::new();
         render_cached(&node, &kernel, &mut cache).unwrap();
         // Entries: 1 sphere (shared), 2 translates (distinct v), 1 union = 4.
         assert_eq!(cache.len(), 4, "identical spheres should share one cache entry");
     }
 
-    /// Bake-off: the pure-Rust boolmesh kernel must agree with the C++ Manifold
+    #[test]
+    fn rust_kernel_handles_coincident_union_surfaces() {
+        // Honeycomb borders commonly union two solids that share the same
+        // cylindrical outer skin. The former browser kernel panicked while
+        // rebuilding the resulting half-edge topology.
+        let frags = FragmentSpec { fn_: 64.0, fa: 12.0, fs: 2.0 };
+        let cylinder = |r| Node::Cylinder {
+            h: 10.0,
+            r1: r,
+            r2: r,
+            center: true,
+            frags,
+        };
+        let node = Node::Union(vec![
+            Node::Difference(vec![
+                cylinder(20.0),
+                Node::Translate {
+                    v: [18.0, 0.0, 0.0],
+                    child: Box::new(cylinder(4.0)),
+                },
+            ]),
+            Node::Difference(vec![cylinder(20.0), cylinder(18.0)]),
+        ]);
+
+        let mesh = render_with(&node, &RustManifoldKernel::new()).unwrap();
+        assert!(mesh.volume() > 0.0);
+        assert!(mesh.signed_volume() > 0.0);
+    }
+
+    /// Bake-off: the pure-Rust Manifold kernel must agree with the C++ Manifold
     /// kernel to within tolerance on a mixed union/difference/intersection model.
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
     fn kernels_agree() {
         let frags = FragmentSpec { fn_: 48.0, fa: 12.0, fs: 2.0 };
         let cases = [
@@ -931,18 +961,21 @@ mod tests {
             ]),
         ];
         let cpp = ManifoldKernel::new();
-        let rs = BoolmeshKernel::new();
+        let rs = RustManifoldKernel::new();
         for (i, node) in cases.iter().enumerate() {
             let a = render_with(node, &cpp).unwrap();
             let b = render_with(node, &rs).unwrap();
             let rel = (a.volume() - b.volume()).abs() / a.volume().max(1e-9);
             assert!(
                 rel < 0.005,
-                "case {i}: kernels disagree: cpp={} boolmesh={} (Δ={rel})",
+                "case {i}: kernels disagree: cpp={} rust-manifold={} (Δ={rel})",
                 a.volume(),
                 b.volume()
             );
-            assert!(b.signed_volume() > 0.0, "case {i}: boolmesh output inward-facing");
+            assert!(
+                b.signed_volume() > 0.0,
+                "case {i}: rust-manifold output inward-facing"
+            );
         }
     }
 }

@@ -2,7 +2,7 @@
 //!
 //! Exposes a single `render(source)` entry point that runs the full pipeline
 //! (parse → eval → geometry) and returns mesh data as typed arrays plus
-//! console output and diagnostics. Geometry uses the pure-Rust boolmesh kernel
+//! console output and diagnostics. Geometry uses the pure-Rust Manifold kernel
 //! (the default on wasm).
 
 use std::cell::RefCell;
@@ -271,9 +271,9 @@ pub fn render_with_files(
     let echo = eval.echoes.join("\n");
     let warnings = eval.warnings.join("\n");
 
-    // Render geometry (boolmesh kernel on wasm), reusing the persistent cache
+    // Render geometry (pure-Rust Manifold on wasm), reusing the persistent cache
     // so unchanged subtrees survive across edits.
-    let kernel = quito_geom::BoolmeshKernel::new();
+    let kernel = quito_geom::RustManifoldKernel::new();
     let mesh = CACHE.with(|c| {
         let mut cache = c.borrow_mut();
         if cache.len() > CACHE_CAP {

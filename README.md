@@ -41,7 +41,7 @@ Geometry booleans run behind a `Kernel` trait with two backends:
 
 - **Native:** C++ [Manifold](https://github.com/elalish/manifold) via
   `manifold-csg` — fast and battle-tested.
-- **Browser (wasm):** pure-Rust [`boolmesh`](https://crates.io/crates/boolmesh)
+- **Browser (wasm):** pure-Rust [`manifold-rust`](https://crates.io/crates/manifold-rust)
   — compiles clean to `wasm32-unknown-unknown` (no Emscripten). A differential
   test confirms the two backends agree to within 0.5% on
   union/difference/intersection.
