@@ -1038,33 +1038,54 @@ impl Interp<'_> {
         if matches!(child, Node::Empty) {
             return Ok(Node::Empty);
         }
-        let v = self.first_positional(args)?;
+        let child = Box::new(child);
+        // Bind by real signatures (named, positional, or mixed) rather than
+        // reading a single positional — `translate(v=…)`, `rotate(a=…, v=…)`,
+        // etc. all resolve correctly.
         let node = match kind {
-            TransformKind::Translate => Node::Translate {
-                v: v.as_vec3().unwrap_or([0.0, 0.0, 0.0]),
-                child: Box::new(child),
-            },
-            TransformKind::Rotate => {
-                let deg = match &v {
-                    Value::Number(n) => [0.0, 0.0, *n],
-                    _ => v.as_vec3().unwrap_or([0.0, 0.0, 0.0]),
-                };
-                Node::Rotate {
-                    deg,
-                    child: Box::new(child),
-                }
+            TransformKind::Translate => {
+                let m = self.bind_named(&["v"], args)?;
+                let v = m.get("v").and_then(Value::as_vec3).unwrap_or([0.0, 0.0, 0.0]);
+                Node::Translate { v, child }
             }
             TransformKind::Scale => {
-                let s = scale_vec3(&v);
-                Node::Scale {
-                    v: s,
-                    child: Box::new(child),
+                let m = self.bind_named(&["v"], args)?;
+                let v = m.get("v").map(scale_vec3).unwrap_or([1.0, 1.0, 1.0]);
+                Node::Scale { v, child }
+            }
+            TransformKind::Mirror => {
+                let m = self.bind_named(&["v"], args)?;
+                let v = m.get("v").and_then(Value::as_vec3).unwrap_or([1.0, 0.0, 0.0]);
+                Node::Mirror { v, child }
+            }
+            TransformKind::Rotate => {
+                let m = self.bind_named(&["a", "v"], args)?;
+                let axis = m.get("v").and_then(Value::as_vec3);
+                match (m.get("a"), axis) {
+                    // `rotate(a, v)`: axis-angle about a non-degenerate axis.
+                    // Lower to an affine matrix via Rodrigues — the existing
+                    // `MultMatrix` node already renders and caches, so no new
+                    // IR variant is needed.
+                    (Some(Value::Number(angle)), Some(axis))
+                        if axis[0].hypot(axis[1]).hypot(axis[2]) > 1e-9 =>
+                    {
+                        Node::MultMatrix {
+                            m: axis_angle_matrix(axis, *angle),
+                            child,
+                        }
+                    }
+                    // `rotate(a)`: scalar → Z rotation; vector → Euler X,Y,Z.
+                    // A missing or zero-length axis falls back here per the manual.
+                    (a, _) => {
+                        let deg = match a {
+                            Some(Value::Number(n)) => [0.0, 0.0, *n],
+                            Some(v) => v.as_vec3().unwrap_or([0.0, 0.0, 0.0]),
+                            None => [0.0, 0.0, 0.0],
+                        };
+                        Node::Rotate { deg, child }
+                    }
                 }
             }
-            TransformKind::Mirror => Node::Mirror {
-                v: v.as_vec3().unwrap_or([1.0, 0.0, 0.0]),
-                child: Box::new(child),
-            },
         };
         Ok(node)
     }
@@ -1646,6 +1667,24 @@ fn scale_vec3(v: &Value) -> Vec3 {
         }
         _ => [1.0, 1.0, 1.0],
     }
+}
+
+/// Rodrigues rotation of `angle_deg` about `axis` as a row-major 4x4 affine
+/// matrix (the `MultMatrix` convention: rotation in the 3x3 block, zero
+/// translation column). A pure rotation has determinant +1, so the renderer's
+/// negative-determinant winding flip never triggers. The caller guarantees a
+/// non-degenerate axis.
+fn axis_angle_matrix(axis: Vec3, angle_deg: f64) -> [[f64; 4]; 4] {
+    let len = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
+    let [x, y, z] = [axis[0] / len, axis[1] / len, axis[2] / len];
+    let t = angle_deg.to_radians();
+    let (c, s, k) = (t.cos(), t.sin(), 1.0 - t.cos());
+    [
+        [c + x * x * k, x * y * k - z * s, x * z * k + y * s, 0.0],
+        [y * x * k + z * s, c + y * y * k, y * z * k - x * s, 0.0],
+        [z * x * k - y * s, z * y * k + x * s, c + z * z * k, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
 }
 
 fn value_to_point3(v: &Value) -> Vec3 {
@@ -2303,6 +2342,98 @@ mod tests {
     fn single_cube() {
         let out = eval("cube(10);");
         assert_eq!(out.node, Node::Cube { size: [10.0, 10.0, 10.0], center: false });
+    }
+
+    // ---- transform argument binding (A1) ------------------------------
+
+    /// Named args on the transforms must bind — the old `first_positional`
+    /// path silently dropped them, leaving the child untransformed.
+    #[test]
+    fn transforms_bind_named_args() {
+        match eval("translate(v=[1,2,3]) cube(1);").node {
+            Node::Translate { v, .. } => assert_eq!(v, [1.0, 2.0, 3.0]),
+            other => panic!("translate(v=): {other:?}"),
+        }
+        match eval("scale(v=2) cube(1);").node {
+            Node::Scale { v, .. } => assert_eq!(v, [2.0, 2.0, 2.0]),
+            other => panic!("scale(v=): {other:?}"),
+        }
+        match eval("mirror(v=[1,0,0]) cube(1);").node {
+            Node::Mirror { v, .. } => assert_eq!(v, [1.0, 0.0, 0.0]),
+            other => panic!("mirror(v=): {other:?}"),
+        }
+        match eval("rotate(a=45) cube(1);").node {
+            Node::Rotate { deg, .. } => assert_eq!(deg, [0.0, 0.0, 45.0]),
+            other => panic!("rotate(a=): {other:?}"),
+        }
+    }
+
+    /// Existing positional/scalar/2-element forms keep working.
+    #[test]
+    fn transforms_positional_forms_unchanged() {
+        match eval("translate([1,2]) cube(1);").node {
+            Node::Translate { v, .. } => assert_eq!(v, [1.0, 2.0, 0.0]),
+            other => panic!("translate([x,y]): {other:?}"),
+        }
+        match eval("scale([2,3]) cube(1);").node {
+            Node::Scale { v, .. } => assert_eq!(v, [2.0, 3.0, 1.0]),
+            other => panic!("scale([x,y]): {other:?}"),
+        }
+        match eval("rotate([45,0,0]) cube(1);").node {
+            Node::Rotate { deg, .. } => assert_eq!(deg, [45.0, 0.0, 0.0]),
+            other => panic!("rotate([x,y,z]): {other:?}"),
+        }
+    }
+
+    /// `rotate(a, v)` (positional or named) lowers to an affine matrix. The
+    /// old code dropped `v` and treated the angle as Euler `[a,0,0]`.
+    #[test]
+    fn rotate_axis_angle_lowers_to_multmatrix() {
+        // 90° about X == the hand-computed Rodrigues matrix, and equals the
+        // Euler rotate([90,0,0]) rotation about the same axis.
+        let m = match eval("rotate(90, [1,0,0]) cube(1);").node {
+            Node::MultMatrix { m, .. } => m,
+            other => panic!("rotate(90,[1,0,0]): {other:?}"),
+        };
+        let expect = [[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]];
+        for r in 0..3 {
+            for c in 0..3 {
+                assert!((m[r][c] - expect[r][c]).abs() < 1e-12, "m[{r}][{c}]={}", m[r][c]);
+            }
+        }
+        assert_eq!([m[0][3], m[1][3], m[2][3]], [0.0, 0.0, 0.0], "no translation");
+        assert_eq!(m[3], [0.0, 0.0, 0.0, 1.0], "affine bottom row");
+
+        // Named form is identical to positional.
+        assert_eq!(
+            eval("rotate(a=90, v=[1,0,0]) cube(1);").node,
+            eval("rotate(90, [1,0,0]) cube(1);").node,
+        );
+
+        // The rotation axis is invariant: R * axis == axis (an independent
+        // check that this really is a rotation about [1,1,0]).
+        let m = match eval("rotate(45, [1,1,0]) cube(1);").node {
+            Node::MultMatrix { m, .. } => m,
+            other => panic!("rotate(45,[1,1,0]): {other:?}"),
+        };
+        let axis = [1.0, 1.0, 0.0];
+        let mapped = [
+            m[0][0] * axis[0] + m[0][1] * axis[1] + m[0][2] * axis[2],
+            m[1][0] * axis[0] + m[1][1] * axis[1] + m[1][2] * axis[2],
+            m[2][0] * axis[0] + m[2][1] * axis[1] + m[2][2] * axis[2],
+        ];
+        for i in 0..3 {
+            assert!((mapped[i] - axis[i]).abs() < 1e-12, "axis not fixed: {mapped:?}");
+        }
+    }
+
+    /// A zero-length axis is not a rotation — fall back to Euler/Z per the manual.
+    #[test]
+    fn rotate_zero_axis_falls_back_to_euler() {
+        match eval("rotate(45, [0,0,0]) cube(1);").node {
+            Node::Rotate { deg, .. } => assert_eq!(deg, [0.0, 0.0, 45.0]),
+            other => panic!("rotate(45,[0,0,0]): {other:?}"),
+        }
     }
 
     #[test]

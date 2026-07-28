@@ -221,3 +221,33 @@ fn renders_lamp_shade() {
     );
     assert!(is_manifold(&mesh), "lamp shade mesh is not 2-manifold");
 }
+
+/// Transform argument binding (A1), checked against OpenSCAD 2024.12.
+///
+/// - Named args must actually transform the child (the old `first_positional`
+///   path silently ignored them, leaving `cube` at the origin).
+/// - `rotate(a, v)` axis-angle must rotate about the given axis, not treat the
+///   angle as an Euler `[a,0,0]`. A 10 mm cube rotated 45° about `[1,1,0]` has a
+///   distinctive bbox (±7.5 in X/Y, ±8.5355 in Z) that Euler rotation misses.
+#[test]
+fn transforms_named_and_axis_angle() {
+    let dir = workspace_root().to_string_lossy().into_owned();
+    let bbox = |m: &quito_geom::Mesh| m.bbox().expect("non-empty mesh");
+    let close = |a: [f64; 3], b: [f64; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-3);
+
+    // Named translate: the child moves to x = 100..110.
+    let m = render_scad_src("translate(v=[100,0,0]) cube(10);", &dir);
+    let (lo, hi) = bbox(&m);
+    assert!(close(lo, [100.0, 0.0, 0.0]) && close(hi, [110.0, 10.0, 10.0]), "translate(v=) bbox {lo:?}..{hi:?}");
+
+    // Axis-angle, positional and named, must match OpenSCAD's bbox and volume.
+    for src in ["rotate(45,[1,1,0]) cube(10, center=true);", "rotate(a=45, v=[1,1,0]) cube(10, center=true);"] {
+        let m = render_scad_src(src, &dir);
+        assert!((m.volume() - 1000.0).abs() < 0.1, "{src}: volume {}", m.volume());
+        let (lo, hi) = bbox(&m);
+        assert!(
+            close(lo, [-7.5, -7.5, -8.5355]) && close(hi, [7.5, 7.5, 8.5355]),
+            "{src}: bbox {lo:?}..{hi:?}"
+        );
+    }
+}
