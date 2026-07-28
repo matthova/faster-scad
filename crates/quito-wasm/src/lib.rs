@@ -407,7 +407,17 @@ pub fn render_with_files(
 mod tests {
     use super::*;
 
-    #[test]
+    // Each test runs on the host under `cargo test` (native Manifold kernel) and,
+    // via `wasm-pack test`, in a real browser (the pure-Rust boolmesh kernel the
+    // playground actually executes). The paired `cfg_attr`s below pick `#[test]`
+    // on the host and `#[wasm_bindgen_test]` on wasm, so one source covers both.
+    #[cfg(target_arch = "wasm32")]
+    use wasm_bindgen_test::wasm_bindgen_test;
+    #[cfg(target_arch = "wasm32")]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
     fn color_populates_preview_channel() {
         // A plain model: no preview channel (viewer uses `positions`).
         let plain = render_with_files("cube(2);", vec![], vec![], vec![], vec![]);
@@ -430,7 +440,8 @@ mod tests {
         assert!(g.contains("\"color\":[1,0,0,1]"), "{g}");
     }
 
-    #[test]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
     fn diagnostics_surface_parse_eval_and_warnings() {
         // Parse error → an error diagnostic with a byte span.
         let r = render_with_files("cube(", vec![], vec![], vec![], vec![]);
@@ -458,7 +469,8 @@ mod tests {
         assert!(d.contains("nope"), "{d}");
     }
 
-    #[test]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
     fn schema_json_shapes() {
         let src = "\
 /* [Box] */
@@ -484,7 +496,8 @@ v = [1, 2, 3];
             .contains(r#""type":"vector","value":[1,2,3],"control":{"kind":"vector","length":3}"#));
     }
 
-    #[test]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
     fn render_applies_overrides() {
         // width=10 default → 10*10*10; override width=4 → 4*10*10 = 400.
         let src = "width = 10;\ncube([width, 10, 10]);";
@@ -505,7 +518,8 @@ v = [1, 2, 3];
         );
     }
 
-    #[test]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
     fn render_resolves_files() {
         // `use` a helper file from the in-memory resolver.
         let main = "use <lib.scad>\ncube([side(), side(), side()]);";
@@ -521,7 +535,8 @@ v = [1, 2, 3];
         assert!((r.volume() - 27.0).abs() < 1e-6, "vol {}", r.volume());
     }
 
-    #[test]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
     fn imports_dxf_from_a_tab() {
         // A DXF profile held in a tab is imported via load_bytes and extruded.
         let outer = vec![[0.0, 0.0], [10.0, 0.0], [10.0, 20.0], [0.0, 20.0]];
@@ -537,7 +552,8 @@ v = [1, 2, 3];
         assert!((r.volume() - 600.0).abs() < 1e-3, "vol {}", r.volume()); // 10*20*3
     }
 
-    #[test]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
     fn export_2d_produces_dxf_and_svg() {
         let src = "square([10, 20]);";
         let dxf = export_2d(src, vec![], vec![], vec![], vec![], "dxf");

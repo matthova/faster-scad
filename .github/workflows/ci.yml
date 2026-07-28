@@ -236,3 +236,37 @@ jobs:
               -max_total_time=20 -rss_limit_mb=2048 -timeout=25
             echo "::endgroup::"
           done
+
+  # Execute quito-wasm's tests in a real browser via wasm-pack. The main `test`
+  # job runs them on the host (native Manifold kernel); this is the only job
+  # that exercises the pure-Rust boolmesh kernel compiled to wasm — the path
+  # browsers actually run, and the one the Manifold-vs-boolmesh differential
+  # exists to protect. Chrome is preinstalled on the runner; wasm-pack fetches a
+  # matching chromedriver. No cmake: manifold-csg (C++) is cfg'd out on wasm.
+  wasm-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable, wasm target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      # Share the cache key deploy-pages.yml / the web job warm.
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Install wasm-pack
+        run: |
+          curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Run quito-wasm tests in headless Chrome
+        run: wasm-pack test --headless --chrome crates/quito-wasm
