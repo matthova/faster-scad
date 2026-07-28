@@ -6,8 +6,8 @@
 //! * [`ManifoldKernel`] — the C++ Manifold library via `manifold-csg`. Native
 //!   only; battle-tested and fast, but does not target
 //!   `wasm32-unknown-unknown`.
-//! * [`BoolmeshKernel`] — the pure-Rust `boolmesh` kernel. Builds everywhere,
-//!   including wasm, and is the default backend in the browser.
+//! * [`RustManifoldKernel`] — the pure-Rust port of Manifold. Builds
+//!   everywhere, including wasm, and is the default backend in the browser.
 //!
 //! Both are differential-tested against each other on native builds.
 
@@ -55,62 +55,82 @@ fn balanced_reduce<T>(
 }
 
 // ===================================================================
-// Pure-Rust backend: boolmesh
+// Pure-Rust backend: Manifold
 // ===================================================================
 
-/// Pure-Rust CSG backend (`boolmesh`). Available on all targets.
+/// Pure-Rust Manifold CSG backend. Available on all targets.
 #[derive(Default)]
-pub struct BoolmeshKernel;
+pub struct RustManifoldKernel;
 
-impl BoolmeshKernel {
+impl RustManifoldKernel {
     pub fn new() -> Self {
-        BoolmeshKernel
+        RustManifoldKernel
     }
 }
 
-mod bm {
+/// Backward-compatible name for the former browser kernel.
+pub type BoolmeshKernel = RustManifoldKernel;
+
+mod rust_manifold {
     use super::*;
-    use boolmesh::prelude::{compute_boolean, Manifold, OpType};
+    use manifold_rust::manifold::Manifold;
+    use manifold_rust::types::{Error, MeshGL64};
 
     pub(super) fn to_manifold(m: &Mesh) -> Result<Manifold, GeomError> {
-        let mut pos: Vec<f64> = Vec::with_capacity(m.verts.len() * 3);
+        let mut vert_properties = Vec::with_capacity(m.verts.len() * 3);
         for v in &m.verts {
-            pos.extend_from_slice(v);
+            vert_properties.extend_from_slice(v);
         }
-        let idx: Vec<usize> = m
+        let tri_verts = m
             .tris
             .iter()
-            .flat_map(|t| [t[0] as usize, t[1] as usize, t[2] as usize])
+            .flat_map(|t| [t[0] as u64, t[1] as u64, t[2] as u64])
             .collect();
-        Manifold::new(&pos, &idx).map_err(GeomError::Kernel)
+        let mesh = MeshGL64 {
+            num_prop: 3,
+            vert_properties,
+            tri_verts,
+            ..MeshGL64::default()
+        };
+        let man = Manifold::from_mesh_gl64(&mesh);
+        check(man)
     }
 
     pub(super) fn from_manifold(man: &Manifold) -> Mesh {
-        let verts: Vec<[f64; 3]> = man.ps.iter().map(|p| [p.x, p.y, p.z]).collect();
-        let tris: Vec<[u32; 3]> = man
-            .hs
+        let mesh = man.get_mesh_gl64(-1);
+        let num_prop = (mesh.num_prop as usize).max(3);
+        let verts = mesh
+            .vert_properties
+            .chunks(num_prop)
+            .map(|p| [p[0], p[1], p[2]])
+            .collect();
+        let tris = mesh
+            .tri_verts
             .chunks(3)
-            .map(|c| [c[0].tail as u32, c[1].tail as u32, c[2].tail as u32])
+            .map(|t| [t[0] as u32, t[1] as u32, t[2] as u32])
             .collect();
         Mesh { verts, tris }
     }
 
-    pub(super) fn op(a: &Manifold, b: &Manifold, op: OpType) -> Result<Manifold, GeomError> {
-        compute_boolean(a, b, op).map_err(GeomError::Kernel)
+    pub(super) fn check(man: Manifold) -> Result<Manifold, GeomError> {
+        match man.status() {
+            Error::NoError => Ok(man),
+            status => Err(GeomError::Kernel(status.to_string())),
+        }
     }
-
-    pub(super) use boolmesh::prelude::OpType as Op;
 }
 
-impl Kernel for BoolmeshKernel {
+impl Kernel for RustManifoldKernel {
     fn union(&self, meshes: Vec<Mesh>) -> Result<Mesh, GeomError> {
         let mans = meshes
             .iter()
             .filter(|m| !m.is_empty())
-            .map(bm::to_manifold)
+            .map(rust_manifold::to_manifold)
             .collect::<Result<Vec<_>, _>>()?;
-        let r = balanced_reduce(mans, |a, b| bm::op(a, b, bm::Op::Add))?;
-        Ok(r.map(|m| bm::from_manifold(&m)).unwrap_or_default())
+        let result = balanced_reduce(mans, |a, b| rust_manifold::check(a.union(b)))?;
+        Ok(result
+            .map(|m| rust_manifold::from_manifold(&m))
+            .unwrap_or_default())
     }
 
     fn difference(&self, base: Mesh, tools: Vec<Mesh>) -> Result<Mesh, GeomError> {
@@ -123,23 +143,32 @@ impl Kernel for BoolmeshKernel {
         let tool_mans = tools
             .iter()
             .filter(|t| !t.is_empty())
-            .map(bm::to_manifold)
+            .map(rust_manifold::to_manifold)
             .collect::<Result<Vec<_>, _>>()?;
-        let base_man = bm::to_manifold(&base)?;
-        let result = match balanced_reduce(tool_mans, |a, b| bm::op(a, b, bm::Op::Add))? {
+        let base_man = rust_manifold::to_manifold(&base)?;
+        let result = match balanced_reduce(tool_mans, |a, b| {
+            rust_manifold::check(a.union(b))
+        })? {
             None => base_man,
-            Some(tools_union) => bm::op(&base_man, &tools_union, bm::Op::Subtract)?,
+            Some(tools_union) => rust_manifold::check(base_man.difference(&tools_union))?,
         };
-        Ok(bm::from_manifold(&result))
+        Ok(rust_manifold::from_manifold(&result))
     }
 
     fn intersection(&self, meshes: Vec<Mesh>) -> Result<Mesh, GeomError> {
         if meshes.is_empty() || meshes.iter().any(|m| m.is_empty()) {
             return Ok(Mesh::new());
         }
-        let mans = meshes.iter().map(bm::to_manifold).collect::<Result<Vec<_>, _>>()?;
-        let r = balanced_reduce(mans, |a, b| bm::op(a, b, bm::Op::Intersect))?;
-        Ok(r.map(|m| bm::from_manifold(&m)).unwrap_or_default())
+        let mans = meshes
+            .iter()
+            .map(rust_manifold::to_manifold)
+            .collect::<Result<Vec<_>, _>>()?;
+        let result = balanced_reduce(mans, |a, b| {
+            rust_manifold::check(a.intersection(b))
+        })?;
+        Ok(result
+            .map(|m| rust_manifold::from_manifold(&m))
+            .unwrap_or_default())
     }
 
     fn hull(&self, meshes: Vec<Mesh>) -> Result<Mesh, GeomError> {

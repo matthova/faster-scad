@@ -33,6 +33,6 @@ deployment to any static host.
 | `src/App.tsx` | layout, editor, debounce, status bar |
 | `engine/` | wasm-pack output (git-ignored; regenerate with `build:wasm`) |
 
-The kernel in the browser is the pure-Rust `boolmesh` backend (the C++ Manifold
+The kernel in the browser is the pure-Rust Manifold backend (the C++ Manifold
 backend is native-only). A full Lezer grammar for the editor replaces the
 StreamLanguage highlighter in a later milestone.
