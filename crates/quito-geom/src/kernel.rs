@@ -25,7 +25,10 @@ pub trait Kernel {
 
 /// Collect every vertex from a set of meshes.
 fn all_points(meshes: &[Mesh]) -> Vec<[f64; 3]> {
-    meshes.iter().flat_map(|m| m.verts.iter().copied()).collect()
+    meshes
+        .iter()
+        .flat_map(|m| m.verts.iter().copied())
+        .collect()
 }
 
 /// Combine items pairwise in a balanced (divide-and-conquer) tree rather than a
@@ -146,9 +149,7 @@ impl Kernel for RustManifoldKernel {
             .map(rust_manifold::to_manifold)
             .collect::<Result<Vec<_>, _>>()?;
         let base_man = rust_manifold::to_manifold(&base)?;
-        let result = match balanced_reduce(tool_mans, |a, b| {
-            rust_manifold::check(a.union(b))
-        })? {
+        let result = match balanced_reduce(tool_mans, |a, b| rust_manifold::check(a.union(b)))? {
             None => base_man,
             Some(tools_union) => rust_manifold::check(base_man.difference(&tools_union))?,
         };
@@ -163,9 +164,7 @@ impl Kernel for RustManifoldKernel {
             .iter()
             .map(rust_manifold::to_manifold)
             .collect::<Result<Vec<_>, _>>()?;
-        let result = balanced_reduce(mans, |a, b| {
-            rust_manifold::check(a.intersection(b))
-        })?;
+        let result = balanced_reduce(mans, |a, b| rust_manifold::check(a.intersection(b)))?;
         Ok(result
             .map(|m| rust_manifold::from_manifold(&m))
             .unwrap_or_default())
@@ -264,7 +263,10 @@ mod manifold_backend {
             if meshes.is_empty() || meshes.iter().any(|m| m.is_empty()) {
                 return Ok(Mesh::new());
             }
-            let mans = meshes.iter().map(to_manifold).collect::<Result<Vec<_>, _>>()?;
+            let mans = meshes
+                .iter()
+                .map(to_manifold)
+                .collect::<Result<Vec<_>, _>>()?;
             let r = super::balanced_reduce(mans, |a, b| Ok(a ^ b))?;
             Ok(r.map(|m| from_manifold(&m)).unwrap_or_default())
         }

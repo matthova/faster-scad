@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, matthova/quito-v1]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -20,6 +20,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -33,6 +34,12 @@ jobs:
       # C++ Manifold (native backend) needs cmake.
       - name: Install cmake
         uses: lukka/get-cmake@latest
+
+      - name: Rustfmt
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Build workspace
         run: cargo build --workspace
@@ -53,3 +60,48 @@ jobs:
       # The wasm engine must keep compiling for the browser target.
       - name: Build wasm engine target
         run: cargo build -p quito-wasm --target wasm32-unknown-unknown
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable, wasm target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Install wasm-pack
+        run: |
+          curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Build wasm engine
+        working-directory: web
+        run: npm run build:wasm
+
+      # `npm run build` is `tsc -b && vite build` — typechecks and bundles, so a
+      # PR can't merge TypeScript that breaks the live site.
+      - name: Typecheck and build site
+        working-directory: web
+        run: npm run build

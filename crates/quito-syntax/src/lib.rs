@@ -40,7 +40,12 @@ mod tests {
         let prog = parse("cube(10);").unwrap();
         assert_eq!(prog.len(), 1);
         match &prog[0] {
-            Stmt::ModuleCall { name, args, children, .. } => {
+            Stmt::ModuleCall {
+                name,
+                args,
+                children,
+                ..
+            } => {
                 assert_eq!(name, "cube");
                 assert_eq!(args.len(), 1);
                 assert!(children.is_empty());
@@ -97,7 +102,11 @@ mod tests {
         let prog = parse("x = 1 + 2 * 3;").unwrap();
         match &prog[0] {
             Stmt::Assign { value, .. } => match value {
-                Expr::Binary { op: BinOp::Add, rhs, .. } => {
+                Expr::Binary {
+                    op: BinOp::Add,
+                    rhs,
+                    ..
+                } => {
                     assert!(matches!(**rhs, Expr::Binary { op: BinOp::Mul, .. }));
                 }
                 other => panic!("unexpected: {other:?}"),
@@ -108,10 +117,9 @@ mod tests {
 
     #[test]
     fn module_and_function_defs() {
-        let prog = parse(
-            "function sq(x) = x * x; module ring(r) { cylinder(r=r, h=1); } ring(sq(2));",
-        )
-        .unwrap();
+        let prog =
+            parse("function sq(x) = x * x; module ring(r) { cylinder(r=r, h=1); } ring(sq(2));")
+                .unwrap();
         assert_eq!(prog.len(), 3);
         assert!(matches!(prog[0], Stmt::FunctionDef { .. }));
         assert!(matches!(prog[1], Stmt::ModuleDef { .. }));

@@ -19,11 +19,13 @@ independent, small, and parallelizable.
 
 `deploy-pages.yml` runs `tsc`/`vite build` only on push to `main` — a PR can
 merge TypeScript that breaks the live site, and the breakage is discovered by
-the deploy. Add a CI job on PRs: `npm ci && npm run build:wasm && tsc -b &&
-vite build` in `web/` (cache the wasm-pack artifacts; the wasm build is the
-slow part and can reuse the existing cargo cache key). This also implicitly
-smoke-tests that `quito-wasm` actually *builds with wasm-pack* rather than
-just `cargo check`-ing for the target. *Small.*
+the deploy.
+
+**Landed (cherry-pick):** `ci.yml` now has a `web` job that runs
+`npm ci && npm run build:wasm && npm run build` (`= tsc -b && vite build`) on
+every PR, sharing the cargo cache key, so a PR can no longer merge TypeScript
+that breaks the live site — and it smoke-tests that `quito-wasm` builds with
+wasm-pack, not just `cargo check` for the target.
 
 ## C3. Desktop builds in CI
 
@@ -37,13 +39,12 @@ regression gate. *Small, plus one-time runner-deps fiddling.*
 
 ## C4. Lint gates: clippy + rustfmt + web lint
 
-No `cargo clippy` or `cargo fmt --check` anywhere. Add
+**Landed (cherry-pick):** `ci.yml` now runs
 `cargo clippy --workspace --all-targets -- -D warnings` and
-`cargo fmt --check`; fix the initial fallout once (expect a modest, mostly
-mechanical batch). Web side has zero lint config — adding eslint is optional,
-but `tsc` on PRs (C2) is the non-negotiable part. Also fix the stale
-`ci.yml` push branch filter still referencing `matthova/quito-v1`
-(cherry-pick list). *Small.*
+`cargo fmt --all --check`; the initial fallout (a workspace-wide `cargo fmt`
+plus a mechanical batch of clippy fixes) was applied. The stale `ci.yml` push
+branch filter (`matthova/quito-v1`) was reduced to `main`. Web-side eslint
+remains optional; `tsc` on PRs is covered by C2.
 
 ## C5. Perf regression tracking in CI
 
@@ -107,10 +108,13 @@ be promoted to CI separately if flake allows. *Small-medium.*
 
 ## Suggested execution
 
-Do **C2+C3+C4** as one "CI truthfulness" PR alongside the cherry-picks — they're
-each ~an hour of YAML plus one-time fallout fixes. **C5.1** (warm-edit gate)
-rides with track A's xtask work. **C6–C8** are independent and make good
-gap-filler tasks between track A items.
+The clippy/fmt gates, the web PR build (C2), and the branch-filter fix have
+already landed as the "CI truthfulness" cherry-pick PR, and **C1** has since
+landed in full (CI submodule checkout + the `xtask bosl2` step, with hard
+failure on missing files/0-executed and vacuous-pass rejection). What remains:
+add **C3** (desktop compiles in CI). **C5.1** (warm-edit gate) rides with
+track A's xtask work. **C6–C8** are independent and make good gap-filler
+tasks between track A items.
 
 ## Exit criterion
 

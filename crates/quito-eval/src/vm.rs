@@ -159,7 +159,10 @@ impl Compiler<'_> {
     fn declare(&mut self, name: &str) -> u16 {
         let slot = self.n_locals as u16;
         self.n_locals += 1;
-        self.frames.last_mut().unwrap().push((name.to_string(), slot));
+        self.frames
+            .last_mut()
+            .unwrap()
+            .push((name.to_string(), slot));
         slot
     }
 
@@ -222,8 +225,7 @@ impl Compiler<'_> {
             // the whole function so semantics stay identical.
             Expr::Call { name, args }
                 if self.self_name == Some(name.as_str())
-                    && (args.len() != self.n_params
-                        || args.iter().any(|a| a.name.is_some())) =>
+                    && (args.len() != self.n_params || args.iter().any(|a| a.name.is_some())) =>
             {
                 self.bail();
             }
@@ -288,7 +290,11 @@ impl Compiler<'_> {
                 self.compile_expr(expr);
                 self.emit(Op::Unary(*op));
             }
-            Expr::Binary { op: BinOp::And, lhs, rhs } => {
+            Expr::Binary {
+                op: BinOp::And,
+                lhs,
+                rhs,
+            } => {
                 self.compile_expr(lhs);
                 let jf = self.code.len();
                 self.emit(Op::JumpIfFalse(0));
@@ -302,7 +308,11 @@ impl Compiler<'_> {
                 self.patch(jf, false_target);
                 self.patch(jmp, end);
             }
-            Expr::Binary { op: BinOp::Or, lhs, rhs } => {
+            Expr::Binary {
+                op: BinOp::Or,
+                lhs,
+                rhs,
+            } => {
                 self.compile_expr(lhs);
                 let jt = self.code.len();
                 self.emit(Op::JumpIfTrue(0));
@@ -371,7 +381,10 @@ impl Compiler<'_> {
                 self.emit(Op::Call(ni, args.len() as u16));
             }
             // Unsupported: closures over locals, value-calls, echo/assert.
-            Expr::FunctionLiteral { .. } | Expr::CallValue { .. } | Expr::Echo { .. } | Expr::Assert { .. } => {
+            Expr::FunctionLiteral { .. }
+            | Expr::CallValue { .. }
+            | Expr::Echo { .. }
+            | Expr::Assert { .. } => {
                 self.bail();
             }
         }
@@ -482,16 +495,44 @@ pub fn run(
                 stack.push(value::vector(items));
             }
             Op::MakeRange2 => {
-                let e = stack.pop().unwrap_or(Value::Undef).as_number().unwrap_or(f64::NAN);
-                let s = stack.pop().unwrap_or(Value::Undef).as_number().unwrap_or(f64::NAN);
+                let e = stack
+                    .pop()
+                    .unwrap_or(Value::Undef)
+                    .as_number()
+                    .unwrap_or(f64::NAN);
+                let s = stack
+                    .pop()
+                    .unwrap_or(Value::Undef)
+                    .as_number()
+                    .unwrap_or(f64::NAN);
                 let (lo, hi) = if s <= e { (s, e) } else { (e, s) };
-                stack.push(Value::Range { start: lo, step: 1.0, end: hi });
+                stack.push(Value::Range {
+                    start: lo,
+                    step: 1.0,
+                    end: hi,
+                });
             }
             Op::MakeRange3 => {
-                let e = stack.pop().unwrap_or(Value::Undef).as_number().unwrap_or(f64::NAN);
-                let st = stack.pop().unwrap_or(Value::Undef).as_number().unwrap_or(1.0);
-                let s = stack.pop().unwrap_or(Value::Undef).as_number().unwrap_or(f64::NAN);
-                stack.push(Value::Range { start: s, step: st, end: e });
+                let e = stack
+                    .pop()
+                    .unwrap_or(Value::Undef)
+                    .as_number()
+                    .unwrap_or(f64::NAN);
+                let st = stack
+                    .pop()
+                    .unwrap_or(Value::Undef)
+                    .as_number()
+                    .unwrap_or(1.0);
+                let s = stack
+                    .pop()
+                    .unwrap_or(Value::Undef)
+                    .as_number()
+                    .unwrap_or(f64::NAN);
+                stack.push(Value::Range {
+                    start: s,
+                    step: st,
+                    end: e,
+                });
             }
             Op::PushBool(b) => stack.push(Value::Bool(*b)),
             Op::ToBool => {

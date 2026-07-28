@@ -148,7 +148,9 @@ pub fn export_2d(
     file_contents: Vec<String>,
     format: &str,
 ) -> String {
-    let Ok(program) = quito_syntax::parse(source) else { return String::new() };
+    let Ok(program) = quito_syntax::parse(source) else {
+        return String::new();
+    };
     let mut overrides = Vec::new();
     for (name, val) in names.iter().zip(values.iter()) {
         if let Some(pv) = quito_syntax::customizer::parse_value(val) {
@@ -158,7 +160,8 @@ pub fn export_2d(
     let resolver = MapResolver {
         files: file_names.into_iter().zip(file_contents).collect(),
     };
-    let Ok(eval) = quito_eval::eval_program_with_params(&program, &resolver, ".", &overrides) else {
+    let Ok(eval) = quito_eval::eval_program_with_params(&program, &resolver, ".", &overrides)
+    else {
         return String::new();
     };
     match quito_geom::render_contours(&eval.node) {
@@ -215,8 +218,15 @@ impl quito_eval::FileResolver for MapResolver {
     fn load(&self, path: &str, from_dir: &str) -> Option<quito_eval::LoadedFile> {
         let key = self.resolve_key(path, from_dir)?;
         let source = self.files.get(&key)?.clone();
-        let dir = key.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default();
-        Some(quito_eval::LoadedFile { key: key.clone(), source, dir })
+        let dir = key
+            .rsplit_once('/')
+            .map(|(d, _)| d.to_string())
+            .unwrap_or_default();
+        Some(quito_eval::LoadedFile {
+            key: key.clone(),
+            source,
+            dir,
+        })
     }
 
     /// Bytes for `import()` of a text-based profile (DXF/SVG) held in a tab.
@@ -243,7 +253,10 @@ pub fn render_with_files(
         Ok(p) => p,
         Err(e) => {
             return RenderResult::from_error(
-                format!("parse error: {} (at {}..{})", e.message, e.span.start, e.span.end),
+                format!(
+                    "parse error: {} (at {}..{})",
+                    e.message, e.span.start, e.span.end
+                ),
                 String::new(),
                 String::new(),
             )
@@ -266,7 +279,13 @@ pub fn render_with_files(
     // Evaluate.
     let eval = match quito_eval::eval_program_with_params(&program, &resolver, ".", &overrides) {
         Ok(o) => o,
-        Err(e) => return RenderResult::from_error(format!("evaluation error: {}", e.0), String::new(), String::new()),
+        Err(e) => {
+            return RenderResult::from_error(
+                format!("evaluation error: {}", e.0),
+                String::new(),
+                String::new(),
+            )
+        }
     };
     let echo = eval.echoes.join("\n");
     let warnings = eval.warnings.join("\n");
@@ -323,9 +342,12 @@ v = [1, 2, 3];
         assert!(json.contains(r#""description":"the width""#));
         assert!(json.contains(r#""kind":"slider","min":1,"max":100,"step":null"#));
         assert!(json.contains(r#""kind":"dropdown","options":[{"value":0,"label":"Off"}"#));
-        assert!(json.contains(r#""name":"flag","group":"Box","description":null,"type":"bool","value":true"#));
+        assert!(json.contains(
+            r#""name":"flag","group":"Box","description":null,"type":"bool","value":true"#
+        ));
         assert!(json.contains(r#""kind":"text","maxLength":8"#));
-        assert!(json.contains(r#""type":"vector","value":[1,2,3],"control":{"kind":"vector","length":3}"#));
+        assert!(json
+            .contains(r#""type":"vector","value":[1,2,3],"control":{"kind":"vector","length":3}"#));
     }
 
     #[test]
@@ -334,12 +356,19 @@ v = [1, 2, 3];
         let src = "width = 10;\ncube([width, 10, 10]);";
         let base = render_with_params(src, vec![], vec![]);
         assert!(base.ok());
-        assert!((base.volume() - 1000.0).abs() < 1e-6, "vol {}", base.volume());
+        assert!(
+            (base.volume() - 1000.0).abs() < 1e-6,
+            "vol {}",
+            base.volume()
+        );
 
-        let overridden =
-            render_with_params(src, vec!["width".to_string()], vec!["4".to_string()]);
+        let overridden = render_with_params(src, vec!["width".to_string()], vec!["4".to_string()]);
         assert!(overridden.ok());
-        assert!((overridden.volume() - 400.0).abs() < 1e-6, "vol {}", overridden.volume());
+        assert!(
+            (overridden.volume() - 400.0).abs() < 1e-6,
+            "vol {}",
+            overridden.volume()
+        );
     }
 
     #[test]

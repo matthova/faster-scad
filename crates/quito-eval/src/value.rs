@@ -14,7 +14,11 @@ pub enum Value {
     /// large array) is O(1) — critical for mesh-generating scripts.
     Vector(Rc<Vec<Value>>),
     /// A numeric range `[start : step : end]`.
-    Range { start: f64, step: f64, end: f64 },
+    Range {
+        start: f64,
+        step: f64,
+        end: f64,
+    },
     /// A function value: parameters, body, and the lexical environment it
     /// closed over at definition time.
     Function(Rc<crate::FnClosure>),
@@ -154,7 +158,11 @@ pub fn format_number(n: f64) -> String {
     let sci = format!("{:e}", n.abs()); // e.g. "1.250025e9"
     let (mant, exp_s) = sci.split_once('e').unwrap();
     let mut exp: i32 = exp_s.parse().unwrap_or(0);
-    let mut digits: Vec<u8> = mant.bytes().filter(|b| *b != b'.').map(|b| b - b'0').collect();
+    let mut digits: Vec<u8> = mant
+        .bytes()
+        .filter(|b| *b != b'.')
+        .map(|b| b - b'0')
+        .collect();
 
     // Round to P significant digits, half-away-from-zero.
     if digits.len() > P {
@@ -231,9 +239,7 @@ pub fn unary(op: UnOp, v: Value) -> Value {
         UnOp::Pos => v,
         UnOp::Neg => match v {
             Value::Number(n) => Value::Number(-n),
-            Value::Vector(xs) => {
-                vector(xs.iter().map(|e| unary(UnOp::Neg, e.clone())).collect())
-            }
+            Value::Vector(xs) => vector(xs.iter().map(|e| unary(UnOp::Neg, e.clone())).collect()),
             _ => Value::Undef,
         },
         UnOp::Not => Value::Bool(!v.truthy()),
@@ -271,16 +277,20 @@ pub fn binary(op: BinOp, l: Value, r: Value) -> Value {
         }
 
         // scalar * vector, vector * scalar
-        (BinOp::Mul, Number(s), Vector(v)) | (BinOp::Mul, Vector(v), Number(s)) => {
-            vector(v.iter().map(|e| binary(BinOp::Mul, Number(s), e.clone())).collect())
-        }
+        (BinOp::Mul, Number(s), Vector(v)) | (BinOp::Mul, Vector(v), Number(s)) => vector(
+            v.iter()
+                .map(|e| binary(BinOp::Mul, Number(s), e.clone()))
+                .collect(),
+        ),
         // list * list — dot product / matrix·vector / vector·matrix / matrix·matrix,
         // matching OpenSCAD's linear-algebra `*` (see `mul_lists`).
         (BinOp::Mul, Vector(a), Vector(b)) => mul_lists(&a, &b),
         // vector / scalar
-        (BinOp::Div, Vector(v), Number(s)) => {
-            vector(v.iter().map(|e| binary(BinOp::Div, e.clone(), Number(s))).collect())
-        }
+        (BinOp::Div, Vector(v), Number(s)) => vector(
+            v.iter()
+                .map(|e| binary(BinOp::Div, e.clone(), Number(s)))
+                .collect(),
+        ),
 
         _ => Undef,
     }
@@ -317,11 +327,15 @@ fn mul_lists(a: &[Value], b: &[Value]) -> Value {
         (false, true) => {
             // vector · matrix: a[i] weights row b[i]; requires a.len()==b.len().
             let bm = as_matrix(b);
-            let (Some(bm), true) = (bm, a.len() == b.len()) else { return Value::Undef };
+            let (Some(bm), true) = (bm, a.len() == b.len()) else {
+                return Value::Undef;
+            };
             let cols = bm[0].len();
             let mut out = vec![0.0; cols];
             for (i, bi) in bm.iter().enumerate() {
-                let Some(ai) = a[i].as_number() else { return Value::Undef };
+                let Some(ai) = a[i].as_number() else {
+                    return Value::Undef;
+                };
                 if bi.len() != cols {
                     return Value::Undef;
                 }
@@ -333,7 +347,9 @@ fn mul_lists(a: &[Value], b: &[Value]) -> Value {
         }
         (true, true) => {
             // matrix · matrix.
-            let (Some(am), Some(bm)) = (as_matrix(a), as_matrix(b)) else { return Value::Undef };
+            let (Some(am), Some(bm)) = (as_matrix(a), as_matrix(b)) else {
+                return Value::Undef;
+            };
             let inner = bm.len();
             let cols = bm[0].len();
             // Each row of `a` must have length == number of rows of `b`.
@@ -401,8 +417,16 @@ pub fn value_eq(a: &Value, b: &Value) -> bool {
             x.len() == y.len() && x.iter().zip(y.iter()).all(|(p, q)| value_eq(p, q))
         }
         (
-            Value::Range { start: a, step: b, end: c },
-            Value::Range { start: d, step: e, end: f },
+            Value::Range {
+                start: a,
+                step: b,
+                end: c,
+            },
+            Value::Range {
+                start: d,
+                step: e,
+                end: f,
+            },
         ) => a == d && b == e && c == f,
         (Value::Function(x), Value::Function(y)) => Rc::ptr_eq(x, y),
         _ => false,

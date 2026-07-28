@@ -170,22 +170,28 @@ mod tests {
 
     #[test]
     fn numbers() {
-        assert_eq!(toks("1 2.5 .5 1e3 2.0e-2"), vec![
-            Token::Number(1.0),
-            Token::Number(2.5),
-            Token::Number(0.5),
-            Token::Number(1000.0),
-            Token::Number(0.02),
-        ]);
+        assert_eq!(
+            toks("1 2.5 .5 1e3 2.0e-2"),
+            vec![
+                Token::Number(1.0),
+                Token::Number(2.5),
+                Token::Number(0.5),
+                Token::Number(1000.0),
+                Token::Number(0.02),
+            ]
+        );
     }
 
     #[test]
     fn special_vars() {
-        assert_eq!(toks("$fn $fa x"), vec![
-            Token::Ident("$fn".into()),
-            Token::Ident("$fa".into()),
-            Token::Ident("x".into()),
-        ]);
+        assert_eq!(
+            toks("$fn $fa x"),
+            vec![
+                Token::Ident("$fn".into()),
+                Token::Ident("$fa".into()),
+                Token::Ident("x".into()),
+            ]
+        );
     }
 
     #[test]
@@ -195,18 +201,17 @@ mod tests {
 
     #[test]
     fn comments_skipped() {
-        assert_eq!(toks("1 // line\n2 /* block */ 3"), vec![
-            Token::Number(1.0),
-            Token::Number(2.0),
-            Token::Number(3.0),
-        ]);
+        assert_eq!(
+            toks("1 // line\n2 /* block */ 3"),
+            vec![Token::Number(1.0), Token::Number(2.0), Token::Number(3.0),]
+        );
     }
 
     #[test]
     fn block_comment_with_stars() {
-        assert_eq!(toks("1 /** doc ** star */ 2"), vec![
-            Token::Number(1.0),
-            Token::Number(2.0),
-        ]);
+        assert_eq!(
+            toks("1 /** doc ** star */ 2"),
+            vec![Token::Number(1.0), Token::Number(2.0),]
+        );
     }
 }

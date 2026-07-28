@@ -90,9 +90,8 @@ fn run() -> Result<()> {
         .with_context(|| format!("reading {}", cli.input.display()))?;
 
     // Parse.
-    let program = quito_syntax::parse(&src).map_err(|e| {
-        anyhow::anyhow!("parse error at {:?}: {}", e.span, e.message)
-    })?;
+    let program = quito_syntax::parse(&src)
+        .map_err(|e| anyhow::anyhow!("parse error at {:?}: {}", e.span, e.message))?;
 
     // Evaluate, resolving include/use relative to the input file + OPENSCADPATH.
     let base_dir = cli
@@ -171,7 +170,11 @@ fn run() -> Result<()> {
         elapsed,
         mesh.volume(),
         mesh.surface_area(),
-        if manifold_ok { "" } else { ", WARNING: inward-facing" },
+        if manifold_ok {
+            ""
+        } else {
+            ", WARNING: inward-facing"
+        },
     );
 
     if let Some(path) = &cli.output {

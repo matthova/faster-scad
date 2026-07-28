@@ -15,10 +15,10 @@ use std::f64::consts::PI;
 pub type Point2 = [f64; 2];
 pub type Contour = Vec<Point2>;
 
-/// A 2D boolean operation.
+/// A 2D boolean operation. (Union goes through [`union_all`], which handles the
+/// n-ary case directly, so it is not represented here.)
 #[derive(Clone, Copy)]
 pub enum Bop {
-    Union,
     Difference,
     Intersection,
 }
@@ -47,7 +47,11 @@ fn group_contours(contours: &[Contour]) -> Vec<(Contour, Vec<Contour>)> {
     }
     let rep: Vec<Point2> = valid.iter().map(|c| c[0]).collect();
     let depth: Vec<usize> = (0..n)
-        .map(|i| (0..n).filter(|&j| j != i && point_in_polygon(valid[j], rep[i])).count())
+        .map(|i| {
+            (0..n)
+                .filter(|&j| j != i && point_in_polygon(valid[j], rep[i]))
+                .count()
+        })
         .collect();
     let orient = |c: &Contour, ccw: bool| -> Contour {
         if (signed_area(c) > 0.0) == ccw {
@@ -82,7 +86,10 @@ fn to_multipolygon(contours: &[Contour]) -> MultiPolygon<f64> {
     let polys = group_contours(contours)
         .into_iter()
         .map(|(outer, holes)| {
-            Polygon::new(to_linestring(&outer), holes.iter().map(to_linestring).collect())
+            Polygon::new(
+                to_linestring(&outer),
+                holes.iter().map(to_linestring).collect(),
+            )
         })
         .collect();
     MultiPolygon::new(polys)
@@ -107,7 +114,6 @@ fn from_multipolygon(mp: MultiPolygon<f64>) -> Vec<Contour> {
 pub fn boolean_2d(a: &[Contour], b: &[Contour], op: Bop) -> Vec<Contour> {
     let (ma, mb) = (to_multipolygon(a), to_multipolygon(b));
     let r = match op {
-        Bop::Union => ma.union(&mb),
         Bop::Difference => ma.difference(&mb),
         Bop::Intersection => ma.intersection(&mb),
     };
@@ -136,7 +142,11 @@ fn union_multi(mut items: Vec<MultiPolygon<f64>>) -> Option<MultiPolygon<f64>> {
 
 /// Union of several contour sets (e.g. the children of a 2D `union`).
 pub fn union_all(sets: &[Vec<Contour>]) -> Vec<Contour> {
-    let mps: Vec<_> = sets.iter().filter(|s| !s.is_empty()).map(|s| to_multipolygon(s)).collect();
+    let mps: Vec<_> = sets
+        .iter()
+        .filter(|s| !s.is_empty())
+        .map(|s| to_multipolygon(s))
+        .collect();
     union_multi(mps).map(from_multipolygon).unwrap_or_default()
 }
 
@@ -157,12 +167,18 @@ pub fn silhouette(mesh: &Mesh) -> Vec<Contour> {
             vec![],
         )]));
     }
-    union_multi(polys).map(from_multipolygon).unwrap_or_default()
+    union_multi(polys)
+        .map(from_multipolygon)
+        .unwrap_or_default()
 }
 
 /// 2D convex hull (Andrew's monotone chain) of a point set → one CCW contour.
 pub fn hull_2d(mut pts: Vec<Point2>) -> Vec<Contour> {
-    pts.sort_by(|a, b| a[0].partial_cmp(&b[0]).unwrap().then(a[1].partial_cmp(&b[1]).unwrap()));
+    pts.sort_by(|a, b| {
+        a[0].partial_cmp(&b[0])
+            .unwrap()
+            .then(a[1].partial_cmp(&b[1]).unwrap())
+    });
     pts.dedup();
     if pts.len() < 3 {
         return Vec::new();
@@ -202,9 +218,13 @@ pub fn render2d(node: &Node) -> Vec<Contour> {
             "svg" => crate::vector2d::import_svg(data),
             _ => Vec::new(),
         },
-        Node::Offset { r, delta, chamfer, frags, child } => {
-            offset(&render2d(child), *r, *delta, *chamfer, *frags)
-        }
+        Node::Offset {
+            r,
+            delta,
+            chamfer,
+            frags,
+            child,
+        } => offset(&render2d(child), *r, *delta, *chamfer, *frags),
         Node::Translate { v, child } => {
             map_contours(render2d(child), |p| [p[0] + v[0], p[1] + v[1]])
         }
@@ -212,7 +232,9 @@ pub fn render2d(node: &Node) -> Vec<Contour> {
         Node::Rotate { deg, child } => {
             let a = deg[2].to_radians();
             let (s, c) = (a.sin(), a.cos());
-            map_contours(render2d(child), |p| [p[0] * c - p[1] * s, p[0] * s + p[1] * c])
+            map_contours(render2d(child), |p| {
+                [p[0] * c - p[1] * s, p[0] * s + p[1] * c]
+            })
         }
         // 2D reflection across the line through the origin with normal (v.x, v.y).
         Node::Mirror { v, child } => {
@@ -265,8 +287,11 @@ pub fn render2d(node: &Node) -> Vec<Contour> {
             hull_2d(pts)
         }
         Node::Minkowski(children) => {
-            let sets: Vec<Vec<Contour>> =
-                children.iter().map(render2d).filter(|s| !s.is_empty()).collect();
+            let sets: Vec<Vec<Contour>> = children
+                .iter()
+                .map(render2d)
+                .filter(|s| !s.is_empty())
+                .collect();
             minkowski_2d(sets)
         }
         // A projection anywhere in a 2D subtree flattens its 3D child; rendered
@@ -297,7 +322,9 @@ fn minkowski_2d(sets: Vec<Vec<Contour>>) -> Vec<Contour> {
 }
 
 fn map_contours(cs: Vec<Contour>, f: impl Fn(Point2) -> Point2) -> Vec<Contour> {
-    cs.into_iter().map(|c| c.into_iter().map(&f).collect()).collect()
+    cs.into_iter()
+        .map(|c| c.into_iter().map(&f).collect())
+        .collect()
 }
 
 /// 2D `resize`: scale the contours so their bounding box matches `new` (0 = keep;
@@ -427,7 +454,10 @@ pub(crate) fn chain_segments(segs: Vec<(Point2, Point2)>) -> Vec<Contour> {
                 break; // closed loop
             }
             // next unused segment incident to `cur`
-            match inc.get(&key(cur)).and_then(|v| v.iter().find(|&&j| !used[j]).copied()) {
+            match inc
+                .get(&key(cur))
+                .and_then(|v| v.iter().find(|&&j| !used[j]).copied())
+            {
                 Some(j) => si = j,
                 None => break,
             }
@@ -443,7 +473,13 @@ pub(crate) fn chain_segments(segs: Vec<(Point2, Point2)>) -> Vec<Contour> {
 /// chamfers). Positive grows, negative shrinks. Works on simple contours; it
 /// does not clip self-intersections from large concave offsets (a 2D-clipper
 /// refinement).
-pub fn offset(contours: &[Contour], r: f64, delta: f64, chamfer: bool, frags: FragmentSpec) -> Vec<Contour> {
+pub fn offset(
+    contours: &[Contour],
+    r: f64,
+    delta: f64,
+    chamfer: bool,
+    frags: FragmentSpec,
+) -> Vec<Contour> {
     let (amt, rounded) = if r != 0.0 { (r, true) } else { (delta, false) };
     // Holes (odd nesting depth) offset the opposite way: growing the solid
     // outward shrinks its holes.
@@ -451,7 +487,11 @@ pub fn offset(contours: &[Contour], r: f64, delta: f64, chamfer: bool, frags: Fr
     let n = valid.len();
     let rep: Vec<Point2> = valid.iter().map(|c| c[0]).collect();
     let depth: Vec<usize> = (0..n)
-        .map(|i| (0..n).filter(|&j| j != i && point_in_polygon(valid[j], rep[i])).count())
+        .map(|i| {
+            (0..n)
+                .filter(|&j| j != i && point_in_polygon(valid[j], rep[i]))
+                .count()
+        })
         .collect();
     valid
         .iter()
@@ -463,7 +503,13 @@ pub fn offset(contours: &[Contour], r: f64, delta: f64, chamfer: bool, frags: Fr
         .collect()
 }
 
-fn offset_one(contour: &[Point2], amt: f64, rounded: bool, chamfer: bool, frags: FragmentSpec) -> Contour {
+fn offset_one(
+    contour: &[Point2],
+    amt: f64,
+    rounded: bool,
+    chamfer: bool,
+    frags: FragmentSpec,
+) -> Contour {
     // Work CCW; reverse the result if the input was CW.
     let cw = signed_area(contour) < 0.0;
     let poly: Vec<Point2> = if cw {
@@ -513,7 +559,8 @@ fn offset_one(contour: &[Point2], amt: f64, rounded: bool, chamfer: bool, frags:
             while da > std::f64::consts::PI {
                 da -= 2.0 * std::f64::consts::PI;
             }
-            let steps = ((seg_full * (da.abs() / (2.0 * std::f64::consts::PI))).ceil() as usize).max(1);
+            let steps =
+                ((seg_full * (da.abs() / (2.0 * std::f64::consts::PI))).ceil() as usize).max(1);
             for s in 0..=steps {
                 let a = a0 + da * (s as f64 / steps as f64);
                 out.push([vi[0] + amt * a.cos(), vi[1] + amt * a.sin()]);
@@ -643,11 +690,15 @@ fn point_in_polygon(poly: &[Point2], pt: Point2) -> bool {
     inside
 }
 
+/// The concatenated vertex list, each contour's `(start, len)` range in it, and
+/// the cap triangulation (indices into the vertex list). See [`prepare`].
+type PreparedContours = (Vec<Point2>, Vec<(usize, usize)>, Vec<[u32; 3]>);
+
 /// Prepare a set of contours (with even-odd nesting → outers + holes) for
 /// filling and extrusion. Returns the concatenated vertex list, each contour's
 /// `(start, len)` range in it (outers oriented CCW, holes CW), and the cap
 /// triangulation (indices into the vertex list), with holes cut out via earcut.
-fn prepare(contours: &[Contour]) -> (Vec<Point2>, Vec<(usize, usize)>, Vec<[u32; 3]>) {
+fn prepare(contours: &[Contour]) -> PreparedContours {
     let valid: Vec<&Contour> = contours.iter().filter(|c| c.len() >= 3).collect();
     let n = valid.len();
     if n == 0 {
@@ -656,7 +707,11 @@ fn prepare(contours: &[Contour]) -> (Vec<Point2>, Vec<(usize, usize)>, Vec<[u32;
     // Nesting depth of each contour (how many others contain a point of it).
     let rep: Vec<Point2> = valid.iter().map(|c| c[0]).collect();
     let depth: Vec<usize> = (0..n)
-        .map(|i| (0..n).filter(|&j| j != i && point_in_polygon(valid[j], rep[i])).count())
+        .map(|i| {
+            (0..n)
+                .filter(|&j| j != i && point_in_polygon(valid[j], rep[i]))
+                .count()
+        })
         .collect();
 
     // Orient: outers (even depth) CCW, holes (odd depth) CW.
@@ -780,7 +835,8 @@ pub fn linear_extrude(
     for t in &cap_tris {
         let (a, b, cc) = (t[0] as usize, t[1] as usize, t[2] as usize);
         mesh.tris.push([ring(0, a), ring(0, cc), ring(0, b)]);
-        mesh.tris.push([ring(slices, a), ring(slices, b), ring(slices, cc)]);
+        mesh.tris
+            .push([ring(slices, a), ring(slices, b), ring(slices, cc)]);
     }
 
     mesh.ensure_outward();
@@ -819,11 +875,7 @@ fn revolve_one(mesh: &mut Mesh, contour: &[Point2], angle: f64, steps: u32, full
     let base = mesh.verts.len() as u32;
     let ring_count = if full { steps } else { steps + 1 };
     for k in 0..ring_count {
-        let frac = if full {
-            k as f64 / steps as f64
-        } else {
-            k as f64 / steps as f64
-        };
+        let frac = k as f64 / steps as f64;
         let th = (angle * frac).to_radians();
         let (s, c) = (th.sin(), th.cos());
         for p in contour {
@@ -832,7 +884,9 @@ fn revolve_one(mesh: &mut Mesh, contour: &[Point2], angle: f64, steps: u32, full
         }
     }
     let ring = |k: u32, i: usize| base + (k % ring_count) * n as u32 + i as u32;
-    let wall_steps = if full { steps } else { steps };
+    // Walls span `steps` sectors whether or not the sweep is a full revolution
+    // (the extra open-arc ring is a cap boundary, not another wall sector).
+    let wall_steps = steps;
     for k in 0..wall_steps {
         for i in 0..n {
             let j = (i + 1) % n;
@@ -848,7 +902,8 @@ fn revolve_one(mesh: &mut Mesh, contour: &[Point2], angle: f64, steps: u32, full
     if !full {
         let tris = triangulate_simple(contour);
         for tri in &tris {
-            mesh.tris.push([ring(0, tri[0]), ring(0, tri[2]), ring(0, tri[1])]);
+            mesh.tris
+                .push([ring(0, tri[0]), ring(0, tri[2]), ring(0, tri[1])]);
             mesh.tris.push([
                 ring(steps, tri[0]),
                 ring(steps, tri[1]),

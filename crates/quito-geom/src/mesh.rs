@@ -23,8 +23,7 @@ impl Mesh {
             let a = self.verts[t[0] as usize];
             let b = self.verts[t[1] as usize];
             let c = self.verts[t[2] as usize];
-            v += a[0] * (b[1] * c[2] - b[2] * c[1])
-                - a[1] * (b[0] * c[2] - b[2] * c[0])
+            v += a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0])
                 + a[2] * (b[0] * c[1] - b[1] * c[0]);
         }
         v / 6.0
@@ -284,8 +283,8 @@ impl Mesh {
     /// vertices at 1e-6 precision).
     pub fn from_stl(bytes: &[u8]) -> Mesh {
         // ASCII if it starts with "solid" and contains "facet".
-        let is_ascii = bytes.starts_with(b"solid")
-            && bytes.windows(5).take(512).any(|w| w == b"facet");
+        let is_ascii =
+            bytes.starts_with(b"solid") && bytes.windows(5).take(512).any(|w| w == b"facet");
         let raw_tris: Vec<[[f64; 3]; 3]> = if is_ascii {
             parse_ascii_stl(&String::from_utf8_lossy(bytes))
         } else {
@@ -293,11 +292,13 @@ impl Mesh {
         };
         let mut mesh = Mesh::new();
         let mut map: std::collections::HashMap<[i64; 3], u32> = std::collections::HashMap::new();
-        let key = |p: [f64; 3]| [
-            (p[0] * 1e6).round() as i64,
-            (p[1] * 1e6).round() as i64,
-            (p[2] * 1e6).round() as i64,
-        ];
+        let key = |p: [f64; 3]| {
+            [
+                (p[0] * 1e6).round() as i64,
+                (p[1] * 1e6).round() as i64,
+                (p[2] * 1e6).round() as i64,
+            ]
+        };
         for tri in raw_tris {
             let mut idx = [0u32; 3];
             for (k, p) in tri.iter().enumerate() {
@@ -357,9 +358,16 @@ impl Mesh {
                         .filter_map(|t| t.split('/').next()?.parse().ok())
                         .collect();
                     let n = mesh.verts.len() as i64;
-                    let resolve = |i: i64| if i < 0 { (n + i) as u32 } else { (i - 1) as u32 };
+                    let resolve = |i: i64| {
+                        if i < 0 {
+                            (n + i) as u32
+                        } else {
+                            (i - 1) as u32
+                        }
+                    };
                     for j in 1..idx.len().saturating_sub(1) {
-                        mesh.tris.push([resolve(idx[0]), resolve(idx[j]), resolve(idx[j + 1])]);
+                        mesh.tris
+                            .push([resolve(idx[0]), resolve(idx[j]), resolve(idx[j + 1])]);
                     }
                 }
                 _ => {}
@@ -416,7 +424,10 @@ fn parse_ascii_stl(s: &str) -> Vec<[[f64; 3]; 3]> {
     for line in s.lines() {
         let line = line.trim();
         if let Some(rest) = line.strip_prefix("vertex ") {
-            let nums: Vec<f64> = rest.split_whitespace().filter_map(|t| t.parse().ok()).collect();
+            let nums: Vec<f64> = rest
+                .split_whitespace()
+                .filter_map(|t| t.parse().ok())
+                .collect();
             if nums.len() == 3 {
                 cur.push([nums[0], nums[1], nums[2]]);
                 if cur.len() == 3 {
@@ -427,83 +438,6 @@ fn parse_ascii_stl(s: &str) -> Vec<[[f64; 3]; 3]> {
         }
     }
     out
-}
-
-#[cfg(test)]
-mod io_tests {
-    use super::*;
-
-    fn cube() -> Mesh {
-        crate::cube([10.0, 8.0, 6.0], false)
-    }
-
-    #[test]
-    fn stl_roundtrip() {
-        let m = Mesh::from_stl(&cube().to_binary_stl());
-        assert!((m.volume() - 480.0).abs() < 1e-6);
-        assert_eq!(m.verts.len(), 8); // welded
-    }
-
-    #[test]
-    fn off_obj_roundtrip() {
-        let off = Mesh::from_off(&cube().to_off());
-        assert!((off.volume() - 480.0).abs() < 1e-6, "off {}", off.volume());
-        let obj = Mesh::from_obj(&cube().to_obj());
-        assert!((obj.volume() - 480.0).abs() < 1e-6, "obj {}", obj.volume());
-    }
-
-    #[test]
-    fn amf_has_all_geometry() {
-        let m = cube();
-        let amf = m.to_amf();
-        assert_eq!(amf.matches("<vertex>").count(), m.verts.len());
-        assert_eq!(amf.matches("<triangle>").count(), m.tris.len());
-        assert!(amf.contains("<amf unit=\"millimeter\">"));
-    }
-
-    #[test]
-    fn threemf_is_a_valid_zip_with_all_parts() {
-        let m = cube();
-        let zip = m.to_3mf();
-        // Local-file-header signature at the start, EOCD signature at the end.
-        assert_eq!(&zip[0..4], b"PK\x03\x04");
-        assert!(zip.windows(4).any(|w| w == b"PK\x05\x06"), "no end-of-central-directory");
-        // All three OPC parts present as stored entries (their names appear raw).
-        for part in ["[Content_Types].xml", "_rels/.rels", "3D/3dmodel.model"] {
-            assert!(
-                zip.windows(part.len()).any(|w| w == part.as_bytes()),
-                "missing part {part}"
-            );
-        }
-        // The model XML carries every vertex/triangle.
-        let model = m.to_3mf_model();
-        assert_eq!(model.matches("<vertex ").count(), m.verts.len());
-        assert_eq!(model.matches("<triangle ").count(), m.tris.len());
-    }
-
-    /// CRC-32 of "123456789" is the well-known check value 0xCBF43926.
-    #[test]
-    fn crc32_check_value() {
-        assert_eq!(super::crc32(b"123456789"), 0xCBF4_3926);
-    }
-
-    #[test]
-    fn threemf_roundtrip() {
-        // to_3mf packages a store-only ZIP; from_3mf reads it back exactly.
-        let m = cube();
-        let back = Mesh::from_3mf(&m.to_3mf());
-        assert_eq!(back.verts.len(), m.verts.len());
-        assert_eq!(back.tris.len(), m.tris.len());
-        assert!((back.volume() - 480.0).abs() < 1e-6, "vol {}", back.volume());
-    }
-
-    #[test]
-    fn amf_roundtrip() {
-        let m = cube();
-        let back = Mesh::from_amf(m.to_amf().as_bytes());
-        assert_eq!(back.verts.len(), m.verts.len());
-        assert!((back.volume() - 480.0).abs() < 1e-6, "vol {}", back.volume());
-    }
 }
 
 pub(crate) fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
@@ -550,7 +484,10 @@ struct ZipEntry {
 
 impl Zip {
     fn new() -> Self {
-        Zip { out: Vec::new(), entries: Vec::new() }
+        Zip {
+            out: Vec::new(),
+            entries: Vec::new(),
+        }
     }
 
     /// Append a stored (uncompressed) file entry.
@@ -565,9 +502,12 @@ impl Zip {
         self.out.extend_from_slice(&0u16.to_le_bytes()); // mod time
         self.out.extend_from_slice(&0u16.to_le_bytes()); // mod date
         self.out.extend_from_slice(&crc.to_le_bytes());
-        self.out.extend_from_slice(&(data.len() as u32).to_le_bytes()); // comp size
-        self.out.extend_from_slice(&(data.len() as u32).to_le_bytes()); // uncomp size
-        self.out.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        self.out
+            .extend_from_slice(&(data.len() as u32).to_le_bytes()); // comp size
+        self.out
+            .extend_from_slice(&(data.len() as u32).to_le_bytes()); // uncomp size
+        self.out
+            .extend_from_slice(&(name.len() as u16).to_le_bytes());
         self.out.extend_from_slice(&0u16.to_le_bytes()); // extra len
         self.out.extend_from_slice(name.as_bytes());
         self.out.extend_from_slice(data);
@@ -593,7 +533,8 @@ impl Zip {
             self.out.extend_from_slice(&e.crc.to_le_bytes());
             self.out.extend_from_slice(&e.size.to_le_bytes()); // comp size
             self.out.extend_from_slice(&e.size.to_le_bytes()); // uncomp size
-            self.out.extend_from_slice(&(e.name.len() as u16).to_le_bytes());
+            self.out
+                .extend_from_slice(&(e.name.len() as u16).to_le_bytes());
             self.out.extend_from_slice(&0u16.to_le_bytes()); // extra len
             self.out.extend_from_slice(&0u16.to_le_bytes()); // comment len
             self.out.extend_from_slice(&0u16.to_le_bytes()); // disk number
@@ -607,8 +548,10 @@ impl Zip {
         self.out.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
         self.out.extend_from_slice(&0u16.to_le_bytes()); // disk number
         self.out.extend_from_slice(&0u16.to_le_bytes()); // cd start disk
-        self.out.extend_from_slice(&(self.entries.len() as u16).to_le_bytes());
-        self.out.extend_from_slice(&(self.entries.len() as u16).to_le_bytes());
+        self.out
+            .extend_from_slice(&(self.entries.len() as u16).to_le_bytes());
+        self.out
+            .extend_from_slice(&(self.entries.len() as u16).to_le_bytes());
         self.out.extend_from_slice(&cd_size.to_le_bytes());
         self.out.extend_from_slice(&cd_start.to_le_bytes());
         self.out.extend_from_slice(&0u16.to_le_bytes()); // comment len
@@ -638,15 +581,16 @@ fn crc32(data: &[u8]) -> u32 {
 /// any malformation or if the entry is absent.
 fn zip_read_entry(zip: &[u8], name: &str) -> Option<Vec<u8>> {
     let rd_u16 = |o: usize| -> Option<usize> {
-        zip.get(o..o + 2).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize)
+        zip.get(o..o + 2)
+            .map(|b| u16::from_le_bytes([b[0], b[1]]) as usize)
     };
     let rd_u32 = |o: usize| -> Option<usize> {
-        zip.get(o..o + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize)
+        zip.get(o..o + 4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize)
     };
     let rd_u64 = |o: usize| -> Option<usize> {
-        zip.get(o..o + 8).map(|b| {
-            u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]) as usize
-        })
+        zip.get(o..o + 8)
+            .map(|b| u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]) as usize)
     };
     // Find the End Of Central Directory record (scan backward for its signature).
     let eocd = (0..zip.len().saturating_sub(21))
@@ -659,9 +603,15 @@ fn zip_read_entry(zip: &[u8], name: &str) -> Option<Vec<u8>> {
     // (OpenSCAD's 3MF writer uses ZIP64.)
     if cd == 0xFFFF_FFFF || count == 0xFFFF {
         let loc = eocd.checked_sub(20)?;
-        if zip.get(loc..loc + 4)?.starts_with(&[0x50, 0x4b, 0x06, 0x07]) {
+        if zip
+            .get(loc..loc + 4)?
+            .starts_with(&[0x50, 0x4b, 0x06, 0x07])
+        {
             let z64 = rd_u64(loc + 8)?;
-            if zip.get(z64..z64 + 4)?.starts_with(&[0x50, 0x4b, 0x06, 0x06]) {
+            if zip
+                .get(z64..z64 + 4)?
+                .starts_with(&[0x50, 0x4b, 0x06, 0x06])
+            {
                 count = rd_u64(z64 + 32)?;
                 cd = rd_u64(z64 + 48)?;
             }
@@ -707,7 +657,10 @@ fn zip_read_entry(zip: &[u8], name: &str) -> Option<Vec<u8>> {
         }
         if entry_name == name {
             // Jump to the local header to find where the data begins.
-            if !zip.get(local_off..local_off + 4)?.starts_with(&[0x50, 0x4b, 0x03, 0x04]) {
+            if !zip
+                .get(local_off..local_off + 4)?
+                .starts_with(&[0x50, 0x4b, 0x03, 0x04])
+            {
                 return None;
             }
             let lh_name = rd_u16(local_off + 26)?;
@@ -788,7 +741,9 @@ fn split_elements<'a>(xml: &'a str, name: &str) -> Vec<&'a str> {
             i = tstart + open.len();
             continue;
         }
-        let Some(gt) = xml[tstart..].find('>') else { break };
+        let Some(gt) = xml[tstart..].find('>') else {
+            break;
+        };
         let content_start = tstart + gt + 1;
         if xml.as_bytes().get(tstart + gt - 1) == Some(&b'/') {
             i = content_start; // self-closing, no content
@@ -812,4 +767,92 @@ fn xml_child_f64(block: &str, name: &str) -> Option<f64> {
     let s = block.find(&open)? + open.len();
     let e = block[s..].find(&close)? + s;
     block[s..e].trim().parse().ok()
+}
+
+#[cfg(test)]
+mod io_tests {
+    use super::*;
+
+    fn cube() -> Mesh {
+        crate::cube([10.0, 8.0, 6.0], false)
+    }
+
+    #[test]
+    fn stl_roundtrip() {
+        let m = Mesh::from_stl(&cube().to_binary_stl());
+        assert!((m.volume() - 480.0).abs() < 1e-6);
+        assert_eq!(m.verts.len(), 8); // welded
+    }
+
+    #[test]
+    fn off_obj_roundtrip() {
+        let off = Mesh::from_off(&cube().to_off());
+        assert!((off.volume() - 480.0).abs() < 1e-6, "off {}", off.volume());
+        let obj = Mesh::from_obj(&cube().to_obj());
+        assert!((obj.volume() - 480.0).abs() < 1e-6, "obj {}", obj.volume());
+    }
+
+    #[test]
+    fn amf_has_all_geometry() {
+        let m = cube();
+        let amf = m.to_amf();
+        assert_eq!(amf.matches("<vertex>").count(), m.verts.len());
+        assert_eq!(amf.matches("<triangle>").count(), m.tris.len());
+        assert!(amf.contains("<amf unit=\"millimeter\">"));
+    }
+
+    #[test]
+    fn threemf_is_a_valid_zip_with_all_parts() {
+        let m = cube();
+        let zip = m.to_3mf();
+        // Local-file-header signature at the start, EOCD signature at the end.
+        assert_eq!(&zip[0..4], b"PK\x03\x04");
+        assert!(
+            zip.windows(4).any(|w| w == b"PK\x05\x06"),
+            "no end-of-central-directory"
+        );
+        // All three OPC parts present as stored entries (their names appear raw).
+        for part in ["[Content_Types].xml", "_rels/.rels", "3D/3dmodel.model"] {
+            assert!(
+                zip.windows(part.len()).any(|w| w == part.as_bytes()),
+                "missing part {part}"
+            );
+        }
+        // The model XML carries every vertex/triangle.
+        let model = m.to_3mf_model();
+        assert_eq!(model.matches("<vertex ").count(), m.verts.len());
+        assert_eq!(model.matches("<triangle ").count(), m.tris.len());
+    }
+
+    /// CRC-32 of "123456789" is the well-known check value 0xCBF43926.
+    #[test]
+    fn crc32_check_value() {
+        assert_eq!(super::crc32(b"123456789"), 0xCBF4_3926);
+    }
+
+    #[test]
+    fn threemf_roundtrip() {
+        // to_3mf packages a store-only ZIP; from_3mf reads it back exactly.
+        let m = cube();
+        let back = Mesh::from_3mf(&m.to_3mf());
+        assert_eq!(back.verts.len(), m.verts.len());
+        assert_eq!(back.tris.len(), m.tris.len());
+        assert!(
+            (back.volume() - 480.0).abs() < 1e-6,
+            "vol {}",
+            back.volume()
+        );
+    }
+
+    #[test]
+    fn amf_roundtrip() {
+        let m = cube();
+        let back = Mesh::from_amf(m.to_amf().as_bytes());
+        assert_eq!(back.verts.len(), m.verts.len());
+        assert!(
+            (back.volume() - 480.0).abs() < 1e-6,
+            "vol {}",
+            back.volume()
+        );
+    }
 }

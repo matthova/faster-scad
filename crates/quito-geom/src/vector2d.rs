@@ -38,7 +38,9 @@ fn parse_entities(text: &str) -> Vec<Entity> {
     let mut entities: Vec<Entity> = Vec::new();
     let mut cur: Option<Entity> = None;
     while let (Some(code_line), Some(val_line)) = (lines.next(), lines.next()) {
-        let Ok(code) = code_line.trim().parse::<i32>() else { continue };
+        let Ok(code) = code_line.trim().parse::<i32>() else {
+            continue;
+        };
         let val = val_line.trim().to_string();
         if code == 0 {
             if let Some(e) = cur.take() {
@@ -56,7 +58,10 @@ fn parse_entities(text: &str) -> Vec<Entity> {
 }
 
 fn first_f64(props: &[(i32, String)], code: i32) -> Option<f64> {
-    props.iter().find(|(c, _)| *c == code).and_then(|(_, v)| v.parse().ok())
+    props
+        .iter()
+        .find(|(c, _)| *c == code)
+        .and_then(|(_, v)| v.parse().ok())
 }
 
 fn first_i32(props: &[(i32, String)], code: i32) -> Option<i32> {
@@ -81,11 +86,8 @@ fn arc_points(center: Point2, r: f64, a0: f64, a1: f64, closed: bool) -> Vec<Poi
     let count = if closed { steps } else { steps + 1 };
     (0..count)
         .map(|i| {
-            let t = if closed {
-                i as f64 / steps as f64
-            } else {
-                i as f64 / steps as f64
-            };
+            // `count` differs for closed vs open arcs; the parameter step does not.
+            let t = i as f64 / steps as f64;
             let a = a0 + sweep * t;
             [center[0] + r * a.cos(), center[1] + r * a.sin()]
         })
@@ -107,8 +109,14 @@ pub fn import_dxf(bytes: &[u8]) -> Vec<Contour> {
         let (ty, props) = &entities[i];
         match ty.as_str() {
             "LINE" => {
-                let a = [first_f64(props, 10).unwrap_or(0.0), first_f64(props, 20).unwrap_or(0.0)];
-                let b = [first_f64(props, 11).unwrap_or(0.0), first_f64(props, 21).unwrap_or(0.0)];
+                let a = [
+                    first_f64(props, 10).unwrap_or(0.0),
+                    first_f64(props, 20).unwrap_or(0.0),
+                ];
+                let b = [
+                    first_f64(props, 11).unwrap_or(0.0),
+                    first_f64(props, 21).unwrap_or(0.0),
+                ];
                 segs.push((a, b));
             }
             "LWPOLYLINE" => {
@@ -134,7 +142,10 @@ pub fn import_dxf(bytes: &[u8]) -> Vec<Contour> {
                 i += 1;
                 while i < entities.len() && entities[i].0 == "VERTEX" {
                     let vp = &entities[i].1;
-                    pts.push([first_f64(vp, 10).unwrap_or(0.0), first_f64(vp, 20).unwrap_or(0.0)]);
+                    pts.push([
+                        first_f64(vp, 10).unwrap_or(0.0),
+                        first_f64(vp, 20).unwrap_or(0.0),
+                    ]);
                     i += 1;
                 }
                 if i < entities.len() && entities[i].0 == "SEQEND" {
@@ -144,14 +155,20 @@ pub fn import_dxf(bytes: &[u8]) -> Vec<Contour> {
                 continue;
             }
             "CIRCLE" => {
-                let c = [first_f64(props, 10).unwrap_or(0.0), first_f64(props, 20).unwrap_or(0.0)];
+                let c = [
+                    first_f64(props, 10).unwrap_or(0.0),
+                    first_f64(props, 20).unwrap_or(0.0),
+                ];
                 let r = first_f64(props, 40).unwrap_or(0.0);
                 if r > 0.0 {
                     contours.push(arc_points(c, r, 0.0, 2.0 * PI, true));
                 }
             }
             "ARC" => {
-                let c = [first_f64(props, 10).unwrap_or(0.0), first_f64(props, 20).unwrap_or(0.0)];
+                let c = [
+                    first_f64(props, 10).unwrap_or(0.0),
+                    first_f64(props, 20).unwrap_or(0.0),
+                ];
                 let r = first_f64(props, 40).unwrap_or(0.0);
                 let a0 = first_f64(props, 50).unwrap_or(0.0).to_radians();
                 let mut a1 = first_f64(props, 51).unwrap_or(0.0).to_radians();
@@ -221,7 +238,9 @@ const CURVE_STEPS: usize = 24;
 fn svg_len(s: &str) -> Option<f64> {
     let s = s.trim();
     let split = s
-        .find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+' || c == 'e' || c == 'E'))
+        .find(|c: char| {
+            !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+' || c == 'e' || c == 'E')
+        })
         .unwrap_or(s.len());
     let (num, unit) = s.split_at(split);
     let v: f64 = num.parse().ok()?;
@@ -303,7 +322,9 @@ fn scan_numbers(s: &str) -> Vec<f64> {
 }
 
 fn points_attr(tag: &str) -> Vec<Point2> {
-    let nums = attr(tag, "points").map(|s| scan_numbers(&s)).unwrap_or_default();
+    let nums = attr(tag, "points")
+        .map(|s| scan_numbers(&s))
+        .unwrap_or_default();
     nums.chunks_exact(2).map(|c| [c[0], c[1]]).collect()
 }
 
@@ -336,7 +357,16 @@ fn quad(p0: Point2, p1: Point2, p2: Point2, out: &mut Vec<Point2>) {
 
 /// Flatten an SVG elliptical-arc (`A`) command from `p0` to `p1`.
 #[allow(clippy::too_many_arguments)]
-fn svg_arc(p0: Point2, mut rx: f64, mut ry: f64, phi: f64, laf: bool, sf: bool, p1: Point2, out: &mut Vec<Point2>) {
+fn svg_arc(
+    p0: Point2,
+    mut rx: f64,
+    mut ry: f64,
+    phi: f64,
+    laf: bool,
+    sf: bool,
+    p1: Point2,
+    out: &mut Vec<Point2>,
+) {
     if rx == 0.0 || ry == 0.0 || (p0[0] == p1[0] && p0[1] == p1[1]) {
         out.push(p1);
         return;
@@ -373,7 +403,12 @@ fn svg_arc(p0: Point2, mut rx: f64, mut ry: f64, phi: f64, laf: bool, sf: bool, 
         a
     };
     let theta1 = ang(1.0, 0.0, (x1p - cxp) / rx, (y1p - cyp) / ry);
-    let mut dtheta = ang((x1p - cxp) / rx, (y1p - cyp) / ry, (-x1p - cxp) / rx, (-y1p - cyp) / ry);
+    let mut dtheta = ang(
+        (x1p - cxp) / rx,
+        (y1p - cyp) / ry,
+        (-x1p - cxp) / rx,
+        (-y1p - cyp) / ry,
+    );
     if !sf && dtheta > 0.0 {
         dtheta -= 2.0 * PI;
     } else if sf && dtheta < 0.0 {
@@ -397,7 +432,11 @@ struct PathCursor<'a> {
 
 impl<'a> PathCursor<'a> {
     fn new(s: &'a str) -> Self {
-        PathCursor { b: s.as_bytes(), s, i: 0 }
+        PathCursor {
+            b: s.as_bytes(),
+            s,
+            i: 0,
+        }
     }
     fn skip_sep(&mut self) {
         while self.i < self.b.len() {
@@ -522,32 +561,59 @@ fn parse_path(d: &str) -> (Vec<Contour>, Vec<Vec<Point2>>) {
                     sub.push([cx, cy]);
                 }
                 'C' => {
-                    let (Some(a), Some(b), Some(e)) = (c.pair(), c.pair(), c.pair()) else { break };
-                    let p1 = [if rel { cx + a[0] } else { a[0] }, if rel { cy + a[1] } else { a[1] }];
-                    let p2 = [if rel { cx + b[0] } else { b[0] }, if rel { cy + b[1] } else { b[1] }];
-                    let p3 = [if rel { cx + e[0] } else { e[0] }, if rel { cy + e[1] } else { e[1] }];
+                    let (Some(a), Some(b), Some(e)) = (c.pair(), c.pair(), c.pair()) else {
+                        break;
+                    };
+                    let p1 = [
+                        if rel { cx + a[0] } else { a[0] },
+                        if rel { cy + a[1] } else { a[1] },
+                    ];
+                    let p2 = [
+                        if rel { cx + b[0] } else { b[0] },
+                        if rel { cy + b[1] } else { b[1] },
+                    ];
+                    let p3 = [
+                        if rel { cx + e[0] } else { e[0] },
+                        if rel { cy + e[1] } else { e[1] },
+                    ];
                     cubic([cx, cy], p1, p2, p3, &mut sub);
                     prev_c = Some(p2);
                     cx = p3[0];
                     cy = p3[1];
                 }
                 'S' => {
-                    let (Some(b), Some(e)) = (c.pair(), c.pair()) else { break };
+                    let (Some(b), Some(e)) = (c.pair(), c.pair()) else {
+                        break;
+                    };
                     let p1 = match prev_c {
                         Some(pc) => [2.0 * cx - pc[0], 2.0 * cy - pc[1]],
                         None => [cx, cy],
                     };
-                    let p2 = [if rel { cx + b[0] } else { b[0] }, if rel { cy + b[1] } else { b[1] }];
-                    let p3 = [if rel { cx + e[0] } else { e[0] }, if rel { cy + e[1] } else { e[1] }];
+                    let p2 = [
+                        if rel { cx + b[0] } else { b[0] },
+                        if rel { cy + b[1] } else { b[1] },
+                    ];
+                    let p3 = [
+                        if rel { cx + e[0] } else { e[0] },
+                        if rel { cy + e[1] } else { e[1] },
+                    ];
                     cubic([cx, cy], p1, p2, p3, &mut sub);
                     prev_c = Some(p2);
                     cx = p3[0];
                     cy = p3[1];
                 }
                 'Q' => {
-                    let (Some(a), Some(e)) = (c.pair(), c.pair()) else { break };
-                    let p1 = [if rel { cx + a[0] } else { a[0] }, if rel { cy + a[1] } else { a[1] }];
-                    let p2 = [if rel { cx + e[0] } else { e[0] }, if rel { cy + e[1] } else { e[1] }];
+                    let (Some(a), Some(e)) = (c.pair(), c.pair()) else {
+                        break;
+                    };
+                    let p1 = [
+                        if rel { cx + a[0] } else { a[0] },
+                        if rel { cy + a[1] } else { a[1] },
+                    ];
+                    let p2 = [
+                        if rel { cx + e[0] } else { e[0] },
+                        if rel { cy + e[1] } else { e[1] },
+                    ];
                     quad([cx, cy], p1, p2, &mut sub);
                     prev_q = Some(p1);
                     cx = p2[0];
@@ -559,7 +625,10 @@ fn parse_path(d: &str) -> (Vec<Contour>, Vec<Vec<Point2>>) {
                         Some(pq) => [2.0 * cx - pq[0], 2.0 * cy - pq[1]],
                         None => [cx, cy],
                     };
-                    let p2 = [if rel { cx + e[0] } else { e[0] }, if rel { cy + e[1] } else { e[1] }];
+                    let p2 = [
+                        if rel { cx + e[0] } else { e[0] },
+                        if rel { cy + e[1] } else { e[1] },
+                    ];
                     quad([cx, cy], p1, p2, &mut sub);
                     prev_q = Some(p1);
                     cx = p2[0];
@@ -571,8 +640,20 @@ fn parse_path(d: &str) -> (Vec<Contour>, Vec<Vec<Point2>>) {
                     else {
                         break;
                     };
-                    let end = [if rel { cx + e[0] } else { e[0] }, if rel { cy + e[1] } else { e[1] }];
-                    svg_arc([cx, cy], rr[0], rr[1], rot.to_radians(), f[0] != 0.0, f[1] != 0.0, end, &mut sub);
+                    let end = [
+                        if rel { cx + e[0] } else { e[0] },
+                        if rel { cy + e[1] } else { e[1] },
+                    ];
+                    svg_arc(
+                        [cx, cy],
+                        rr[0],
+                        rr[1],
+                        rot.to_radians(),
+                        f[0] != 0.0,
+                        f[1] != 0.0,
+                        end,
+                        &mut sub,
+                    );
                     cx = end[0];
                     cy = end[1];
                 }
@@ -602,7 +683,9 @@ pub fn import_svg(bytes: &[u8]) -> Vec<Contour> {
     let text = String::from_utf8_lossy(bytes);
     // Locate the <svg ...> opening tag for viewBox/width/height.
     let svg_tag = find_tag(&text, "svg").unwrap_or_default();
-    let vb: Vec<f64> = attr(&svg_tag, "viewBox").map(|s| scan_numbers(&s)).unwrap_or_default();
+    let vb: Vec<f64> = attr(&svg_tag, "viewBox")
+        .map(|s| scan_numbers(&s))
+        .unwrap_or_default();
     let (vb_min_x, vb_min_y, vb_w, vb_h) = if vb.len() == 4 {
         (vb[0], vb[1], vb[2], vb[3])
     } else {
@@ -650,8 +733,14 @@ pub fn import_svg(bytes: &[u8]) -> Vec<Contour> {
                 }
             }
             "line" => {
-                let p0 = [attr_f64(&body, "x1").unwrap_or(0.0), attr_f64(&body, "y1").unwrap_or(0.0)];
-                let p1 = [attr_f64(&body, "x2").unwrap_or(0.0), attr_f64(&body, "y2").unwrap_or(0.0)];
+                let p0 = [
+                    attr_f64(&body, "x1").unwrap_or(0.0),
+                    attr_f64(&body, "y1").unwrap_or(0.0),
+                ];
+                let p1 = [
+                    attr_f64(&body, "x2").unwrap_or(0.0),
+                    attr_f64(&body, "y2").unwrap_or(0.0),
+                ];
                 raw_open.push(vec![p0, p1]);
             }
             "polyline" => raw_open.push(points_attr(&body)),
@@ -679,11 +768,22 @@ pub fn import_svg(bytes: &[u8]) -> Vec<Contour> {
         .chain(raw_open.iter().flatten())
         .map(|p| p[1])
         .fold(f64::MIN, f64::max);
-    let phys_h = height_mm.unwrap_or(if has_vb { vb_h * scale } else { content_max_y.max(0.0) });
+    let phys_h = height_mm.unwrap_or(if has_vb {
+        vb_h * scale
+    } else {
+        content_max_y.max(0.0)
+    });
 
-    let map = |p: &Point2| [(p[0] - vb_min_x) * scale, phys_h - (p[1] - vb_min_y) * scale];
-    let mut contours: Vec<Contour> =
-        raw_closed.iter().map(|c| c.iter().map(map).collect()).collect();
+    let map = |p: &Point2| {
+        [
+            (p[0] - vb_min_x) * scale,
+            phys_h - (p[1] - vb_min_y) * scale,
+        ]
+    };
+    let mut contours: Vec<Contour> = raw_closed
+        .iter()
+        .map(|c| c.iter().map(map).collect())
+        .collect();
     // Stitch open polylines/lines into loops (rare, but matches DXF behaviour).
     let mut segs: Vec<(Point2, Point2)> = Vec::new();
     for poly in &raw_open {
@@ -716,7 +816,9 @@ fn find_tag(text: &str, name: &str) -> Option<String> {
 
 /// Iterate over all element opening tags, yielding (lowercased-name, tag-text).
 fn iter_tags(text: &str) -> Vec<(&'static str, String)> {
-    const NAMES: [&str; 7] = ["rect", "circle", "ellipse", "line", "polyline", "polygon", "path"];
+    const NAMES: [&str; 7] = [
+        "rect", "circle", "ellipse", "line", "polyline", "polygon", "path",
+    ];
     let mut out = Vec::new();
     let bytes = text.as_bytes();
     let mut i = 0;
@@ -726,7 +828,8 @@ fn iter_tags(text: &str) -> Vec<(&'static str, String)> {
             for &nm in &NAMES {
                 if rest.len() >= nm.len()
                     && rest[..nm.len()].eq_ignore_ascii_case(nm)
-                    && rest[nm.len()..].starts_with(|c: char| c.is_ascii_whitespace() || c == '>' || c == '/')
+                    && rest[nm.len()..]
+                        .starts_with(|c: char| c.is_ascii_whitespace() || c == '>' || c == '/')
                 {
                     if let Some(rel_end) = rest.find('>') {
                         out.push((nm, rest[..rel_end].to_string()));
@@ -744,8 +847,7 @@ fn iter_tags(text: &str) -> Vec<(&'static str, String)> {
 /// Serialize contours as an SVG `<path>` (Y negated, so it re-imports upright),
 /// mirroring OpenSCAD's exporter (`width`/`height` in mm, `viewBox` = neg bbox).
 pub fn export_svg(contours: &[Contour]) -> String {
-    let (mut min_x, mut min_y, mut max_x, mut max_y) =
-        (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
     for p in contours.iter().flatten() {
         min_x = min_x.min(p[0]);
         min_y = min_y.min(p[1]);
@@ -810,7 +912,11 @@ mod tests {
         let dxf = export_dxf(&[outer, hole]);
         let back = import_dxf(dxf.as_bytes());
         assert_eq!(back.len(), 2, "expected two contours");
-        assert!((net_area(&back).abs() - 196.0).abs() < 1e-6, "area {}", net_area(&back).abs());
+        assert!(
+            (net_area(&back).abs() - 196.0).abs() < 1e-6,
+            "area {}",
+            net_area(&back).abs()
+        );
     }
 
     #[test]
@@ -831,16 +937,29 @@ mod tests {
     #[test]
     fn svg_rect_scale_and_yflip() {
         // No viewBox: coords 1:1, Y flipped about height*25.4/72.
-        let svg = r#"<svg width="100" height="100"><rect x="10" y="20" width="40" height="30"/></svg>"#;
+        let svg =
+            r#"<svg width="100" height="100"><rect x="10" y="20" width="40" height="30"/></svg>"#;
         let cs = import_svg(svg.as_bytes());
         assert_eq!(cs.len(), 1);
         let xs: Vec<f64> = cs[0].iter().map(|p| p[0]).collect();
         let ys: Vec<f64> = cs[0].iter().map(|p| p[1]).collect();
-        let (minx, maxx) = (xs.iter().cloned().fold(f64::MAX, f64::min), xs.iter().cloned().fold(f64::MIN, f64::max));
-        let (miny, maxy) = (ys.iter().cloned().fold(f64::MAX, f64::min), ys.iter().cloned().fold(f64::MIN, f64::max));
-        assert!((minx - 10.0).abs() < 1e-6 && (maxx - 50.0).abs() < 1e-6, "x {minx}..{maxx}");
+        let (minx, maxx) = (
+            xs.iter().cloned().fold(f64::MAX, f64::min),
+            xs.iter().cloned().fold(f64::MIN, f64::max),
+        );
+        let (miny, maxy) = (
+            ys.iter().cloned().fold(f64::MAX, f64::min),
+            ys.iter().cloned().fold(f64::MIN, f64::max),
+        );
+        assert!(
+            (minx - 10.0).abs() < 1e-6 && (maxx - 50.0).abs() < 1e-6,
+            "x {minx}..{maxx}"
+        );
         // Y: flip axis = 100*25.4/72 = 35.2778; rect y 20..50 -> 15.278..-14.722
-        assert!((maxy - 15.2778).abs() < 1e-3 && (miny + 14.7222).abs() < 1e-3, "y {miny}..{maxy}");
+        assert!(
+            (maxy - 15.2778).abs() < 1e-3 && (miny + 14.7222).abs() < 1e-3,
+            "y {miny}..{maxy}"
+        );
         assert!((net_area(&cs).abs() - 1200.0).abs() < 1e-6);
     }
 
@@ -850,7 +969,11 @@ mod tests {
         let svg = r#"<svg viewBox="0 0 10 10" width="10mm" height="10mm"><path d="M1,1 l4,0 l0,4 l-4,0 z"/></svg>"#;
         let cs = import_svg(svg.as_bytes());
         assert_eq!(cs.len(), 1);
-        assert!((net_area(&cs).abs() - 16.0).abs() < 1e-6, "area {}", net_area(&cs).abs());
+        assert!(
+            (net_area(&cs).abs() - 16.0).abs() < 1e-6,
+            "area {}",
+            net_area(&cs).abs()
+        );
     }
 
     #[test]
@@ -858,6 +981,10 @@ mod tests {
         let sq = vec![[0.0, 0.0], [10.0, 0.0], [10.0, 20.0], [0.0, 20.0]];
         let svg = export_svg(&[sq]);
         let back = import_svg(svg.as_bytes());
-        assert!((net_area(&back).abs() - 200.0).abs() < 1e-6, "area {}", net_area(&back).abs());
+        assert!(
+            (net_area(&back).abs() - 200.0).abs() < 1e-6,
+            "area {}",
+            net_area(&back).abs()
+        );
     }
 }

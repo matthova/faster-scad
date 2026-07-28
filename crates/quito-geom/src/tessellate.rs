@@ -77,12 +77,18 @@ pub fn cube(size: [f64; 3], center: bool) -> Mesh {
     ];
     // Outward-facing (CCW) triangles.
     let tris = vec![
-        [0, 3, 2], [0, 2, 1], // bottom (z-)
-        [4, 5, 6], [4, 6, 7], // top (z+)
-        [0, 1, 5], [0, 5, 4], // front (y-)
-        [2, 3, 7], [2, 7, 6], // back (y+)
-        [1, 2, 6], [1, 6, 5], // right (x+)
-        [0, 4, 7], [0, 7, 3], // left (x-)
+        [0, 3, 2],
+        [0, 2, 1], // bottom (z-)
+        [4, 5, 6],
+        [4, 6, 7], // top (z+)
+        [0, 1, 5],
+        [0, 5, 4], // front (y-)
+        [2, 3, 7],
+        [2, 7, 6], // back (y+)
+        [1, 2, 6],
+        [1, 6, 5], // right (x+)
+        [0, 4, 7],
+        [0, 7, 3], // left (x-)
     ];
     let mut m = Mesh { verts, tris };
     m.ensure_outward();
@@ -92,7 +98,7 @@ pub fn cube(size: [f64; 3], center: bool) -> Mesh {
 /// Sphere, tessellated with OpenSCAD's ring topology (flat poles).
 pub fn sphere(r: f64, frags: FragmentSpec) -> Mesh {
     let n = fragments(r, frags).max(3);
-    let num_rings = (n + 1) / 2;
+    let num_rings = n.div_ceil(2);
     if num_rings == 0 || r <= 0.0 {
         return Mesh::new();
     }
@@ -141,7 +147,11 @@ pub fn sphere(r: f64, frags: FragmentSpec) -> Mesh {
 /// Cylinder / cone / frustum along +Z.
 pub fn cylinder(h: f64, r1: f64, r2: f64, center: bool, frags: FragmentSpec) -> Mesh {
     let n = fragments(r1.max(r2), frags).max(3);
-    let (z0, z1) = if center { (-h / 2.0, h / 2.0) } else { (0.0, h) };
+    let (z0, z1) = if center {
+        (-h / 2.0, h / 2.0)
+    } else {
+        (0.0, h)
+    };
 
     let mut verts: Vec<[f64; 3]> = Vec::new();
     let mut tris: Vec<[u32; 3]> = Vec::new();
@@ -223,7 +233,11 @@ mod tests {
     use super::*;
 
     fn spec(fn_: f64) -> FragmentSpec {
-        FragmentSpec { fn_, fa: 12.0, fs: 2.0 }
+        FragmentSpec {
+            fn_,
+            fa: 12.0,
+            fs: 2.0,
+        }
     }
 
     #[test]

@@ -53,7 +53,11 @@ pub enum Control {
     /// Free numeric entry.
     Number,
     /// Numeric slider (`[min:max]` / `[min:step:max]`).
-    Slider { min: f64, step: Option<f64>, max: f64 },
+    Slider {
+        min: f64,
+        step: Option<f64>,
+        max: f64,
+    },
     /// Boolean checkbox.
     Checkbox,
     /// Free text entry, optionally length-limited.
@@ -152,7 +156,9 @@ fn control_json(c: &Control) -> String {
             )
         }
         Control::Text { max_length } => {
-            let ml = max_length.map(|n| n.to_string()).unwrap_or_else(|| "null".into());
+            let ml = max_length
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| "null".into());
             format!(r#"{{"kind":"text","maxLength":{ml}}}"#)
         }
         Control::Vector { length } => format!(r#"{{"kind":"vector","length":{length}}}"#),
@@ -182,7 +188,11 @@ pub fn extract(src: &str) -> Customizer {
         // Group markers: /* [Group] */ (possibly with surrounding text).
         if let Some(g) = parse_group_marker(line) {
             hidden = g.eq_ignore_ascii_case("Hidden");
-            group = if g.eq_ignore_ascii_case("Global") { String::new() } else { g };
+            group = if g.eq_ignore_ascii_case("Global") {
+                String::new()
+            } else {
+                g
+            };
             pending_desc = None;
             continue;
         }
@@ -190,7 +200,11 @@ pub fn extract(src: &str) -> Customizer {
         // A standalone line comment becomes the pending description.
         if let Some(rest) = line.strip_prefix("//") {
             let text = rest.trim();
-            pending_desc = if text.is_empty() { None } else { Some(text.to_string()) };
+            pending_desc = if text.is_empty() {
+                None
+            } else {
+                Some(text.to_string())
+            };
             continue;
         }
 
@@ -221,7 +235,9 @@ pub fn extract(src: &str) -> Customizer {
                 let t = t.trim();
                 // A bare number after a string sets max length.
                 if let (ParamValue::Text(_), Ok(n)) = (&value, t.parse::<u32>()) {
-                    Control::Text { max_length: Some(n) }
+                    Control::Text {
+                        max_length: Some(n),
+                    }
                 } else {
                     if description.is_none() && !t.is_empty() {
                         description = Some(t.to_string());
@@ -233,7 +249,13 @@ pub fn extract(src: &str) -> Customizer {
         };
 
         if !hidden {
-            params.push(Param { name, group: group.clone(), description, value, control });
+            params.push(Param {
+                name,
+                group: group.clone(),
+                description,
+                value,
+                control,
+            });
         }
     }
 
@@ -254,7 +276,10 @@ fn parse_assignment(line: &str) -> Option<(String, &str, Option<&str>)> {
     let eq = line.find('=')?;
     // Reject ==, <=, >=, !=, => (not simple assignments).
     let after = line.as_bytes().get(eq + 1);
-    if line.as_bytes().get(eq.wrapping_sub(1)).is_some_and(|b| matches!(b, b'!' | b'<' | b'>'))
+    if line
+        .as_bytes()
+        .get(eq.wrapping_sub(1))
+        .is_some_and(|b| matches!(b, b'!' | b'<' | b'>'))
         || after == Some(&b'=')
     {
         return None;
@@ -289,7 +314,7 @@ fn split_trailing_comment(s: &str) -> (&str, Option<&str>) {
     let bytes = s.as_bytes();
     let mut in_str = false;
     let mut i = 0;
-    while i + 1 <= bytes.len() {
+    while i < bytes.len() {
         let c = bytes[i];
         if c == b'"' && (i == 0 || bytes[i - 1] != b'\\') {
             in_str = !in_str;
@@ -374,9 +399,19 @@ fn parse_control(annot: &str, value: &ParamValue) -> Control {
         let nums: Option<Vec<f64>> = parts.iter().map(|p| p.trim().parse::<f64>().ok()).collect();
         if let Some(nums) = nums {
             match nums.as_slice() {
-                [min, max] => return Control::Slider { min: *min, step: None, max: *max },
+                [min, max] => {
+                    return Control::Slider {
+                        min: *min,
+                        step: None,
+                        max: *max,
+                    }
+                }
                 [min, step, max] => {
-                    return Control::Slider { min: *min, step: Some(*step), max: *max }
+                    return Control::Slider {
+                        min: *min,
+                        step: Some(*step),
+                        max: *max,
+                    }
                 }
                 _ => {}
             }
@@ -435,10 +470,21 @@ mod tests {
     #[test]
     fn slider_ranges() {
         let c = extract("a = 5; // [0:10]\nb = 5; // [0:0.5:10]\n");
-        assert_eq!(c.params[0].control, Control::Slider { min: 0.0, step: None, max: 10.0 });
+        assert_eq!(
+            c.params[0].control,
+            Control::Slider {
+                min: 0.0,
+                step: None,
+                max: 10.0
+            }
+        );
         assert_eq!(
             c.params[1].control,
-            Control::Slider { min: 0.0, step: Some(0.5), max: 10.0 }
+            Control::Slider {
+                min: 0.0,
+                step: Some(0.5),
+                max: 10.0
+            }
         );
     }
 
@@ -473,7 +519,12 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
-        assert_eq!(c.params[1].control, Control::Text { max_length: Some(8) });
+        assert_eq!(
+            c.params[1].control,
+            Control::Text {
+                max_length: Some(8)
+            }
+        );
     }
 
     #[test]

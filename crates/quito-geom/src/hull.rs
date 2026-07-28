@@ -23,6 +23,7 @@ pub fn convex_hull(pts: &[P]) -> Mesh {
     let mut best = -1.0;
     // extremes along each axis give good starting candidates
     let mut ext = Vec::new();
+    #[allow(clippy::needless_range_loop)] // `axis` indexes the [f64; 3] coordinate
     for axis in 0..3 {
         let mut lo = 0;
         let mut hi = 0;
@@ -134,7 +135,10 @@ pub fn convex_hull(pts: &[P]) -> Mesh {
 
     Mesh {
         verts: pts.to_vec(),
-        tris: faces.iter().map(|f| [f[0] as u32, f[1] as u32, f[2] as u32]).collect(),
+        tris: faces
+            .iter()
+            .map(|f| [f[0] as u32, f[1] as u32, f[2] as u32])
+            .collect(),
     }
 }
 

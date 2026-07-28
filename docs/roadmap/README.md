@@ -7,16 +7,18 @@ PWA, `$t` animation playback. CI is green and the playground is live at
 <https://matthova.github.io/faster-scad/>._
 
 This directory breaks the candidate next milestones into three tracks, each
-with a detailed writeup, plus a bundle of sub-day cherry-picks worth doing
-regardless of direction. Every claim below was verified against the code at
+with a detailed writeup. Every claim below was verified against the code at
 commit `34ee83a` (file/line references are to that state).
+
+The sub-day "cherry-pick" bundle (playground link, doc staleness, CI branch
+filter, and the clippy/fmt/tsc CI gates) has since landed and been removed from
+this directory.
 
 | track | doc | theme | effort | exit criterion (summary) |
 |---|---|---|---|---|
 | **A (recommended M6)** | [track-a-trustworthy-geometry.md](track-a-trustworthy-geometry.md) | Fix silent-wrong-geometry bugs; build the geometry oracle | ~3–4 weeks | `xtask geom` 60/60 golden cases vs OpenSCAD 2024.12 + `xtask bosl2` 16/16 with assertion checking, both in CI |
 | **B (proposed M7)** | [track-b-switcher-experience.md](track-b-switcher-experience.md) | Product parity for daily use: desktop Save, inline diagnostics, color/#/% rendering, PNG export | ~3 weeks | An OpenSCAD user can run a real project on Quito desktop without a workflow wall |
 | **C (fold into A/B)** | [track-c-ci-hardening.md](track-c-ci-hardening.md) | Make every headline claim machine-enforced on every PR | ~1.5–2 weeks | No claim in the README that CI doesn't check |
-| — | [cherry-picks.md](cherry-picks.md) | <1-day items: playground link, doc staleness, CI branch filter, clippy/fmt/tsc | ~2 days total | — |
 
 ## Why this ordering
 

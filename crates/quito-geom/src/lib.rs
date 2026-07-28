@@ -8,9 +8,9 @@ mod shape2d;
 mod tessellate;
 mod vector2d;
 
-pub use kernel::{BoolmeshKernel, Kernel, RustManifoldKernel};
 #[cfg(not(target_arch = "wasm32"))]
 pub use kernel::ManifoldKernel;
+pub use kernel::{BoolmeshKernel, Kernel, RustManifoldKernel};
 pub use mesh::Mesh;
 pub use shape2d::Contour;
 pub use tessellate::{cube, cylinder, fragments, polyhedron, sphere};
@@ -98,7 +98,11 @@ pub fn render_cached(
 ) -> Result<Mesh, GeomError> {
     let mut hashes = HashMap::new();
     hash_all(node, &mut hashes);
-    let mut ctx = Ctx { kernel, cache, hashes: &hashes };
+    let mut ctx = Ctx {
+        kernel,
+        cache,
+        hashes: &hashes,
+    };
     render_node(node, &mut ctx)
 }
 
@@ -122,8 +126,13 @@ pub fn is_2d(node: &Node) -> bool {
     match node {
         Square { .. } | Circle { .. } | Polygon { .. } | Offset { .. } | Projection { .. } => true,
         Import { format, .. } => matches!(format.as_str(), "dxf" | "svg"),
-        Cube { .. } | Sphere { .. } | Cylinder { .. } | Polyhedron { .. }
-        | LinearExtrude { .. } | RotateExtrude { .. } | Empty => false,
+        Cube { .. }
+        | Sphere { .. }
+        | Cylinder { .. }
+        | Polyhedron { .. }
+        | LinearExtrude { .. }
+        | RotateExtrude { .. }
+        | Empty => false,
         Translate { child, .. }
         | Rotate { child, .. }
         | Scale { child, .. }
@@ -189,9 +198,15 @@ fn render_uncached(node: &Node, ctx: &mut Ctx) -> Result<Mesh, GeomError> {
             &|cs| shape2d::linear_extrude(cs, *height, *center, *twist, *scale, *slices),
             ctx,
         ),
-        Node::RotateExtrude { angle, frags, child } => {
-            extrude_csg(child, &|cs| shape2d::rotate_extrude(cs, *angle, *frags), ctx)
-        }
+        Node::RotateExtrude {
+            angle,
+            frags,
+            child,
+        } => extrude_csg(
+            child,
+            &|cs| shape2d::rotate_extrude(cs, *angle, *frags),
+            ctx,
+        ),
         Node::Projection { cut, child } => {
             let mesh = render_node(child, ctx)?;
             let contours = if *cut {
@@ -304,7 +319,13 @@ fn hash_all(node: &Node, out: &mut HashMap<*const Node, u64>) -> u64 {
             bits(r, &mut h);
             frags(f, &mut h);
         }
-        Node::Cylinder { h: hh, r1, r2, center, frags: f } => {
+        Node::Cylinder {
+            h: hh,
+            r1,
+            r2,
+            center,
+            frags: f,
+        } => {
             bits(hh, &mut h);
             bits(r1, &mut h);
             bits(r2, &mut h);
@@ -337,7 +358,14 @@ fn hash_all(node: &Node, out: &mut HashMap<*const Node, u64>) -> u64 {
             }
             paths.hash(&mut h);
         }
-        Node::LinearExtrude { height, center, twist, scale, slices, child } => {
+        Node::LinearExtrude {
+            height,
+            center,
+            twist,
+            scale,
+            slices,
+            child,
+        } => {
             bits(height, &mut h);
             center.hash(&mut h);
             bits(twist, &mut h);
@@ -347,12 +375,22 @@ fn hash_all(node: &Node, out: &mut HashMap<*const Node, u64>) -> u64 {
             slices.hash(&mut h);
             hash_all(child, out).hash(&mut h);
         }
-        Node::RotateExtrude { angle, frags: f, child } => {
+        Node::RotateExtrude {
+            angle,
+            frags: f,
+            child,
+        } => {
             bits(angle, &mut h);
             frags(f, &mut h);
             hash_all(child, out).hash(&mut h);
         }
-        Node::Offset { r, delta, chamfer, frags: f, child } => {
+        Node::Offset {
+            r,
+            delta,
+            chamfer,
+            frags: f,
+            child,
+        } => {
             bits(r, &mut h);
             bits(delta, &mut h);
             chamfer.hash(&mut h);
@@ -505,9 +543,21 @@ fn mirror(m: &mut Mesh, v: Vec3) {
     }
     // Householder reflection I - 2 v vᵀ / (v·v).
     let h = [
-        [1.0 - 2.0 * v[0] * v[0] / d, -2.0 * v[0] * v[1] / d, -2.0 * v[0] * v[2] / d],
-        [-2.0 * v[1] * v[0] / d, 1.0 - 2.0 * v[1] * v[1] / d, -2.0 * v[1] * v[2] / d],
-        [-2.0 * v[2] * v[0] / d, -2.0 * v[2] * v[1] / d, 1.0 - 2.0 * v[2] * v[2] / d],
+        [
+            1.0 - 2.0 * v[0] * v[0] / d,
+            -2.0 * v[0] * v[1] / d,
+            -2.0 * v[0] * v[2] / d,
+        ],
+        [
+            -2.0 * v[1] * v[0] / d,
+            1.0 - 2.0 * v[1] * v[1] / d,
+            -2.0 * v[1] * v[2] / d,
+        ],
+        [
+            -2.0 * v[2] * v[0] / d,
+            -2.0 * v[2] * v[1] / d,
+            1.0 - 2.0 * v[2] * v[2] / d,
+        ],
     ];
     for p in &mut m.verts {
         let [x, y, z] = *p;
@@ -606,10 +656,16 @@ mod tests {
     fn union_of_two_cubes_volume() {
         // two unit cubes overlapping in half -> volume 1.5
         let node = Node::Union(vec![
-            Node::Cube { size: [1.0, 1.0, 1.0], center: false },
+            Node::Cube {
+                size: [1.0, 1.0, 1.0],
+                center: false,
+            },
             Node::Translate {
                 v: [0.5, 0.0, 0.0],
-                child: Box::new(Node::Cube { size: [1.0, 1.0, 1.0], center: false }),
+                child: Box::new(Node::Cube {
+                    size: [1.0, 1.0, 1.0],
+                    center: false,
+                }),
             },
         ]);
         let m = render(&node).unwrap();
@@ -620,26 +676,47 @@ mod tests {
     fn difference_hole() {
         // 20mm cube minus a through cylinder
         let node = Node::Difference(vec![
-            Node::Cube { size: [20.0, 20.0, 20.0], center: true },
+            Node::Cube {
+                size: [20.0, 20.0, 20.0],
+                center: true,
+            },
             Node::Cylinder {
                 h: 40.0,
                 r1: 5.0,
                 r2: 5.0,
                 center: true,
-                frags: FragmentSpec { fn_: 64.0, fa: 12.0, fs: 2.0 },
+                frags: FragmentSpec {
+                    fn_: 64.0,
+                    fa: 12.0,
+                    fs: 2.0,
+                },
             },
         ]);
         let m = render(&node).unwrap();
         let expected = 8000.0 - std::f64::consts::PI * 25.0 * 20.0;
         let rel = (m.volume() - expected).abs() / expected;
-        assert!(rel < 0.01, "difference volume off by {rel}, vol={}", m.volume());
+        assert!(
+            rel < 0.01,
+            "difference volume off by {rel}, vol={}",
+            m.volume()
+        );
     }
 
     #[test]
     fn intersection_box_sphere() {
         let node = Node::Intersection(vec![
-            Node::Cube { size: [10.0, 10.0, 10.0], center: true },
-            Node::Sphere { r: 6.0, frags: FragmentSpec { fn_: 64.0, fa: 12.0, fs: 2.0 } },
+            Node::Cube {
+                size: [10.0, 10.0, 10.0],
+                center: true,
+            },
+            Node::Sphere {
+                r: 6.0,
+                frags: FragmentSpec {
+                    fn_: 64.0,
+                    fa: 12.0,
+                    fs: 2.0,
+                },
+            },
         ]);
         let m = render(&node).unwrap();
         assert!(m.volume() > 0.0);
@@ -655,7 +732,10 @@ mod tests {
             twist: 0.0,
             scale: [1.0, 1.0],
             slices: 1,
-            child: Box::new(Node::Square { size: [4.0, 6.0], center: false }),
+            child: Box::new(Node::Square {
+                size: [4.0, 6.0],
+                center: false,
+            }),
         };
         let m = render(&node).unwrap();
         assert!((m.volume() - 240.0).abs() < 1e-6, "vol {}", m.volume());
@@ -675,17 +755,28 @@ mod tests {
                 cut: true,
                 child: Box::new(Node::Translate {
                     v: [0.0, 0.0, 1.0],
-                    child: Box::new(Node::Cube { size: [8.0, 6.0, 10.0], center: true }),
+                    child: Box::new(Node::Cube {
+                        size: [8.0, 6.0, 10.0],
+                        center: true,
+                    }),
                 }),
             }),
         };
         let m = render(&node).unwrap();
-        assert!((m.volume() - 144.0).abs() < 1e-6, "projection vol {}", m.volume());
+        assert!(
+            (m.volume() - 144.0).abs() < 1e-6,
+            "projection vol {}",
+            m.volume()
+        );
     }
 
     #[test]
     fn offset_shapes() {
-        let frags = FragmentSpec { fn_: 64.0, fa: 12.0, fs: 2.0 };
+        let frags = FragmentSpec {
+            fn_: 64.0,
+            fa: 12.0,
+            fs: 2.0,
+        };
         let ext = |child| Node::LinearExtrude {
             height: 1.0,
             center: false,
@@ -700,7 +791,10 @@ mod tests {
             delta: 2.0,
             chamfer: false,
             frags,
-            child: Box::new(Node::Square { size: [10.0, 10.0], center: false }),
+            child: Box::new(Node::Square {
+                size: [10.0, 10.0],
+                center: false,
+            }),
         }))
         .unwrap();
         assert!((m.volume() - 196.0).abs() < 1e-6, "miter {}", m.volume());
@@ -710,7 +804,10 @@ mod tests {
             delta: 0.0,
             chamfer: false,
             frags,
-            child: Box::new(Node::Square { size: [10.0, 10.0], center: false }),
+            child: Box::new(Node::Square {
+                size: [10.0, 10.0],
+                center: false,
+            }),
         }))
         .unwrap();
         assert!((m.volume() - 36.0).abs() < 1e-6, "inset {}", m.volume());
@@ -733,21 +830,34 @@ mod tests {
         // square(10) minus a 4×4 square hole → flat area 100 − 16 = 84 (the 3D
         // kernel would produce garbage on these coplanar flat meshes).
         let node = Node::Difference(vec![
-            Node::Square { size: [10.0, 10.0], center: false },
+            Node::Square {
+                size: [10.0, 10.0],
+                center: false,
+            },
             Node::Translate {
                 v: [3.0, 3.0, 0.0],
-                child: Box::new(Node::Square { size: [4.0, 4.0], center: false }),
+                child: Box::new(Node::Square {
+                    size: [4.0, 4.0],
+                    center: false,
+                }),
             },
         ]);
         let m = render(&node).unwrap();
-        assert!((flat_area(&m) - 84.0).abs() < 1e-6, "area {}", flat_area(&m));
+        assert!(
+            (flat_area(&m) - 84.0).abs() < 1e-6,
+            "area {}",
+            flat_area(&m)
+        );
     }
 
     #[test]
     fn bare_2d_intersection_and_union() {
         let sq = |x: f64, y: f64| Node::Translate {
             v: [x, y, 0.0],
-            child: Box::new(Node::Square { size: [10.0, 10.0], center: false }),
+            child: Box::new(Node::Square {
+                size: [10.0, 10.0],
+                center: false,
+            }),
         };
         // Overlap of two squares offset by 5 → 5×5 = 25.
         let inter = Node::Intersection(vec![sq(0.0, 0.0), sq(5.0, 5.0)]);
@@ -762,10 +872,16 @@ mod tests {
         // A mirror inside a 2D union must keep the mirrored child (regression:
         // render2d had no Mirror arm, so `mirror() halftooth` vanished — halving
         // every gear tooth). square [0,1]×[0,2] ∪ its y-mirror [0,1]×[-2,0] = 4.
-        let sq = Node::Square { size: [1.0, 2.0], center: false };
+        let sq = Node::Square {
+            size: [1.0, 2.0],
+            center: false,
+        };
         let node = Node::Union(vec![
             sq.clone(),
-            Node::Mirror { v: [0.0, 1.0, 0.0], child: Box::new(sq) },
+            Node::Mirror {
+                v: [0.0, 1.0, 0.0],
+                child: Box::new(sq),
+            },
         ]);
         let m = render(&node).unwrap();
         assert!((flat_area(&m) - 4.0).abs() < 1e-6, "area {}", flat_area(&m));
@@ -776,10 +892,17 @@ mod tests {
         // projection(cut=false) of a 10×20×30 box → its 10×20 footprint (200).
         let node = Node::Projection {
             cut: false,
-            child: Box::new(Node::Cube { size: [10.0, 20.0, 30.0], center: false }),
+            child: Box::new(Node::Cube {
+                size: [10.0, 20.0, 30.0],
+                center: false,
+            }),
         };
         let m = render(&node).unwrap();
-        assert!((flat_area(&m) - 200.0).abs() < 1e-3, "area {}", flat_area(&m));
+        assert!(
+            (flat_area(&m) - 200.0).abs() < 1e-3,
+            "area {}",
+            flat_area(&m)
+        );
     }
 
     #[test]
@@ -787,8 +910,14 @@ mod tests {
         // A 10×10 square with a centered 4×4 hole (even-odd), extruded 1 mm →
         // volume 100 − 16 = 84. Exercises the earcut hole triangulation.
         let points = vec![
-            [0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0], // outer
-            [3.0, 3.0], [3.0, 7.0], [7.0, 7.0], [7.0, 3.0], // hole
+            [0.0, 0.0],
+            [10.0, 0.0],
+            [10.0, 10.0],
+            [0.0, 10.0], // outer
+            [3.0, 3.0],
+            [3.0, 7.0],
+            [7.0, 7.0],
+            [7.0, 3.0], // hole
         ];
         let paths = Some(vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7]]);
         let node = Node::LinearExtrude {
@@ -806,21 +935,36 @@ mod tests {
 
     #[test]
     fn minkowski_rounded_cube() {
-        let frags = FragmentSpec { fn_: 24.0, fa: 12.0, fs: 2.0 };
+        let frags = FragmentSpec {
+            fn_: 24.0,
+            fa: 12.0,
+            fs: 2.0,
+        };
         let node = Node::Minkowski(vec![
-            Node::Cube { size: [10.0, 10.0, 10.0], center: true },
+            Node::Cube {
+                size: [10.0, 10.0, 10.0],
+                center: true,
+            },
             Node::Sphere { r: 2.0, frags },
         ]);
         let m = render(&node).unwrap();
         // matches OpenSCAD (~2592.88); allow small tessellation tolerance
-        assert!((m.volume() - 2592.88).abs() < 5.0, "minkowski vol {}", m.volume());
+        assert!(
+            (m.volume() - 2592.88).abs() < 5.0,
+            "minkowski vol {}",
+            m.volume()
+        );
         assert!(m.signed_volume() > 0.0);
     }
 
     #[test]
     fn extrude_2d_difference() {
         // linear_extrude of (square - circle) = a plate with a hole.
-        let frags = FragmentSpec { fn_: 64.0, fa: 12.0, fs: 2.0 };
+        let frags = FragmentSpec {
+            fn_: 64.0,
+            fa: 12.0,
+            fs: 2.0,
+        };
         let node = Node::LinearExtrude {
             height: 5.0,
             center: false,
@@ -828,7 +972,10 @@ mod tests {
             scale: [1.0, 1.0],
             slices: 1,
             child: Box::new(Node::Difference(vec![
-                Node::Square { size: [20.0, 20.0], center: true },
+                Node::Square {
+                    size: [20.0, 20.0],
+                    center: true,
+                },
                 Node::Circle { r: 5.0, frags },
             ])),
         };
@@ -842,7 +989,11 @@ mod tests {
     #[test]
     fn rotate_extrude_torus() {
         // circle r=2 at radius 10 revolved -> torus, volume 2*pi^2*R*r^2.
-        let frags = FragmentSpec { fn_: 64.0, fa: 12.0, fs: 2.0 };
+        let frags = FragmentSpec {
+            fn_: 64.0,
+            fa: 12.0,
+            fs: 2.0,
+        };
         let node = Node::RotateExtrude {
             angle: 360.0,
             frags,
@@ -860,10 +1011,17 @@ mod tests {
 
     #[test]
     fn cache_matches_cold_and_reuses() {
-        let frags = FragmentSpec { fn_: 32.0, fa: 12.0, fs: 2.0 };
+        let frags = FragmentSpec {
+            fn_: 32.0,
+            fa: 12.0,
+            fs: 2.0,
+        };
         let model = |r: f64| {
             Node::Difference(vec![
-                Node::Cube { size: [20.0, 20.0, 20.0], center: true },
+                Node::Cube {
+                    size: [20.0, 20.0, 20.0],
+                    center: true,
+                },
                 Node::Sphere { r, frags },
             ])
         };
@@ -880,20 +1038,32 @@ mod tests {
         // Re-rendering the identical tree adds nothing (pure cache hits).
         let again = render_cached(&model(8.0), &kernel, &mut cache).unwrap();
         assert!((again.volume() - warm.volume()).abs() < 1e-6);
-        assert_eq!(cache.len(), after_first, "identical re-render should not grow cache");
+        assert_eq!(
+            cache.len(),
+            after_first,
+            "identical re-render should not grow cache"
+        );
 
         // A warm edit (changed radius) reuses the unchanged cube leaf: only the
         // sphere and the difference are new, so the cache grows by exactly 2.
         let edited = render_cached(&model(7.0), &kernel, &mut cache).unwrap();
         let cold_edit = render_with(&model(7.0), &kernel).unwrap();
         assert!((edited.volume() - cold_edit.volume()).abs() < 1e-6);
-        assert_eq!(cache.len(), after_first + 2, "warm edit should reuse the cube leaf");
+        assert_eq!(
+            cache.len(),
+            after_first + 2,
+            "warm edit should reuse the cube leaf"
+        );
     }
 
     #[test]
     fn cache_cse_dedups_identical_subtrees() {
         // Two identical spheres in a union hash the same → rendered once.
-        let frags = FragmentSpec { fn_: 32.0, fa: 12.0, fs: 2.0 };
+        let frags = FragmentSpec {
+            fn_: 32.0,
+            fa: 12.0,
+            fs: 2.0,
+        };
         let node = Node::Union(vec![
             Node::Translate {
                 v: [0.0, 0.0, 0.0],
@@ -908,7 +1078,11 @@ mod tests {
         let mut cache = GeomCache::new();
         render_cached(&node, &kernel, &mut cache).unwrap();
         // Entries: 1 sphere (shared), 2 translates (distinct v), 1 union = 4.
-        assert_eq!(cache.len(), 4, "identical spheres should share one cache entry");
+        assert_eq!(
+            cache.len(),
+            4,
+            "identical spheres should share one cache entry"
+        );
     }
 
     #[test]
@@ -916,7 +1090,11 @@ mod tests {
         // Honeycomb borders commonly union two solids that share the same
         // cylindrical outer skin. The former browser kernel panicked while
         // rebuilding the resulting half-edge topology.
-        let frags = FragmentSpec { fn_: 64.0, fa: 12.0, fs: 2.0 };
+        let frags = FragmentSpec {
+            fn_: 64.0,
+            fa: 12.0,
+            fs: 2.0,
+        };
         let cylinder = |r| Node::Cylinder {
             h: 10.0,
             r1: r,
@@ -945,18 +1123,37 @@ mod tests {
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
     fn kernels_agree() {
-        let frags = FragmentSpec { fn_: 48.0, fa: 12.0, fs: 2.0 };
+        let frags = FragmentSpec {
+            fn_: 48.0,
+            fa: 12.0,
+            fs: 2.0,
+        };
         let cases = [
             Node::Union(vec![
-                Node::Cube { size: [10.0, 10.0, 10.0], center: true },
+                Node::Cube {
+                    size: [10.0, 10.0, 10.0],
+                    center: true,
+                },
                 Node::Sphere { r: 6.5, frags },
             ]),
             Node::Difference(vec![
-                Node::Cube { size: [20.0, 20.0, 20.0], center: true },
-                Node::Cylinder { h: 40.0, r1: 5.0, r2: 5.0, center: true, frags },
+                Node::Cube {
+                    size: [20.0, 20.0, 20.0],
+                    center: true,
+                },
+                Node::Cylinder {
+                    h: 40.0,
+                    r1: 5.0,
+                    r2: 5.0,
+                    center: true,
+                    frags,
+                },
             ]),
             Node::Intersection(vec![
-                Node::Cube { size: [10.0, 10.0, 10.0], center: true },
+                Node::Cube {
+                    size: [10.0, 10.0, 10.0],
+                    center: true,
+                },
                 Node::Sphere { r: 6.0, frags },
             ]),
         ];
