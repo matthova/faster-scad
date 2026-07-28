@@ -634,6 +634,15 @@ export function App() {
     window.setTimeout(() => setShareMsg(""), 2000);
   }
 
+  /** Download the active file's source as a .scad file (browser only; desktop
+   *  has native Save/Save As). */
+  function onDownloadScad() {
+    const file = filesRef.current[activeRef.current];
+    if (!file) return;
+    const name = file.name.endsWith(".scad") ? file.name : `${file.name}.scad`;
+    downloadBlob(new TextEncoder().encode(file.content), name);
+  }
+
   function newProject() {
     if (!window.confirm("Discard the current project and start fresh?")) return;
     clearProject();
@@ -1096,6 +1105,11 @@ export function App() {
           {!TAURI && (
             <button onClick={onShare} title="Copy a shareable link to this project">
               {shareMsg || "Share"}
+            </button>
+          )}
+          {!TAURI && (
+            <button onClick={onDownloadScad} title="Download the active file as .scad">
+              .scad
             </button>
           )}
           <span className="view-presets">
