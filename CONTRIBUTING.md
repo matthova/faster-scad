@@ -28,8 +28,11 @@ behavior in a way that differs from upstream, add a COMPAT entry.
 
 ## Tests
 
-- Interpreter features land with tests derived from documented behavior; the
-  echo/CSG/mesh oracle harnesses (diffing against a real OpenSCAD binary in CI)
-  arrive in M2/M3.
-- Geometry features land with volume/area/manifoldness checks.
+- Interpreter features land with tests derived from documented behavior. Two
+  oracle harnesses diff quito against a real OpenSCAD binary and run in CI against
+  committed goldens: the **echo oracle** (`xtask echo`, language behavior) and the
+  **geometry oracle** (`xtask geom`, mesh metrics — volume, bbox, centroid,
+  component count, manifoldness, opt-in triangle count). Regenerate goldens on a
+  dev machine with `xtask bless-echo` / `xtask bless-geom` (needs `openscad` on PATH).
+- Geometry features land with a `corpus/geom` case blessed against OpenSCAD.
 - Run `cargo test` before submitting.

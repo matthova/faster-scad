@@ -50,6 +50,12 @@ jobs:
       - name: BOSL2 function suite
         run: cargo run -p xtask -- bosl2
 
+      # The geometry oracle diffs quito's native render against committed
+      # goldens blessed from OpenSCAD 2024.12 (no OpenSCAD needed here). Hard-
+      # fails on any metric mismatch or an empty/missing corpus.
+      - name: Geometry oracle
+        run: cargo run -p xtask -- geom
+
       # The wasm engine must keep compiling for the browser target.
       - name: Build wasm engine target
         run: cargo build -p quito-wasm --target wasm32-unknown-unknown
