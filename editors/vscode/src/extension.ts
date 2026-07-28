@@ -8,9 +8,12 @@ import {
   ServerOptions,
   TransportKind,
 } from "vscode-languageclient/node";
-import { PreviewPanel } from "./preview";
+import { PreviewPanel, PreviewNotification } from "./preview";
 
 let client: LanguageClient | undefined;
+
+/** URI (as a string) of the document currently mirrored in the preview panel. */
+let previewUri: string | undefined;
 
 /**
  * Locate a Quito binary: an explicit setting wins, otherwise probe the
@@ -45,12 +48,66 @@ function startClient(context: vscode.ExtensionContext): LanguageClient {
     outputChannelName: "Quito Language Server",
   };
   const c = new LanguageClient("quito", "Quito OpenSCAD", serverOptions, clientOptions);
+
+  // The server pushes rendered geometry for previewed documents; route it to the
+  // panel when it's the document we're showing.
+  c.onNotification("quito/preview", (params: PreviewNotification) => {
+    if (params?.uri === previewUri) {
+      PreviewPanel.current?.push(params);
+    }
+  });
+
   c.start().catch((err) => {
     vscode.window.showErrorMessage(
       `Quito language server failed to start (${command}). Build it with \`cargo build --release -p quito-lsp\` or set quito.lsp.path. ${err}`
     );
   });
   return c;
+}
+
+/** Ask the language server to run one of its `workspace/executeCommand` verbs. */
+async function serverCommand(command: string, args: unknown[]): Promise<void> {
+  try {
+    await client?.sendRequest("workspace/executeCommand", { command, arguments: args });
+  } catch {
+    // The server may be down (e.g. mid-restart); the preview simply won't update.
+  }
+}
+
+/** Whether the preview should re-render as the user types (vs. on save only). */
+function previewIsLive(): boolean {
+  return vscode.workspace.getConfiguration("quito").get<boolean>("preview.autoRefresh", true);
+}
+
+function startPreview(uri: string): void {
+  void serverCommand("quito.startPreview", [uri, { live: previewIsLive() }]);
+}
+
+function stopPreview(uri: string): void {
+  void serverCommand("quito.stopPreview", [uri]);
+}
+
+/**
+ * Point the preview at `editor`'s document (if it's OpenSCAD), stopping the
+ * previous one. `force` re-starts even if the URI is unchanged (used when the
+ * webview (re)boots or the live setting changes).
+ */
+function switchPreviewTo(editor: vscode.TextEditor | undefined, force = false): void {
+  if (!PreviewPanel.current) {
+    return;
+  }
+  if (editor?.document.languageId !== "openscad") {
+    return;
+  }
+  const uri = editor.document.uri.toString();
+  if (uri === previewUri && !force) {
+    return;
+  }
+  if (previewUri && previewUri !== uri) {
+    stopPreview(previewUri);
+  }
+  previewUri = uri;
+  startPreview(uri);
 }
 
 /** Export the active document via the `quito` CLI, format chosen interactively. */
@@ -111,43 +168,35 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand("quito.openPreview", () => {
-      PreviewPanel.createOrShow(context);
+      PreviewPanel.createOrShow(context, {
+        // The webview is up; render whatever's active now.
+        onReady: () => switchPreviewTo(vscode.window.activeTextEditor, true),
+        onDispose: () => {
+          if (previewUri) {
+            stopPreview(previewUri);
+            previewUri = undefined;
+          }
+        },
+      });
     }),
     vscode.commands.registerCommand("quito.export", () => exportModel()),
     vscode.commands.registerCommand("quito.restartServer", async () => {
       await client?.stop();
       client = startClient(context);
+      // Re-register the live preview with the fresh server.
+      if (previewUri) {
+        startPreview(previewUri);
+      }
     })
   );
 
-  // Drive the live preview from editor activity.
-  let debounce: ReturnType<typeof setTimeout> | undefined;
-  const refresh = (doc: vscode.TextDocument, immediate: boolean) => {
-    if (doc.languageId !== "openscad" || !PreviewPanel.current) {
-      return;
-    }
-    const push = () => PreviewPanel.current?.update(doc);
-    if (immediate) {
-      push();
-      return;
-    }
-    if (debounce) {
-      clearTimeout(debounce);
-    }
-    debounce = setTimeout(push, 250);
-  };
-
   context.subscriptions.push(
-    vscode.workspace.onDidChangeTextDocument((e) => {
-      const auto = vscode.workspace.getConfiguration("quito").get<boolean>("preview.autoRefresh", true);
-      if (auto) {
-        refresh(e.document, false);
-      }
-    }),
-    vscode.workspace.onDidSaveTextDocument((doc) => refresh(doc, true)),
-    vscode.window.onDidChangeActiveTextEditor((ed) => {
-      if (ed) {
-        refresh(ed.document, true);
+    // Follow the active editor: the preview mirrors whichever .scad has focus.
+    vscode.window.onDidChangeActiveTextEditor((ed) => switchPreviewTo(ed)),
+    // Live-vs-save-only toggled: re-register the current preview with the flag.
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration("quito.preview.autoRefresh") && previewUri) {
+        startPreview(previewUri);
       }
     })
   );

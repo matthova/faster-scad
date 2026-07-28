@@ -16,6 +16,6 @@ quito-syntax = { workspace = true }
 quito-eval = { workspace = true }
 quito-geom = { workspace = true }
 tower-lsp = "0.20"
-tokio = { version = "1", features = ["rt-multi-thread", "io-std", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "io-std", "macros", "time"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

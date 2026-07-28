@@ -8,8 +8,9 @@ OpenSCAD language support and a live 3D preview, powered by the
 - **Diagnostics, hover, completion, and an outline** via the `quito-lsp` language
   server (parse/eval errors and warnings inline, signatures for built-ins and
   your own modules/functions).
-- **Live 3D preview** (`Quito: Open 3D Preview`) rendered in-editor by the wasm
-  engine — re-renders as you type (debounced) or on save.
+- **Live 3D preview** (`Quito: Open 3D Preview`) — geometry is rendered by the
+  `quito-lsp` server on the native kernel and streamed to an in-editor three.js
+  viewer, which re-renders as you type (debounced) or on save.
 - **Export** (`Quito: Export Model…`) to STL / 3MF / OBJ / OFF / AMF / DXF / SVG
   / PNG via the `quito` CLI.
 
@@ -37,17 +38,16 @@ already has them):
 cargo build --release -p quito-lsp -p quito-cli
 ```
 
-**2. Build the extension bundle and preview engine:**
+**2. Build the extension bundle:**
 
 ```sh
 cd editors/vscode
 npm install          # one time — pulls vscode-languageclient, three, esbuild
-npm run build:wasm   # compiles quito-wasm → media/engine (needs wasm-pack)
 npm run compile      # typecheck + bundle dist/extension.js and media/webview.js
 ```
 
-After this you should have `dist/extension.js`, `media/webview.js`, and
-`media/engine/quito.js` + `media/engine/quito_bg.wasm`.
+After this you should have `dist/extension.js` and `media/webview.js`. The
+preview no longer needs a wasm build — the server does the rendering.
 
 **3. Launch the Extension Development Host.** Open the `editors/vscode` folder in
 VS Code and press <kbd>F5</kbd> (Run → Start Debugging). A second VS Code window
@@ -79,8 +79,7 @@ change; then reload the Extension Development Host (<kbd>Ctrl</kbd>/<kbd>⌘</kb
 | --- | --- |
 | "Quito language server failed to start" | Build it (`cargo build --release -p quito-lsp`) or set `quito.lsp.path` to the binary. |
 | No diagnostics/hover | Confirm the file's language is **OpenSCAD** (bottom-right of the status bar); check the **Quito Language Server** output channel. |
-| "Quito preview engine is missing" | Run `npm run build:wasm` in `editors/vscode`. |
-| Preview stuck on "Loading engine…" | Reload the dev host after `build:wasm`; check the webview devtools (Command Palette → *Developer: Open Webview Developer Tools*). |
+| Preview stuck on "Rendering…" | The server owns rendering — confirm `quito-lsp` started (Quito Language Server output channel), then check the webview devtools (Command Palette → *Developer: Open Webview Developer Tools*). |
 | Export says the CLI wasn't found | Build it (`cargo build --release -p quito-cli`) or set `quito.cli.path`. |
 
 ## Settings
@@ -94,9 +93,13 @@ change; then reload the Extension Development Host (<kbd>Ctrl</kbd>/<kbd>⌘</kb
 ## How it fits together
 
 This extension is a thin client over the same engine the browser playground and
-CLI use:
+CLI use. The `quito-lsp` server is the geometry brain; the editor only supplies
+display surfaces:
 
 - **Language features** → `quito-lsp` (stdio LSP), which calls
   `parse → eval_program_with_params`.
-- **Preview** → `quito-wasm` (`render_with_files`) in the webview.
+- **Preview** → `quito-lsp` renders on the native kernel and pushes vertex
+  buffers to the webview via the `quito/preview` notification; the webview
+  (three.js) just draws them. `quito.startPreview` / `quito.stopPreview` register
+  which document is live.
 - **Export** → the `quito` CLI.

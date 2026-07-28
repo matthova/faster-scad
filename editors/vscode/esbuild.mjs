@@ -2,9 +2,8 @@
 //   * the extension host (Node/CommonJS, `vscode` external)  -> dist/extension.js
 //   * the webview viewer (browser/ESM, bundles three.js)     -> media/webview.js
 //
-// The wasm engine glue (media/engine/quito.js) is NOT bundled: the webview
-// imports it dynamically at runtime from a webview resource URI, so esbuild
-// leaves that `import(uri)` untouched.
+// The webview is a pure display surface: geometry is computed by the quito-lsp
+// server and pushed in via postMessage, so there's no wasm engine to bundle.
 
 import * as esbuild from "esbuild";
 

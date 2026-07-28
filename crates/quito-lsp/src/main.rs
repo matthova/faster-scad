@@ -12,7 +12,14 @@
 //!   * **Completion** — built-ins plus in-document symbols.
 //!   * **Document symbols** — an outline of the file's defs.
 //!   * **`quito.render` command** — render the document to a mesh/vector file
-//!     (STL/OFF/OBJ/3MF/AMF/DXF/SVG), so an editor plugin can drive a preview.
+//!     (STL/OFF/OBJ/3MF/AMF/DXF/SVG) on disk, returning stats.
+//!   * **Live preview streaming** — `quito.startPreview`/`quito.stopPreview`
+//!     commands register a document for live rendering; the server then pushes a
+//!     `quito/preview` notification (native-kernel geometry as base64 vertex
+//!     buffers, or an error) on start, on save, and — debounced — as the buffer
+//!     changes. Models using `color()`/`#`/`%` also carry a colored group
+//!     channel. The editor supplies only the display surface; the geometry is
+//!     computed here, on the fast native Manifold kernel.
 //!
 //! Evaluation and geometry run on a 256 MiB-stack worker thread (recursive
 //! libraries like BOSL2 nest the evaluator deeply), mirroring the CLI.
@@ -23,14 +30,33 @@ mod line_index;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use line_index::LineIndex;
 use quito_eval::{FileResolver, LoadedFile};
 use serde_json::json;
 use tower_lsp::jsonrpc::Result as RpcResult;
+use tower_lsp::lsp_types::notification::Notification;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
+
+/// The `include`/`use` resolver overlay: canonical path → live buffer source.
+type Overlay = HashMap<String, String>;
+/// Shared, mutable map of open documents (URI → current text).
+type Docs = Arc<Mutex<HashMap<Url, String>>>;
+
+/// How long the server waits for edits to settle before re-rendering a live
+/// preview. Diagnostics still run on every keystroke; only geometry is debounced.
+const PREVIEW_DEBOUNCE_MS: u64 = 200;
+
+/// The custom `quito/preview` notification: server → client, carrying a freshly
+/// rendered mesh (or an error) for a previewed document. See [`PreviewMsg`].
+enum QuitoPreview {}
+impl Notification for QuitoPreview {
+    type Params = serde_json::Value;
+    const METHOD: &'static str = "quito/preview";
+}
 
 /// A diagnostic as produced by the engine, before mapping to LSP coordinates.
 struct RawDiag {
@@ -261,24 +287,261 @@ fn render_to_file(
     }
 }
 
-/// The language server. Holds the set of open documents.
+/// Standard base64 (RFC 4648) — a few lines, so no dependency. Used to pack raw
+/// little-endian vertex buffers into the JSON `quito/preview` notification.
+fn base64_encode(data: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(T[((n >> 18) & 63) as usize] as char);
+        out.push(T[((n >> 12) & 63) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            T[((n >> 6) & 63) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            T[(n & 63) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
+/// Base64 of a `f32` slice as contiguous little-endian bytes, ready for the
+/// client to reinterpret as a `Float32Array` (browsers are little-endian).
+fn f32_slice_b64(v: &[f32]) -> String {
+    let mut bytes = Vec::with_capacity(v.len() * 4);
+    for f in v {
+        bytes.extend_from_slice(&f.to_le_bytes());
+    }
+    base64_encode(&bytes)
+}
+
+/// The colored preview channel: a single triangle soup plus a JSON array of
+/// per-group `{start, count, color, mode}` ranges (`color()`/`#`/`%`). Present
+/// only for models that use display attributes; plain models omit it.
+struct PreviewGroups {
+    positions: Vec<f32>,
+    normals: Vec<f32>,
+    groups: serde_json::Value,
+}
+
+/// A `quito/preview` payload: either a rendered mesh or an error message.
+enum PreviewMsg {
+    Ok {
+        /// Triangle-soup vertex positions, 9 f32 per triangle (fused mesh; the
+        /// source of truth for stats and the plain, uncolored view).
+        positions: Vec<f32>,
+        /// Per-face (flat) normals, 9 f32 per triangle.
+        normals: Vec<f32>,
+        triangles: usize,
+        vertices: usize,
+        volume: f64,
+        area: f64,
+        /// Colored preview channel, when the model uses `color()`/`#`/`%`.
+        groups: Option<PreviewGroups>,
+    },
+    Err(String),
+}
+
+impl PreviewMsg {
+    /// Serialize for the `quito/preview` notification, tagged with its document.
+    fn to_json(&self, uri: &Url) -> serde_json::Value {
+        match self {
+            PreviewMsg::Ok {
+                positions,
+                normals,
+                triangles,
+                vertices,
+                volume,
+                area,
+                groups,
+            } => {
+                let mut v = json!({
+                    "uri": uri.to_string(),
+                    "ok": true,
+                    "positions": f32_slice_b64(positions),
+                    "normals": f32_slice_b64(normals),
+                    "triangleCount": triangles,
+                    "vertexCount": vertices,
+                    "volume": volume,
+                    "area": area,
+                });
+                // Attach the colored channel only when present; the client falls
+                // back to the plain mesh otherwise.
+                if let Some(g) = groups {
+                    let obj = v.as_object_mut().unwrap();
+                    obj.insert(
+                        "previewPositions".into(),
+                        json!(f32_slice_b64(&g.positions)),
+                    );
+                    obj.insert("previewNormals".into(), json!(f32_slice_b64(&g.normals)));
+                    obj.insert("groups".into(), g.groups.clone());
+                }
+                v
+            }
+            PreviewMsg::Err(msg) => json!({
+                "uri": uri.to_string(),
+                "ok": false,
+                "error": msg,
+            }),
+        }
+    }
+}
+
+/// Parse + evaluate + render `source` to a triangle soup for live preview, on the
+/// native Manifold kernel. Mirrors the wasm engine's plain (non-colored) path, so
+/// the client renders identical geometry.
+fn render_preview(source: &str, base_dir: &str, overlay: Overlay) -> PreviewMsg {
+    let program = match quito_syntax::parse(source) {
+        Ok(p) => p,
+        Err(e) => return PreviewMsg::Err(format!("parse error: {}", e.message)),
+    };
+    let resolver = OverlayResolver {
+        overlay,
+        libs: openscad_libs(),
+    };
+    let out = match quito_eval::eval_program_with_params(&program, &resolver, base_dir, &[]) {
+        Ok(o) => o,
+        Err(e) => return PreviewMsg::Err(format!("evaluation error: {}", e.message)),
+    };
+    let kernel = quito_geom::ManifoldKernel::new();
+    let mut cache = quito_geom::GeomCache::new();
+    let (mesh, _warns) = match quito_geom::render_cached_warns(&out.node, &kernel, &mut cache) {
+        Ok(v) => v,
+        Err(e) => return PreviewMsg::Err(format!("geometry error: {e}")),
+    };
+    let (positions, normals) = mesh.to_triangle_soup_f32();
+
+    // Colored preview channel — only for models that use `color()`/`#`/`%`, so
+    // plain models keep the single-mesh path. Shares the cache with the fused
+    // render above, so opaque leaf meshes aren't recomputed just to color them.
+    let groups = if quito_geom::has_display_attrs(&out.node) {
+        match quito_geom::render_groups_cached(&out.node, &kernel, &mut cache) {
+            Ok(g) => {
+                let (positions, normals, json) = quito_geom::preview_channel(&g);
+                let groups = serde_json::from_str(&json).unwrap_or_else(|_| json!([]));
+                Some(PreviewGroups {
+                    positions,
+                    normals,
+                    groups,
+                })
+            }
+            // A grouped-render failure just drops color; the plain mesh still shows.
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+
+    PreviewMsg::Ok {
+        positions,
+        normals,
+        triangles: mesh.tris.len(),
+        vertices: mesh.verts.len(),
+        volume: mesh.volume(),
+        area: mesh.surface_area(),
+        groups,
+    }
+}
+
+/// Snapshot the open buffers as a `canonical-path → source` overlay for the
+/// `include`/`use` resolver.
+fn overlay_of(docs: &Docs) -> Overlay {
+    docs.lock()
+        .unwrap()
+        .iter()
+        .filter_map(|(uri, text)| {
+            let path = uri.to_file_path().ok()?;
+            Some((OverlayResolver::key_for(&path), text.clone()))
+        })
+        .collect()
+}
+
+/// Parse the `i`th command argument as a document `Url` (arguments arrive as
+/// JSON strings).
+fn arg_uri(params: &ExecuteCommandParams, i: usize) -> Option<Url> {
+    params
+        .arguments
+        .get(i)
+        .and_then(|v| v.as_str())
+        .and_then(|s| Url::parse(s).ok())
+}
+
+/// Render `uri`'s current buffer and push the result to the client as a
+/// `quito/preview` notification. Geometry runs on the big-stack worker thread.
+async fn render_and_push(client: &Client, docs: &Docs, uri: Url) {
+    let Some(text) = docs.lock().unwrap().get(&uri).cloned() else {
+        return;
+    };
+    let base = Backend::base_dir(&uri);
+    let overlay = overlay_of(docs);
+    let msg = tokio::task::spawn_blocking(move || {
+        on_big_stack(move || render_preview(&text, &base, overlay))
+            .unwrap_or_else(|_| PreviewMsg::Err("render thread panicked".into()))
+    })
+    .await
+    .unwrap_or_else(|e| PreviewMsg::Err(format!("render task failed: {e}")));
+    client
+        .send_notification::<QuitoPreview>(msg.to_json(&uri))
+        .await;
+}
+
+/// A registered live preview: a generation counter for debounce bookkeeping, and
+/// whether to re-render as the buffer changes (vs. on save only).
+struct PreviewState {
+    generation: u64,
+    live: bool,
+}
+
+/// The language server. Holds the set of open documents and active previews.
 struct Backend {
     client: Client,
     /// Open documents: URI → current text.
-    docs: Mutex<HashMap<Url, String>>,
+    docs: Docs,
+    /// Documents registered for live preview: URI → [`PreviewState`].
+    previews: Arc<Mutex<HashMap<Url, PreviewState>>>,
 }
 
 impl Backend {
     /// Snapshot the open buffers as a `canonical-path → source` overlay for the
     /// `include`/`use` resolver.
-    fn overlay(&self) -> HashMap<String, String> {
-        let docs = self.docs.lock().unwrap();
-        docs.iter()
-            .filter_map(|(uri, text)| {
-                let path = uri.to_file_path().ok()?;
-                Some((OverlayResolver::key_for(&path), text.clone()))
-            })
-            .collect()
+    fn overlay(&self) -> Overlay {
+        overlay_of(&self.docs)
+    }
+
+    /// Debounced re-render for a live preview. Called on every edit; only fires a
+    /// render once edits go quiet for [`PREVIEW_DEBOUNCE_MS`], and skips entirely
+    /// if the document isn't a live preview or a newer edit supersedes this one.
+    fn schedule_preview(&self, uri: Url) {
+        let generation = {
+            let mut previews = self.previews.lock().unwrap();
+            match previews.get_mut(&uri) {
+                Some(st) if st.live => {
+                    st.generation += 1;
+                    st.generation
+                }
+                _ => return,
+            }
+        };
+        let client = self.client.clone();
+        let docs = self.docs.clone();
+        let previews = self.previews.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(PREVIEW_DEBOUNCE_MS)).await;
+            // A newer edit bumped the generation, or the preview was stopped.
+            match previews.lock().unwrap().get(&uri) {
+                Some(st) if st.generation == generation => {}
+                _ => return,
+            }
+            render_and_push(&client, &docs, uri).await;
+        });
     }
 
     /// The base directory for resolving a document's relative includes.
@@ -346,7 +609,11 @@ impl LanguageServer for Backend {
                 }),
                 document_symbol_provider: Some(OneOf::Left(true)),
                 execute_command_provider: Some(ExecuteCommandOptions {
-                    commands: vec!["quito.render".into()],
+                    commands: vec![
+                        "quito.render".into(),
+                        "quito.startPreview".into(),
+                        "quito.stopPreview".into(),
+                    ],
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -378,17 +645,26 @@ impl LanguageServer for Backend {
         if let Some(change) = params.content_changes.pop() {
             let uri = params.text_document.uri.clone();
             self.docs.lock().unwrap().insert(uri.clone(), change.text);
-            self.publish(uri).await;
+            self.publish(uri.clone()).await;
+            // Live previews re-render (debounced) as the buffer changes.
+            self.schedule_preview(uri);
         }
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
+        let uri = params.text_document.uri;
         // Re-analyze (a saved dependency may change a dependent's diagnostics).
-        self.publish(params.text_document.uri).await;
+        self.publish(uri.clone()).await;
+        // A preview always refreshes on save, even when live rendering is off.
+        if self.previews.lock().unwrap().contains_key(&uri) {
+            render_and_push(&self.client, &self.docs, uri).await;
+        }
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
-        self.docs.lock().unwrap().remove(&params.text_document.uri);
+        let uri = params.text_document.uri;
+        self.docs.lock().unwrap().remove(&uri);
+        self.previews.lock().unwrap().remove(&uri);
     }
 
     async fn hover(&self, params: HoverParams) -> RpcResult<Option<Hover>> {
@@ -505,8 +781,38 @@ impl LanguageServer for Backend {
         &self,
         params: ExecuteCommandParams,
     ) -> RpcResult<Option<serde_json::Value>> {
-        if params.command != "quito.render" {
-            return Ok(None);
+        // Preview lifecycle commands are handled up front; the remainder of this
+        // function is the on-disk file export for `quito.render`.
+        match params.command.as_str() {
+            "quito.startPreview" => {
+                let Some(uri) = arg_uri(&params, 0) else {
+                    return Ok(Some(json!({"ok": false, "error": "invalid document URI"})));
+                };
+                // args[1] = optional `{ live: bool }` (default: render as you type).
+                let live = params
+                    .arguments
+                    .get(1)
+                    .and_then(|v| v.get("live"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+                self.previews.lock().unwrap().insert(
+                    uri.clone(),
+                    PreviewState {
+                        generation: 0,
+                        live,
+                    },
+                );
+                render_and_push(&self.client, &self.docs, uri).await;
+                return Ok(Some(json!({"ok": true})));
+            }
+            "quito.stopPreview" => {
+                if let Some(uri) = arg_uri(&params, 0) {
+                    self.previews.lock().unwrap().remove(&uri);
+                }
+                return Ok(Some(json!({"ok": true})));
+            }
+            "quito.render" => {}
+            _ => return Ok(None),
         }
         // args[0] = document URI (string); args[1] = optional output path (string).
         let uri_str = params
@@ -581,7 +887,8 @@ async fn main() {
     let stdout = tokio::io::stdout();
     let (service, socket) = LspService::new(|client| Backend {
         client,
-        docs: Mutex::new(HashMap::new()),
+        docs: Arc::new(Mutex::new(HashMap::new())),
+        previews: Arc::new(Mutex::new(HashMap::new())),
     });
     Server::new(stdin, stdout, socket).serve(service).await;
 }
