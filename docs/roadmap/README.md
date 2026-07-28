@@ -22,11 +22,12 @@ commit `34ee83a` (file/line references are to that state).
 
 The single organizing observation from the repo survey: **the remaining risk is
 silent wrong answers, not missing features.** Several very common constructs —
-`rotate(45, [1,1,0])`, `translate(v=…)`, concave `offset()`, non-convex
-`minkowski()`, `projection()` inside 2D booleans — currently produce **wrong
-geometry with no warning**, and the only oracle harness (echo, 24 cases) covers
-none of the geometry surface. For a switcher, one silently-wrong print is fatal
-to trust in a way a missing feature never is.
+concave `offset()`, non-convex `minkowski()`, `projection()` inside 2D booleans —
+currently produce **wrong geometry with no warning**, and the only oracle harness
+(echo, 24 cases) covers none of the geometry surface. (The transform-binding bug
+— `rotate(45, [1,1,0])` ignoring its axis, `translate(v=…)` binding nothing — is
+now fixed; see track A, A1.) For a switcher, one silently-wrong print is fatal to
+trust in a way a missing feature never is.
 
 Track A follows the project's own milestone discipline (M1's exit was "echo
 oracle diffs pass"; M6's should be "geometry oracle diffs pass"), subsumes the

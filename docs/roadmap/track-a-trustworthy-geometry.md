@@ -8,61 +8,15 @@ in CI on every PR.
 (echo goldens, dual-baseline perf tables), but geometry — the actual product —
 is the one surface with no oracle. The bugs below are exactly the kind that
 burn early adopters, because they don't error: they quietly produce a
-different shape. `rotate(45, [1,1,0])` appears in practically every real-world
-model and currently ignores the axis entirely.
+different shape.
 
-**Effort:** ~3–4 weeks. **Exit criterion** at the bottom.
+**Status:** A1 (transform argument binding + axis-angle `rotate`) is **done** —
+named/positional/mixed args now bind on all four transforms and `rotate(a, v)`
+lowers to `MultMatrix` via Rodrigues; covered by eval- and geometry-level
+regression tests (the latter blessed against OpenSCAD 2024.12). The remaining
+items below are still open.
 
----
-
-## A1. Fix transform argument binding + axis-angle `rotate` (highest priority)
-
-### The bug
-
-`transform()` in `crates/quito-eval/src/lib.rs:1023-1062` reads its argument
-with `first_positional()` (`lib.rs:1195`), which returns `Undef` when all
-arguments are named and ignores every positional after the first. Consequences,
-all silent:
-
-- `translate(v=[1,2,3])`, `rotate(a=45)`, `scale(v=2)`, `mirror(v=[1,0,0])`
-  bind `Undef` → the transform defaults to a zero vector. The child geometry
-  renders **untransformed**, no warning.
-- `rotate(a, v)` / `rotate(45, [1,1,0])` — the documented axis-angle form —
-  ignores the second positional entirely and treats `45` as Euler `[45,0,0]`.
-- `quito-ir`'s `Node::Rotate` (`crates/quito-ir/src/lib.rs:111`) stores only
-  Euler degrees (`deg: Vec3`, "applied X then Y then Z"), so there is no IR
-  representation an axis-angle rotation could lower to today — except
-  `MultMatrix`, which already exists.
-
-This is likely load-bearing for BOSL2 compat far beyond what it looks like:
-BOSL2 uses named arguments pervasively, so fixing binding may unlock geometry
-suites that currently can't even be attempted.
-
-### The fix
-
-1. Give the four transforms real signatures via the same named/positional
-   binding used for other builtins (the evaluator already has `bind`-style
-   machinery for module args): `translate(v)`, `rotate(a, v)`, `scale(v)`,
-   `mirror(v)`. Named, positional, and mixed forms must all work.
-2. Lower `rotate(a, v)` at eval time to the existing `Node::MultMatrix` using
-   the Rodrigues rotation formula (rotation about unit axis `v̂` by `a`
-   degrees). No new IR variant needed; the geometry cache keys on structure,
-   so `MultMatrix` participates in caching for free. Handle the documented
-   edge cases: `v` omitted or zero-length → fall back to Euler/z-rotation
-   semantics per the OpenSCAD manual; scalar `a` with `v` given → axis-angle;
-   vector `a` → Euler (existing path).
-3. While in there, decide-and-document scalar `scale(2)` → `[2,2,2]` and
-   2-element vectors (`translate([x,y])` → z=0), which real scripts rely on —
-   verify each against the oracle rather than assuming.
-
-### Regression protection
-
-Corpus cases (see A2) for: each named form, mixed named/positional, axis-angle
-against known volumes/bboxes (e.g. a cube rotated 45° about `[1,1,0]` has a
-distinctive axis-aligned bbox), zero-axis fallback, and a BOSL2-flavored case
-using named transforms in a module chain.
-
-**Effort: ~2–3 days.**
+**Effort:** ~3 weeks remaining (A2–A6). **Exit criterion** at the bottom.
 
 ---
 
@@ -111,8 +65,9 @@ and it catches reflections and wrong-direction offsets.
 - Primitives with `$fn/$fa/$fs` variations (sphere/cylinder/cube/square/circle
   /polygon/polyhedron/text) — include tessellation-count cases pinning the
   fragment formula.
-- Transforms: every named/positional form from A1, axis-angle, multmatrix,
-  mirror, resize with `auto`.
+- Transforms: named/positional/mixed forms of translate/rotate/scale/mirror,
+  axis-angle `rotate(a, v)` (already implemented — see the eval and render tests),
+  multmatrix, resize with `auto`.
 - Booleans: nested union/difference/intersection, coplanar-face cases, empty
   results (difference removing everything → 0 components).
 - Extrudes: linear_extrude twist/scale/slices/center, rotate_extrude angle,
@@ -285,7 +240,7 @@ is open-ended and can trail.**
 > counts exact where pinned) blessed against OpenSCAD 2024.12, **and**
 > `cargo run -p xtask -- bosl2` reports **16/16 with assertion-output
 > checking**, both enforced in CI on every PR (0/0, skipped files, or missing
-> corpus = red). Named-arg and axis-angle transforms, offset
-> self-intersection, and projection-in-2D-boolean are closed and covered by
-> corpus cases; non-convex minkowski at minimum emits a user-visible warning.
+> corpus = red). Named-arg and axis-angle transforms are already closed (A1);
+> offset self-intersection and projection-in-2D-boolean are closed and covered
+> by corpus cases; non-convex minkowski at minimum emits a user-visible warning.
 > COMPAT.md accurately lists every remaining known divergence.
