@@ -168,6 +168,55 @@ surface("wave.dat", center = true);
     ],
   },
   {
+    label: "Multi-color rocket (3MF)",
+    files: [
+      {
+        name: "main.scad",
+        content: `// Each part has its own color(), so exporting as 3MF keeps the colors
+// as separate objects for multi-material printing (pick 3MF in Download).
+$fn = 64;
+
+/* [Rocket] */
+body_d    = 24;   // [16:40]
+body_h    = 50;   // [30:80]
+nose_h    = 26;   // [12:40]
+fin_count = 4;    // [3:6]
+
+/* [Fins] */
+fin_len = 16;     // [8:28]
+fin_h   = 22;     // [10:36]
+fin_t   = 3;      // [1:6]
+
+body_r = body_d / 2;
+
+// Body
+color("Gainsboro")
+  cylinder(h = body_h, r = body_r);
+
+// Nose cone
+color("Crimson")
+  translate([0, 0, body_h])
+    cylinder(h = nose_h, r1 = body_r, r2 = 0);
+
+// Porthole window
+color("DeepSkyBlue")
+  translate([0, body_r - 1, body_h * 0.66])
+    rotate([-90, 0, 0])
+      cylinder(h = 3, r = body_r * 0.3);
+
+// Fins
+color("RoyalBlue")
+  for (i = [0 : fin_count - 1])
+    rotate([0, 0, i * 360 / fin_count])
+      translate([body_r - 1, 0, 0])
+        rotate([90, 0, 0])
+          linear_extrude(height = fin_t, center = true)
+            polygon([[0, 0], [fin_len, 0], [0, fin_h]]);
+`,
+      },
+    ],
+  },
+  {
     label: "BOSL2 rounded cuboid",
     files: [
       {

@@ -159,6 +159,18 @@ export async function saveSourceAs(content: string, defaultName = "untitled.scad
   return path;
 }
 
+/** Save binary bytes (e.g. a captured PNG) via a native save dialog. */
+export async function saveImageNative(bytes: Uint8Array, defaultName = "quito.png"): Promise<void> {
+  const { save } = await import("@tauri-apps/plugin-dialog");
+  const { invoke } = await import("@tauri-apps/api/core");
+  const path = await save({
+    defaultPath: defaultName,
+    filters: [{ name: "PNG", extensions: ["png"] }],
+  });
+  if (!path) return; // cancelled
+  await invoke("save_bytes", { path, bytes: Array.from(bytes) });
+}
+
 /** Watch every project file with a disk path for external edits. */
 export async function watchFiles(paths: string[]): Promise<void> {
   const { invoke } = await import("@tauri-apps/api/core");

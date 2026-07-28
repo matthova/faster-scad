@@ -9,7 +9,7 @@ users into an engine that still silently mis-rotates `rotate(45,[1,1,0])`
 (track A, item A1) converts adopters into detractors — trust first, comfort
 second. Sequenced as M7, it inherits a geometry engine users can rely on.
 
-**Effort:** ~1 week remaining.
+**Effort:** a few days remaining (B5 bundle).
 
 > **Done:** B1 (desktop Save source — `save_source`/`watch_files` commands, ⌘S /
 > Save As, native menu, dirty-tab indicator, watcher reentrancy, `.scad` file
@@ -20,42 +20,11 @@ second. Sequenced as M7, it inherits a geometry engine users can rely on.
 > isn't focused), and B3 (`color()`/`#`/`%` in the preview — color/highlight/
 > background IR nodes, a preview-only color-group partition rendered as per-group
 > three.js materials with a fused mesh kept for stats/export/oracle, and
-> per-object color 3MF export) shipped and are removed from this doc.
-
----
-
-## B4. Image (PNG) export — GUI button, then CLI `--render`
-
-### Current state
-
-No raster output exists anywhere. `crates/quito-cli/src/main.rs` (~lines
-188–197) dispatches only mesh/vector formats and has no `--render`/`--imgsize`
-/`--camera` flags; nothing in `web/src` or `desktop/` calls `toDataURL` or any
-capture path. OpenSCAD users script `openscad -o out.png --imgsize --camera`
-for thumbnails, documentation, and CI visual diffs — and Thingiverse-style
-workflows expect it.
-
-### Work items
-
-1. **Playground/desktop screenshot button (trivial first step)** — a "Copy
-   image / Save PNG" action on the viewer canvas. Needs
-   `preserveDrawingBuffer: true` on the WebGL context (or a
-   render-then-capture in the same frame) plus `canvas.toBlob`. Half a day
-   including UI.
-2. **CLI `--render out.png --imgsize WxH --camera …`** — headless, so no GL:
-   a small software rasterizer over the already-tessellated mesh
-   (orthographic + perspective, z-buffer, flat shading with the viewer's
-   default palette and background). The mesh is already in memory and models
-   are small by GPU standards; a few hundred lines, no new heavyweight deps
-   beyond the `png` crate (already in-tree via `quito-eval`'s heightmap
-   support). Camera syntax should accept OpenSCAD's documented
-   `--camera=tx,ty,tz,rx,ry,rz,dist` and `--viewall`/`--autocenter` so
-   existing scripts port unchanged.
-3. **Why it compounds**: PNG output + the golden corpus from track A enables
-   *visual* regression diffs later, and gives the README/social-preview
-   pipeline a native tool.
-
-**Effort: GUI trivial; CLI medium (~3–4 days).**
+> per-object color 3MF export), and B4 (PNG export — a Save-PNG button that
+> captures the three.js viewer in the playground and desktop app, plus a headless
+> pure-Rust CLI rasterizer, `quito … -o out.png` with OpenSCAD-style
+> `--imgsize`/`--camera`/`--projection`/`--viewall`/`--autocenter`, colored via the
+> B3 groups) shipped and are removed from this doc.
 
 ---
 
@@ -81,7 +50,7 @@ workflows expect it.
 
 ## Exit criterion
 
-> A user opens a multi-file OpenSCAD project in Quito desktop (saving with ⌘S,
-> inline error squiggles, and `color()`/`#`/`%` in the preview already work —
-> B1, B2, B3), and exports both an STL and a PNG thumbnail — without touching
-> OpenSCAD. (COMPAT.md divergence #5 is now closed.)
+> A user opens a multi-file OpenSCAD project in Quito desktop — ⌘S save, inline
+> error squiggles, `color()`/`#`/`%` in the preview, and STL + PNG export all work
+> now (B1–B4) — without touching OpenSCAD. (COMPAT.md divergence #5 is closed.)
+> The remaining B5 bundle is opportunistic parity polish.

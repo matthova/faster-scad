@@ -6,6 +6,8 @@ use quito_eval::{FileResolver, LoadedFile};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+mod raster;
+
 /// Resolves `include`/`use` paths from disk: relative to the including file,
 /// then each `OPENSCADPATH` library directory.
 struct DiskResolver {
@@ -63,12 +65,71 @@ struct Cli {
     /// the customizer.
     #[arg(short = 'D', long = "param", value_name = "NAME=VALUE")]
     params: Vec<String>,
+
+    /// PNG image size, e.g. `--imgsize 800,600` (or `800x600`). Default 512,512.
+    #[arg(long, value_name = "W,H")]
+    imgsize: Option<String>,
+
+    /// PNG camera: eye/center `ex,ey,ez,cx,cy,cz` (6 values) or OpenSCAD gimbal
+    /// `tx,ty,tz,rx,ry,rz,dist` (7). Omit to auto-frame the model.
+    #[arg(long, value_name = "…")]
+    camera: Option<String>,
+
+    /// PNG projection.
+    #[arg(long, value_enum, default_value_t = Proj::Perspective)]
+    projection: Proj,
+
+    /// PNG: frame the whole model, ignoring the camera distance.
+    #[arg(long)]
+    viewall: bool,
+
+    /// PNG: shift the model so its center is the view target.
+    #[arg(long)]
+    autocenter: bool,
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
 enum StlFormat {
     Binary,
     Ascii,
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+enum Proj {
+    Perspective,
+    Ortho,
+}
+
+/// Parse `--imgsize` (`W,H` or `WxH`).
+fn parse_imgsize(s: &str) -> Result<(u32, u32)> {
+    let parts: Vec<&str> = s.split([',', 'x', 'X']).collect();
+    if parts.len() != 2 {
+        anyhow::bail!("--imgsize expects W,H (e.g. 800,600)");
+    }
+    let w = parts[0].trim().parse().context("--imgsize width")?;
+    let h = parts[1].trim().parse().context("--imgsize height")?;
+    Ok((w, h))
+}
+
+/// Parse `--camera`: 6 numbers → eye/center, 7 → OpenSCAD gimbal.
+fn parse_camera(s: &str) -> Result<raster::Camera> {
+    let nums: Vec<f64> = s
+        .split(',')
+        .map(|p| p.trim().parse::<f64>())
+        .collect::<Result<_, _>>()
+        .context("--camera expects comma-separated numbers")?;
+    match nums.len() {
+        6 => Ok(raster::Camera::Eye {
+            eye: [nums[0], nums[1], nums[2]],
+            center: [nums[3], nums[4], nums[5]],
+        }),
+        7 => Ok(raster::Camera::Gimbal {
+            target: [nums[0], nums[1], nums[2]],
+            rot: [nums[3], nums[4], nums[5]],
+            dist: nums[6],
+        }),
+        n => anyhow::bail!("--camera expects 6 (eye,center) or 7 (gimbal) numbers, got {n}"),
+    }
 }
 
 fn main() -> Result<()> {
@@ -206,6 +267,41 @@ fn run() -> Result<()> {
             }
             "3mf" => std::fs::write(path, mesh.to_3mf())?,
             "amf" => std::fs::write(path, mesh.to_amf())?,
+            // PNG: headless software rasterizer over the colored groups (dropping
+            // `%` background), honoring --imgsize/--camera/--projection.
+            "png" => {
+                let (w, h) = match &cli.imgsize {
+                    Some(s) => parse_imgsize(s)?,
+                    None => (512, 512),
+                };
+                let camera = match &cli.camera {
+                    Some(s) => parse_camera(s)?,
+                    None => raster::Camera::Auto,
+                };
+                let projection = match cli.projection {
+                    Proj::Perspective => raster::Projection::Perspective { fov_deg: 45.0 },
+                    Proj::Ortho => raster::Projection::Ortho,
+                };
+                let groups =
+                    quito_geom::render_groups(&out.node).context("rendering color groups")?;
+                let colored: Vec<(&quito_geom::Mesh, [f32; 4])> = groups
+                    .iter()
+                    .filter(|g| g.mode != quito_geom::DisplayMode::Background)
+                    .map(|g| (&g.mesh, g.color))
+                    .collect();
+                let opts = raster::RenderOpts {
+                    width: w,
+                    height: h,
+                    camera,
+                    projection,
+                    viewall: cli.viewall,
+                    autocenter: cli.autocenter,
+                    ..Default::default()
+                };
+                let bytes = raster::render_png(&colored, &opts)
+                    .map_err(|e| anyhow::anyhow!("png render: {e}"))?;
+                std::fs::write(path, bytes)?;
+            }
             "stl" if matches!(cli.format, StlFormat::Ascii) => {
                 std::fs::write(path, mesh.to_ascii_stl(name))?
             }

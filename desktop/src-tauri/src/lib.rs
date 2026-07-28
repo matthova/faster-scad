@@ -500,6 +500,13 @@ fn save_source(
     })
 }
 
+/// Write arbitrary bytes to `path` (e.g. a captured PNG). No watcher marker —
+/// image files aren't tracked as editable source.
+#[tauri::command]
+fn save_bytes(path: String, bytes: Vec<u8>) -> Result<(), String> {
+    std::fs::write(&path, bytes).map_err(|e| format!("write {path}: {e}"))
+}
+
 /// Watch a set of project files (every tab with a disk path) for external edits.
 /// Replaces the current watcher set.
 #[tauri::command]
@@ -598,6 +605,7 @@ pub fn run() {
             render,
             save_model,
             save_source,
+            save_bytes,
             watch_files,
             take_pending_open,
             parameters,
