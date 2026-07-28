@@ -1,0 +1,76 @@
+{
+  "name": "quito-openscad",
+  "displayName": "Quito OpenSCAD",
+  "description": "OpenSCAD language support and live 3D preview, powered by the Quito engine.",
+  "version": "0.0.1",
+  "publisher": "quito-cad",
+  "license": "Apache-2.0 OR MIT",
+  "repository": { "type": "git", "url": "https://github.com/quito-cad/quito" },
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Programming Languages", "Visualization"],
+  "main": "./dist/extension.js",
+  "activationEvents": ["onLanguage:openscad"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "openscad",
+        "aliases": ["OpenSCAD", "openscad"],
+        "extensions": [".scad"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "commands": [
+      { "command": "quito.openPreview", "title": "Quito: Open 3D Preview", "category": "Quito" },
+      { "command": "quito.export", "title": "Quito: Export Model…", "category": "Quito" },
+      { "command": "quito.restartServer", "title": "Quito: Restart Language Server", "category": "Quito" }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "quito.openPreview",
+          "when": "resourceLangId == openscad",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Quito OpenSCAD",
+      "properties": {
+        "quito.lsp.path": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the quito-lsp binary. If empty, the extension looks in the workspace's target/{release,debug} directories, then PATH."
+        },
+        "quito.cli.path": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the quito CLI binary (used by Quito: Export Model). If empty, the extension looks in target/{release,debug}, then PATH."
+        },
+        "quito.preview.autoRefresh": {
+          "type": "boolean",
+          "default": true,
+          "description": "Re-render the 3D preview as you type (debounced). When off, the preview refreshes on save only."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build:wasm": "wasm-pack build ../../crates/quito-wasm --target web --out-dir ../../editors/vscode/media/engine --out-name quito",
+    "build": "node esbuild.mjs",
+    "typecheck": "tsc --noEmit",
+    "compile": "npm run typecheck && npm run build",
+    "watch": "node esbuild.mjs --watch",
+    "vscode:prepublish": "npm run build:wasm && npm run build"
+  },
+  "dependencies": {
+    "three": "^0.169.0",
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/three": "^0.169.0",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.23.0",
+    "typescript": "^5.5.3"
+  }
+}
