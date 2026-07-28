@@ -51,6 +51,14 @@ the dangerous kind. Each has a minimal repro. Tracks A/B track the fixes.
   echo(rands(0, 1, 3, seed = 42));     // reproducible, but ≠ OpenSCAD's values
   ```
 
+- **BOSL2 function-suite coverage is partial (recorded, gated).** `cargo run -p
+  xtask -- bosl2` runs **every** `[[test]]` block of the 15 function-oriented
+  files and currently passes **422/513**; the rest exercise unimplemented
+  language corners (chiefly `test_fnliterals`, 26/88 — advanced function-literal
+  edge cases). The passing set is pinned per file under `corpus/golden/bosl2/`,
+  so these gaps are recorded and a regression fails CI — they are not a silent
+  loss. Closing them is open-ended and tracked separately.
+
 ## Closed since M0
 
 All oracle-checked; `corpus/echo` passes **24/24** and BOSL2's function suite

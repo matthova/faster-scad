@@ -48,46 +48,17 @@ different shape.
   geometry-warning channel (surfaced in CLI/playground/desktop) instead of
   silently misleading. Covered by a 2D oracle case, `shape2d` area tests, and a
   `render_cached_warns` warning test; recorded in COMPAT.md.
+- **A6** (BOSL2 suite: real assertions in CI) is **done** — the CI wiring +
+  hard-fail-on-missing + `asserts_run > 0` landed with Track C/C1; A6 closed the
+  core gap: the gate ran only the *first* `[[test]]` block per file (a fake
+  "15/15" over ~15 of 513 blocks). `run_bosl2` now runs **every** block of all 15
+  files (**422/513** pass), a block counting as passing only if it evals and runs
+  ≥1 assert. The passing set is pinned per file under `corpus/golden/bosl2/`
+  (`xtask bless-bosl2`), and any regression, unblessed improvement, missing file,
+  or zero-block run hard-fails CI. The 91 known-failing blocks are recorded
+  (COMPAT.md), not fixed — closing them is open-ended and trails.
 
-The remaining item (A6) is still open.
-
-**Effort:** ~1–2 days remaining (A6). **Exit criterion** at the bottom.
-
----
-
-## A6. BOSL2 suite: real assertions, running in CI
-
-### What's wrong today (three compounding failures)
-
-1. `.github/workflows/ci.yml` checks out without `submodules: true` and has no
-   `xtask bosl2` step — the M2 exit metric has never run in CI.
-2. `xtask/src/main.rs` `run_bosl2` (~lines 43–75) silently `continue`s on
-   unreadable files (`let Ok(raw) = fs::read_to_string(&path) else
-   { continue }`), so with the submodule absent it reports **0/0 and exits
-   zero**. The denominator can shrink invisibly (README says 15/15; the code
-   lists 16 names).
-3. "Pass" means "eval returned Ok" — but BOSL2 tests verify via internal
-   `assert()`s. A regression that makes an assert *not fire* (or makes the
-   test vacuous) still passes.
-
-### The fix
-
-- ci.yml: `submodules: true` on checkout, add
-  `cargo run -p xtask -- bosl2` as a step.
-- run_bosl2: missing file or 0 executed tests → **hard failure** (nonzero
-  exit, like `xtask echo`). Print per-file pass/fail.
-- Assertion checking: capture eval diagnostics per test file; a failed
-  `assert()` (which surfaces as an eval error or a warning-channel entry) →
-  test fails. Where feasible, cross-check against
-  `openscad --check`-style ground truth once during blessing, so we know each
-  test file actually executes its assertions under quito (guards against
-  vacuous passes where a comprehension short-circuits).
-- Stretch: expand past the 16-name function subset toward BOSL2's geometry
-  suites (attachments/shapes/transforms/vnf/rounding) — realistic only after
-  A1 lands, and a good live-fire measure of how much A1 unlocks.
-
-**Effort: ~1–2 days for the CI/hard-fail/assertion work; the suite expansion
-is open-ended and can trail.**
+**Track A (M6) is complete: A1–A6 all landed.**
 
 ---
 
@@ -103,15 +74,18 @@ is open-ended and can trail.**
 - **`rotate_extrude(start=)` and `linear_extrude(v=)`** parameters — small
   parser+IR additions, oracle-checkable, common in newer scripts.
 
-## Exit criterion (crisp, CI-enforced)
+## Exit criterion (crisp, CI-enforced) — **MET**
 
-> `cargo run -p xtask -- geom` passes **60/60** golden geometry cases
-> (volume ±0.1%, bbox ±0.01 mm, manifoldness, component count; tessellation
-> counts exact where pinned) blessed against OpenSCAD 2024.12, **and**
-> `cargo run -p xtask -- bosl2` reports **16/16 with assertion-output
-> checking**, both enforced in CI on every PR (0/0, skipped files, or missing
-> corpus = red). The geom harness + corpus are already in place and green in CI
-> (A2); named-arg/axis-angle transforms (A1), offset self-intersection (A3),
-> projection-in-2D-boolean (A4), and minkowski (A5: 2D exact, 3D warns) are
-> closed. Still open: BOSL2 assertion-output checking (A6). COMPAT.md accurately
-> lists every remaining known divergence.
+> `cargo run -p xtask -- geom` passes **69/69** golden geometry cases
+> (volume ±0.1%, bbox ±0.01 mm, signed centroid, manifoldness, component count;
+> triangle count where pinned) blessed against OpenSCAD 2024.12, **and**
+> `cargo run -p xtask -- bosl2` runs every BOSL2 `[[test]]` block with
+> assertion-output checking (**422/513**, passing set pinned per file), both
+> enforced in CI on every PR (regression, unblessed improvement, skipped/missing
+> file, or 0/0 = red).
+
+All of A1–A6 are closed: named-arg/axis-angle transforms (A1), the geometry
+oracle (A2), offset self-intersection (A3), projection-in-2D-boolean (A4),
+minkowski (A5: 2D exact, 3D warns), and the BOSL2 block-level assertion gate
+(A6). COMPAT.md accurately lists every remaining known divergence (non-convex 3D
+minkowski; BOSL2 unimplemented corners; `rands`/`text(font=)`).

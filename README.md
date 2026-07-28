@@ -16,8 +16,9 @@ in your browser: <https://matthova.github.io/faster-scad/>.**
 > in-browser `include`/`use` and lazy library fetching, **STL/OFF/OBJ export**, a
 > **console**, **localStorage persistence**, and an installable/offline **PWA**.
 > An echo oracle (24/24) diffs the language against real OpenSCAD, a geometry
-> oracle (60/60) diffs rendered meshes against OpenSCAD 2024.12, and BOSL2's
-> function suite passes 15/15. The full plan is in
+> oracle (69/69) diffs rendered meshes against OpenSCAD 2024.12, and BOSL2's
+> function suite runs every `[[test]]` block (422/513 pass, baseline-gated in CI
+> so a regression can't hide behind a green file). The full plan is in
 > `.context/attachments/HoR0PL/plan.md`; research is in `.context/research/`.
 
 ## What works today (M0 native)
@@ -115,7 +116,7 @@ models the meshes are **bit-for-bit identical in topology and volume**:
 
 Output meshes are watertight and 2-manifold (every edge shared by exactly two
 triangles). This is enforced continuously by the **geometry oracle**
-(`cargo run -p xtask -- geom`): a 60-case corpus (`corpus/geom`) spanning
+(`cargo run -p xtask -- geom`): a 69-case corpus (`corpus/geom`) spanning
 primitives, transforms, booleans, extrudes, the 2D pipeline, hull/minkowski,
 imports, and `surface`, each blessed from OpenSCAD 2024.12 and checked in CI on
 volume (±0.1%), bbox and signed centroid (±0.01 mm), connected-component count,
