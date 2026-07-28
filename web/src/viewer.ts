@@ -12,6 +12,10 @@ export interface MeshInfo {
 /** A named camera orientation. */
 export type ViewPreset = "iso" | "front" | "back" | "top" | "bottom" | "right" | "left";
 
+/** Camera projection: `perspective` (foreshortened) or `orthographic` (parallel,
+ *  so an iso preset renders as a true isometric view). */
+export type Projection = "perspective" | "orthographic";
+
 /** A colored preview group: a triangle range (vertex offsets) + color + mode. */
 export interface PreviewGroup {
   start: number;
@@ -23,8 +27,12 @@ export interface PreviewGroup {
 export class Viewer {
   private renderer: THREE.WebGLRenderer;
   private scene: THREE.Scene;
-  private camera: THREE.PerspectiveCamera;
+  private perspCamera: THREE.PerspectiveCamera;
+  private orthoCamera: THREE.OrthographicCamera;
+  private camera: THREE.PerspectiveCamera | THREE.OrthographicCamera;
   private controls: OrbitControls;
+  private projection: Projection = "perspective";
+  private changeListeners = new Set<() => void>();
   private mesh: THREE.Mesh | null = null;
   private geometry: THREE.BufferGeometry | null = null;
   private materials: THREE.Material[] = [];
@@ -46,12 +54,18 @@ export class Viewer {
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x1a1d23);
 
-    this.camera = new THREE.PerspectiveCamera(45, 1, 0.01, 100000);
-    this.camera.up.set(0, 0, 1); // Z-up, like OpenSCAD
-    this.camera.position.set(60, -80, 50);
+    this.perspCamera = new THREE.PerspectiveCamera(45, 1, 0.01, 100000);
+    this.perspCamera.up.set(0, 0, 1); // Z-up, like OpenSCAD
+    this.perspCamera.position.set(60, -80, 50);
 
-    this.controls = new OrbitControls(this.camera, this.renderer.domElement);
-    this.controls.enableDamping = true;
+    // The orthographic camera shadows the perspective one; its frustum is
+    // recomputed on framing/resize/toggle so both show the same extent.
+    this.orthoCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 100000);
+    this.orthoCamera.up.set(0, 0, 1);
+    this.orthoCamera.position.copy(this.perspCamera.position);
+
+    this.camera = this.perspCamera;
+    this.controls = this.makeControls();
 
     const key = new THREE.DirectionalLight(0xffffff, 2.2);
     key.position.set(40, -60, 80);
@@ -71,6 +85,16 @@ export class Viewer {
     this.animate();
   }
 
+  /** Bind fresh OrbitControls to the active camera, re-attaching any registered
+   *  change listeners. Called on construction and whenever the projection (and
+   *  thus the camera instance) changes. */
+  private makeControls(): OrbitControls {
+    const controls = new OrbitControls(this.camera, this.renderer.domElement);
+    controls.enableDamping = true;
+    for (const cb of this.changeListeners) controls.addEventListener("change", cb);
+    return controls;
+  }
+
   private animate = () => {
     requestAnimationFrame(this.animate);
     this.controls.update();
@@ -83,8 +107,14 @@ export class Viewer {
     const h = canvas.clientHeight;
     if (w === 0 || h === 0) return;
     this.renderer.setSize(w, h, false);
-    this.camera.aspect = w / h;
-    this.camera.updateProjectionMatrix();
+    const aspect = w / h;
+    this.perspCamera.aspect = aspect;
+    this.perspCamera.updateProjectionMatrix();
+    // Keep the ortho frustum height fixed; rederive its width from the aspect.
+    const halfH = (this.orthoCamera.top - this.orthoCamera.bottom) / 2;
+    this.orthoCamera.left = -halfH * aspect;
+    this.orthoCamera.right = halfH * aspect;
+    this.orthoCamera.updateProjectionMatrix();
   }
 
   /** Remove and dispose the current mesh, its geometry, and its material(s). */
@@ -191,6 +221,19 @@ export class Viewer {
     }
   }
 
+  /** Size the ortho frustum to a given half-height, deriving width from the
+   *  canvas aspect. */
+  private setOrthoFrustum(halfHeight: number) {
+    const canvas = this.renderer.domElement;
+    const aspect = canvas.clientWidth / canvas.clientHeight || 1;
+    this.orthoCamera.top = halfHeight;
+    this.orthoCamera.bottom = -halfHeight;
+    this.orthoCamera.left = -halfHeight * aspect;
+    this.orthoCamera.right = halfHeight * aspect;
+    this.orthoCamera.zoom = 1;
+    this.orthoCamera.updateProjectionMatrix();
+  }
+
   private frame(geom: THREE.BufferGeometry) {
     const box = geom.boundingBox!;
     const size = new THREE.Vector3();
@@ -198,12 +241,55 @@ export class Viewer {
     box.getSize(size);
     box.getCenter(center);
     const radius = Math.max(size.x, size.y, size.z) * 0.75 + 1;
-    const dist = radius / Math.sin((this.camera.fov * Math.PI) / 360);
+    // Position both cameras at the same distance (from the perspective fov) so
+    // toggling projection after a frame keeps the eye in place.
+    const dist = radius / Math.sin((this.perspCamera.fov * Math.PI) / 360);
     const { dir, up } = this.presetVectors(this.preset);
     this.camera.up.copy(up);
     this.camera.position.copy(center.clone().add(dir.clone().normalize().multiplyScalar(dist)));
+    if (this.camera instanceof THREE.OrthographicCamera) this.setOrthoFrustum(radius);
     this.controls.target.copy(center);
     this.controls.update();
+  }
+
+  /** Switch between perspective and orthographic projection, preserving the eye
+   *  position, orbit target, and apparent size of the model. */
+  setProjection(mode: Projection) {
+    if (mode === this.projection) return;
+    const from = this.camera;
+    const target = this.controls.target.clone();
+    const to = mode === "orthographic" ? this.orthoCamera : this.perspCamera;
+
+    to.position.copy(from.position);
+    to.up.copy(from.up);
+    to.quaternion.copy(from.quaternion);
+
+    const dir = from.position.clone().sub(target);
+    const dist = dir.length();
+    const halfFov = (this.perspCamera.fov * Math.PI) / 360;
+    if (mode === "orthographic") {
+      // Match the perspective frustum height at the target plane.
+      this.setOrthoFrustum(dist * Math.tan(halfFov));
+    } else {
+      // Move the eye so the perspective frustum spans the ortho view's height.
+      const halfH = ((this.orthoCamera.top - this.orthoCamera.bottom) / 2) / this.orthoCamera.zoom;
+      const d = halfH / Math.tan(halfFov);
+      to.position.copy(target.clone().add(dir.normalize().multiplyScalar(d)));
+      to.updateProjectionMatrix();
+    }
+
+    this.camera = to;
+    this.projection = mode;
+
+    // OrbitControls is bound to a single camera; rebind to the new one.
+    this.controls.dispose();
+    this.controls = this.makeControls();
+    this.controls.target.copy(target);
+    this.controls.update();
+  }
+
+  getProjection(): Projection {
+    return this.projection;
   }
 
   /** Snap the camera to a named orientation, keeping the model framed. */
@@ -232,7 +318,7 @@ export class Viewer {
       vpr: [deg(rx), deg(ry), 0],
       vpt: [t.x, t.y, t.z],
       vpd,
-      vpf: this.camera.fov,
+      vpf: this.perspCamera.fov,
     };
   }
 
@@ -264,9 +350,9 @@ export class Viewer {
     this.camera.position.copy(eye);
     this.camera.up.copy(rot(new THREE.Vector3(0, 1, 0)).normalize());
     this.controls.target.copy(target);
-    if (this.camera.fov !== vpf) {
-      this.camera.fov = vpf;
-      this.camera.updateProjectionMatrix();
+    if (this.perspCamera.fov !== vpf) {
+      this.perspCamera.fov = vpf;
+      this.perspCamera.updateProjectionMatrix();
     }
     this.controls.update();
   }
@@ -274,8 +360,12 @@ export class Viewer {
   /** Register a camera-change callback (OrbitControls `change`). Returns an
    *  unsubscribe fn. */
   onCameraChange(cb: () => void): () => void {
+    this.changeListeners.add(cb);
     this.controls.addEventListener("change", cb);
-    return () => this.controls.removeEventListener("change", cb);
+    return () => {
+      this.changeListeners.delete(cb);
+      this.controls.removeEventListener("change", cb);
+    };
   }
 
   /** Capture the current view as a PNG blob (renders one frame first). */
