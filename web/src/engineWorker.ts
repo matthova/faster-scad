@@ -35,6 +35,12 @@ export interface RenderResponse {
   /** Structured diagnostics JSON (`[{severity,message,start,end}]`) for inline
    *  editor squiggles; start/end are byte offsets into the source, or -1. */
   diagnostics: string;
+  /** Preview color channel — a concatenated triangle soup and a JSON array of
+   *  per-group `{start,count,color,mode}`. Empty when the model uses no
+   *  `color`/`#`/`%` (the viewer then uses `positions`). */
+  previewPositions: Float32Array;
+  previewNormals: Float32Array;
+  groups: string;
 }
 
 const ready = init();
@@ -78,12 +84,17 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
       version: "",
       params,
       diagnostics: "[]",
+      previewPositions: new Float32Array(0),
+      previewNormals: new Float32Array(0),
+      groups: "",
     } satisfies RenderResponse);
     return;
   }
 
   const positions = res.positions;
   const normals = res.normals;
+  const previewPositions = res.preview_positions;
+  const previewNormals = res.preview_normals;
   const msg: RenderResponse = {
     seq,
     ok: res.ok,
@@ -101,7 +112,15 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
     version: version(),
     params,
     diagnostics: res.diagnostics,
+    previewPositions,
+    previewNormals,
+    groups: res.groups,
   };
   res.free();
-  (self as unknown as Worker).postMessage(msg, [positions.buffer, normals.buffer]);
+  (self as unknown as Worker).postMessage(msg, [
+    positions.buffer,
+    normals.buffer,
+    previewPositions.buffer,
+    previewNormals.buffer,
+  ]);
 };

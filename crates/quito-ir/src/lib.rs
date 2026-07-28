@@ -152,6 +152,20 @@ pub enum Node {
         cut: bool,
         child: Box<Node>,
     },
+
+    // --- display attributes (preview only; transparent to fused geometry) ---
+    /// `color(c, alpha)` — tints the child's *result* in the preview. `rgba` is
+    /// linear 0..1. Geometry is unaffected (the child renders identically fused).
+    Color {
+        rgba: [f32; 4],
+        child: Box<Node>,
+    },
+    /// `#` highlight — child is drawn translucent-red in the preview but is
+    /// otherwise normal geometry (kept in exports).
+    Highlight(Box<Node>),
+    /// `%` background — child is drawn translucent-gray in the preview and is
+    /// **excluded** from the rendered/exported mesh (documented OpenSCAD `%`).
+    Background(Box<Node>),
 }
 
 impl Node {

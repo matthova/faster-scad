@@ -9,7 +9,7 @@ users into an engine that still silently mis-rotates `rotate(45,[1,1,0])`
 (track A, item A1) converts adopters into detractors — trust first, comfort
 second. Sequenced as M7, it inherits a geometry engine users can rely on.
 
-**Effort:** ~1.5 weeks remaining.
+**Effort:** ~1 week remaining.
 
 > **Done:** B1 (desktop Save source — `save_source`/`watch_files` commands, ⌘S /
 > Save As, native menu, dirty-tab indicator, watcher reentrancy, `.scad` file
@@ -17,46 +17,10 @@ second. Sequenced as M7, it inherits a geometry engine users can rely on.
 > through the AST/evaluator, a structured `diagnostics` JSON channel across the
 > wasm + Tauri boundaries, and `@codemirror/lint` squiggles: red for errors,
 > yellow for warnings, cleared on success, with a badge on the main tab when it
-> isn't focused) shipped and are removed from this doc.
-
----
-
-## B3. `color()`, `#`, `%` — visual semantics in the preview
-
-### Current state
-
-`color()` is evaluated as a passthrough group (`quito-eval/src/lib.rs:589`) —
-the argument is discarded, so every model renders uniform orange, and exports
-that could carry color (3MF) don't. The `#` (highlight) and `%` (background)
-modifiers are parsed and passed through with no visual treatment —
-`quito-eval/src/lib.rs:553` has the comment "`#` highlight and `%` background
-are visual-only; passed through in M0", and `web/src/viewer.ts` has no
-modifier material handling. This is COMPAT.md divergence **#5, the last open
-M0 divergence**, and it's what makes multi-part models (assemblies, print-plate
-layouts) illegible in the preview.
-
-### Work items
-
-1. **IR**: add a `Color(rgba)` node (evaluated: named colors, hex strings,
-   `[r,g,b]`/`[r,g,b,a]` vectors — OpenSCAD's documented forms) and
-   highlight/background flags on nodes (or wrapper nodes) for `#`/`%`.
-2. **Mesh channels**: booleans destroy per-face provenance, so follow
-   OpenSCAD's semantics — color applies to the *result* of the subtree it
-   wraps. Render colored subtrees as separate meshes: partition the CSG root
-   into color groups, render each, and ship `Vec<(Mesh, Rgba)>` to the viewer.
-   The geometry cache keys on structure, so this splits cleanly along cache
-   boundaries. Booleans *across* color groups (difference of a red from a blue)
-   resolve to the parent's color — verify the exact precedence against the
-   oracle visually.
-3. **Viewer**: per-mesh materials in three.js; `#` renders the subtree
-   additionally as a translucent red overlay, `%` renders it translucent-gray
-   and excluded from exports (matching documented semantics).
-4. **Exports**: 3MF supports per-object color — wire the color groups into the
-   existing 3MF writer. STL/OFF/OBJ unchanged.
-5. Closes COMPAT #5; update the divergence register.
-
-**Effort: medium (~1 week) — touches IR, both kernel paths, wasm/IPC surface,
-viewer, and one exporter.**
+> isn't focused), and B3 (`color()`/`#`/`%` in the preview — color/highlight/
+> background IR nodes, a preview-only color-group partition rendered as per-group
+> three.js materials with a fused mesh kept for stats/export/oracle, and
+> per-object color 3MF export) shipped and are removed from this doc.
 
 ---
 
@@ -117,7 +81,7 @@ workflows expect it.
 
 ## Exit criterion
 
-> A user opens a multi-file OpenSCAD project in Quito desktop (saving with ⌘S
-> and inline error squiggles already work — B1, B2), sees `color()`/`#`/`%`
-> rendered correctly in the preview, and exports both an STL and a PNG thumbnail —
-> without touching OpenSCAD. COMPAT.md divergence #5 is closed.
+> A user opens a multi-file OpenSCAD project in Quito desktop (saving with ⌘S,
+> inline error squiggles, and `color()`/`#`/`%` in the preview already work —
+> B1, B2, B3), and exports both an STL and a PNG thumbnail — without touching
+> OpenSCAD. (COMPAT.md divergence #5 is now closed.)

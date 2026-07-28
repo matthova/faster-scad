@@ -225,6 +225,86 @@ impl Mesh {
         zip.finish()
     }
 
+    /// The 3MF model XML for several colored meshes: one `<object>` per group,
+    /// each bound to a `<base displaycolor>` in a shared `<basematerials>` so the
+    /// color survives into slicers/viewers. Background (`%`) groups should be
+    /// omitted by the caller.
+    pub fn to_3mf_colored_model(groups: &[(&Mesh, [f32; 4])]) -> String {
+        let hex = |c: [f32; 4]| {
+            let b = |x: f32| (x.clamp(0.0, 1.0) * 255.0).round() as u8;
+            format!(
+                "#{:02X}{:02X}{:02X}{:02X}",
+                b(c[0]),
+                b(c[1]),
+                b(c[2]),
+                b(c[3])
+            )
+        };
+        let mut s = String::from(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+             <model unit=\"millimeter\" xml:lang=\"en-US\" \
+             xmlns=\"http://schemas.microsoft.com/3dmanufacturing/core/2015/02\">\n\
+             \x20<resources>\n\
+             \x20 <basematerials id=\"1\">\n",
+        );
+        for (i, (_, color)) in groups.iter().enumerate() {
+            s.push_str(&format!(
+                "   <base name=\"c{i}\" displaycolor=\"{}\"/>\n",
+                hex(*color)
+            ));
+        }
+        s.push_str("  </basematerials>\n");
+        // Object ids start at 2 (id 1 is the basematerials resource).
+        for (i, (mesh, _)) in groups.iter().enumerate() {
+            let oid = i + 2;
+            s.push_str(&format!(
+                "  <object id=\"{oid}\" type=\"model\" pid=\"1\" pindex=\"{i}\">\n\
+                 \x20  <mesh>\n    <vertices>\n"
+            ));
+            for v in &mesh.verts {
+                s.push_str(&format!(
+                    "     <vertex x=\"{}\" y=\"{}\" z=\"{}\"/>\n",
+                    v[0], v[1], v[2]
+                ));
+            }
+            s.push_str("    </vertices>\n    <triangles>\n");
+            for t in &mesh.tris {
+                s.push_str(&format!(
+                    "     <triangle v1=\"{}\" v2=\"{}\" v3=\"{}\"/>\n",
+                    t[0], t[1], t[2]
+                ));
+            }
+            s.push_str("    </triangles>\n   </mesh>\n  </object>\n");
+        }
+        s.push_str(" </resources>\n <build>\n");
+        for i in 0..groups.len() {
+            s.push_str(&format!("  <item objectid=\"{}\"/>\n", i + 2));
+        }
+        s.push_str(" </build>\n</model>\n");
+        s
+    }
+
+    /// Serialize several colored meshes as one 3MF package (per-object color).
+    pub fn to_3mf_colored(groups: &[(&Mesh, [f32; 4])]) -> Vec<u8> {
+        const CONTENT_TYPES: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+            <Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">\n\
+            \x20<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>\n\
+            \x20<Default Extension=\"model\" ContentType=\"application/vnd.ms-package.3dmanufacturing-3dmodel+xml\"/>\n\
+            </Types>\n";
+        const RELS: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+            <Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\n\
+            \x20<Relationship Type=\"http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel\" Target=\"/3D/3dmodel.model\" Id=\"rel0\"/>\n\
+            </Relationships>\n";
+        let mut zip = Zip::new();
+        zip.add("[Content_Types].xml", CONTENT_TYPES.as_bytes());
+        zip.add("_rels/.rels", RELS.as_bytes());
+        zip.add(
+            "3D/3dmodel.model",
+            Mesh::to_3mf_colored_model(groups).as_bytes(),
+        );
+        zip.finish()
+    }
+
     /// Parse a 3MF package: read the ZIP, inflate `3D/3dmodel.model`, and build
     /// an indexed mesh from its `<vertex>`/`<triangle>` elements. Returns an
     /// empty mesh if the archive or model can't be read.

@@ -120,6 +120,62 @@ export function build3MF(positions: Float32Array): Uint8Array {
   ]);
 }
 
+/** A colored preview group: a vertex range into the soup plus color + mode. */
+export interface ColorGroup {
+  start: number;
+  count: number;
+  color: [number, number, number, number];
+  mode: string;
+}
+
+function colorHex(c: [number, number, number, number]): string {
+  const b = (x: number) =>
+    Math.round(Math.min(1, Math.max(0, x)) * 255)
+      .toString(16)
+      .padStart(2, "0")
+      .toUpperCase();
+  return `#${b(c[0])}${b(c[1])}${b(c[2])}${b(c[3])}`;
+}
+
+/** The `3D/3dmodel.model` XML for a colored 3MF: one object per group, each
+ *  bound to a `<base displaycolor>`. `groups` index into the preview soup by
+ *  vertex offset (`start`/`count`). */
+function threeMFColoredModel(previewPositions: Float32Array, groups: ColorGroup[]): string {
+  const out: string[] = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">',
+    " <resources>",
+    '  <basematerials id="1">',
+  ];
+  groups.forEach((g, i) => out.push(`   <base name="c${i}" displaycolor="${colorHex(g.color)}"/>`));
+  out.push("  </basematerials>");
+  groups.forEach((g, i) => {
+    const oid = i + 2;
+    const slice = previewPositions.subarray(g.start * 3, (g.start + g.count) * 3);
+    const { verts, faces } = weld(slice);
+    out.push(`  <object id="${oid}" type="model" pid="1" pindex="${i}">`, "   <mesh>", "    <vertices>");
+    for (let j = 0; j < verts.length; j += 3)
+      out.push(`     <vertex x="${verts[j]}" y="${verts[j + 1]}" z="${verts[j + 2]}"/>`);
+    out.push("    </vertices>", "    <triangles>");
+    for (const f of faces) out.push(`     <triangle v1="${f[0]}" v2="${f[1]}" v3="${f[2]}"/>`);
+    out.push("    </triangles>", "   </mesh>", "  </object>");
+  });
+  out.push(" </resources>", " <build>");
+  groups.forEach((_, i) => out.push(`  <item objectid="${i + 2}"/>`));
+  out.push(" </build>", "</model>", "");
+  return out.join("\n");
+}
+
+/** Colored 3MF: one object per group (per-object `displaycolor`). */
+export function build3MFColored(previewPositions: Float32Array, groups: ColorGroup[]): Uint8Array {
+  const enc = new TextEncoder();
+  return storeZip([
+    { name: "[Content_Types].xml", data: enc.encode(CT_XML) },
+    { name: "_rels/.rels", data: enc.encode(RELS_XML) },
+    { name: "3D/3dmodel.model", data: enc.encode(threeMFColoredModel(previewPositions, groups)) },
+  ]);
+}
+
 // CRC-32 (IEEE), table built once.
 const CRC_TABLE = (() => {
   const t = new Uint32Array(256);

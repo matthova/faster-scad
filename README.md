@@ -36,8 +36,11 @@ Language subset: `cube` / `sphere` / `cylinder` (incl. cones, `d`/`r1`/`r2`),
 `module`s and `function`s (incl. recursion), `let`, ranges, vectors, the full
 expression language (arithmetic, comparison with undef propagation, ternary,
 indexing, `.x/.y/.z`), a core set of math/list builtins, `echo`, `assert`, and
-the debug modifiers `* ! # %`. Curved primitives use the bit-exact `$fn/$fa/$fs`
-fragment formula.
+the debug modifiers `* ! # %`. `color()` (named/hex/vector + alpha) and the
+`#`/`%` modifiers are rendered in the preview — colored subtrees, `#` highlight
+(translucent red), `%` background (translucent gray, excluded from export) — and
+`color()` carries into per-object 3MF export. Curved primitives use the bit-exact
+`$fn/$fa/$fs` fragment formula.
 
 ### Kernel bake-off (resolved)
 
