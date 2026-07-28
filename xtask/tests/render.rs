@@ -34,7 +34,11 @@ fn render_scad_src(src: &str, dir: &str) -> quito_geom::Mesh {
         fn load(&self, path: &str, _from: &str) -> Option<quito_eval::LoadedFile> {
             let p = std::path::Path::new(&self.0).join(path);
             let source = std::fs::read_to_string(&p).ok()?;
-            Some(quito_eval::LoadedFile { key: p.to_string_lossy().into(), source, dir: self.0.clone() })
+            Some(quito_eval::LoadedFile {
+                key: p.to_string_lossy().into(),
+                source,
+                dir: self.0.clone(),
+            })
         }
     }
     let prog = quito_syntax::parse(src).expect("parse");
@@ -53,7 +57,11 @@ fn renders_lamp_assembly() {
         .replace("part = \"shade\"", "part = \"assembly\"");
     let dir = workspace_root().to_string_lossy().into_owned();
     let mesh = render_scad_src(&src, &dir);
-    assert!(mesh.tris.len() > 20_000, "unexpected tri count {}", mesh.tris.len());
+    assert!(
+        mesh.tris.len() > 20_000,
+        "unexpected tri count {}",
+        mesh.tris.len()
+    );
     assert!(
         (mesh.volume() - 36.0).abs() < 2.0,
         "assembly volume {} not ~36",
@@ -81,8 +89,10 @@ fn render_with_bosl2(body: &str) -> Option<quito_geom::Mesh> {
                     let key = std::fs::canonicalize(&c)
                         .map(|p| p.to_string_lossy().into_owned())
                         .unwrap_or_else(|_| c.to_string_lossy().into_owned());
-                    let dir =
-                        c.parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default();
+                    let dir = c
+                        .parent()
+                        .map(|d| d.to_string_lossy().into_owned())
+                        .unwrap_or_default();
                     return Some(quito_eval::LoadedFile { key, source, dir });
                 }
             }
@@ -101,15 +111,23 @@ fn render_with_bosl2(body: &str) -> Option<quito_geom::Mesh> {
 /// multiply, `search`, nested `children()`, and `use`-inside-`include` all work.
 #[test]
 fn renders_bosl2_cuboid() {
-    let Some(mesh) = render_with_bosl2("cuboid([20,20,20]);") else { return };
-    assert!((mesh.volume() - 8000.0).abs() < 1.0, "cuboid volume {}", mesh.volume());
+    let Some(mesh) = render_with_bosl2("cuboid([20,20,20]);") else {
+        return;
+    };
+    assert!(
+        (mesh.volume() - 8000.0).abs() < 1.0,
+        "cuboid volume {}",
+        mesh.volume()
+    );
 }
 
 /// A *rounded* cuboid exercises range indexing (BOSL2's `is_range`) and the
 /// rounding construction; its volume matches OpenSCAD (~7244 at $fn=32).
 #[test]
 fn renders_bosl2_rounded_cuboid() {
-    let Some(mesh) = render_with_bosl2("cuboid([20,20,20], rounding=4, $fn=32);") else { return };
+    let Some(mesh) = render_with_bosl2("cuboid([20,20,20], rounding=4, $fn=32);") else {
+        return;
+    };
     assert!(
         (mesh.volume() - 7244.0).abs() < 25.0,
         "rounded cuboid volume {} not ~7244",
@@ -135,7 +153,11 @@ fn renders_surface() {
     let prog = quito_syntax::parse("surface(\"h.dat\");").expect("parse");
     let out = quito_eval::eval_program_with(&prog, &R, ".").expect("eval");
     let mesh = quito_geom::render(&out.node).expect("render");
-    assert!((mesh.volume() - 21.0).abs() < 1e-6, "surface volume {}", mesh.volume());
+    assert!(
+        (mesh.volume() - 21.0).abs() < 1e-6,
+        "surface volume {}",
+        mesh.volume()
+    );
     assert!(mesh.signed_volume() > 0.0, "surface mesh is inward-facing");
 }
 
@@ -157,8 +179,16 @@ fn imports_openscad_3mf() {
     let prog = quito_syntax::parse("import(\"m.3mf\");").expect("parse");
     let out = quito_eval::eval_program_with(&prog, &R(tmf), ".").expect("eval");
     let mesh = quito_geom::render(&out.node).expect("render");
-    assert!(mesh.tris.len() > 100, "too few triangles: {}", mesh.tris.len());
-    assert!((mesh.volume() - 1683.68).abs() < 0.1, "3mf import volume {}", mesh.volume());
+    assert!(
+        mesh.tris.len() > 100,
+        "too few triangles: {}",
+        mesh.tris.len()
+    );
+    assert!(
+        (mesh.volume() - 1683.68).abs() < 0.1,
+        "3mf import volume {}",
+        mesh.volume()
+    );
 }
 
 /// `surface()` on a PNG heightmap: each pixel's Rec.709 luma scales to 0..100,
@@ -179,7 +209,11 @@ fn surface_png_heightmap() {
     let prog = quito_syntax::parse("surface(\"h.png\");").expect("parse");
     let out = quito_eval::eval_program_with(&prog, &R(png), ".").expect("eval");
     let mesh = quito_geom::render(&out.node).expect("render");
-    assert!((mesh.volume() - 121.0196).abs() < 1e-3, "png surface volume {}", mesh.volume());
+    assert!(
+        (mesh.volume() - 121.0196).abs() < 1e-3,
+        "png surface volume {}",
+        mesh.volume()
+    );
     assert!(mesh.signed_volume() > 0.0, "png surface is inward-facing");
 }
 
@@ -202,7 +236,11 @@ fn imports_and_extrudes_dxf() {
     let prog = quito_syntax::parse("linear_extrude(3) import(\"p.dxf\");").expect("parse");
     let out = quito_eval::eval_program_with(&prog, &R(dxf), ".").expect("eval");
     let mesh = quito_geom::render(&out.node).expect("render");
-    assert!((mesh.volume() - 588.0).abs() < 1e-3, "dxf extrude volume {}", mesh.volume());
+    assert!(
+        (mesh.volume() - 588.0).abs() < 1e-3,
+        "dxf extrude volume {}",
+        mesh.volume()
+    );
     assert!(mesh.signed_volume() > 0.0, "dxf extrude is inward-facing");
 }
 

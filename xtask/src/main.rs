@@ -57,9 +57,21 @@ fn run_bosl2(root: &Path) -> bool {
     // it does not exist in the pinned BOSL2 submodule. Adding a name here that
     // has no `.scadtest` file is now a hard failure rather than a silent skip.
     let subset = [
-        "test_math", "test_lists", "test_comparisons", "test_strings", "test_vectors",
-        "test_linalg", "test_trigonometry", "test_utility", "test_fnliterals", "test_structs",
-        "test_coords", "test_affine", "test_geometry", "test_paths", "test_regions",
+        "test_math",
+        "test_lists",
+        "test_comparisons",
+        "test_strings",
+        "test_vectors",
+        "test_linalg",
+        "test_trigonometry",
+        "test_utility",
+        "test_fnliterals",
+        "test_structs",
+        "test_coords",
+        "test_affine",
+        "test_geometry",
+        "test_paths",
+        "test_regions",
     ];
     let dir_str = dir.to_string_lossy().into_owned();
     let mut pass = 0;
@@ -107,7 +119,11 @@ fn run_bosl2(root: &Path) -> bool {
         println!("  MISSING {name}.scadtest ({e})");
     }
 
-    let pct = if total == 0 { 0.0 } else { pass as f64 / total as f64 * 100.0 };
+    let pct = if total == 0 {
+        0.0
+    } else {
+        pass as f64 / total as f64 * 100.0
+    };
     println!("\nBOSL2 function tests: {pass}/{total} ({pct:.0}%)");
 
     let ok = missing.is_empty() && failed.is_empty() && total > 0;
@@ -133,7 +149,10 @@ fn run_bench(root: &Path) {
     const RUNS: usize = 3;
     let quito = root.join("target/release/quito");
     if !quito.exists() {
-        eprintln!("release binary not found at {} — run `cargo build --release` first", quito.display());
+        eprintln!(
+            "release binary not found at {} — run `cargo build --release` first",
+            quito.display()
+        );
         std::process::exit(2);
     }
     let out = std::env::temp_dir().join("quito_bench.stl");
@@ -154,14 +173,30 @@ fn run_bench(root: &Path) {
 
     for (name, rel) in models {
         let path = root.join(rel);
-        let q = bench_cmd(quito.to_str().unwrap(), &[path.to_str().unwrap(), "-o", out.to_str().unwrap()], RUNS);
-        let cgal = bench_cmd("openscad", &["-o", out.to_str().unwrap(), path.to_str().unwrap()], RUNS);
-        let mfld = bench_cmd(
-            "openscad",
-            &["--backend=manifold", "-o", out.to_str().unwrap(), path.to_str().unwrap()],
+        let q = bench_cmd(
+            quito.to_str().unwrap(),
+            &[path.to_str().unwrap(), "-o", out.to_str().unwrap()],
             RUNS,
         );
-        let fmt = |t: Option<f64>| t.map(|v| format!("{v:.0}")).unwrap_or_else(|| "FAIL".into());
+        let cgal = bench_cmd(
+            "openscad",
+            &["-o", out.to_str().unwrap(), path.to_str().unwrap()],
+            RUNS,
+        );
+        let mfld = bench_cmd(
+            "openscad",
+            &[
+                "--backend=manifold",
+                "-o",
+                out.to_str().unwrap(),
+                path.to_str().unwrap(),
+            ],
+            RUNS,
+        );
+        let fmt = |t: Option<f64>| {
+            t.map(|v| format!("{v:.0}"))
+                .unwrap_or_else(|| "FAIL".into())
+        };
         let speed = |base: Option<f64>| match (base, q) {
             (Some(b), Some(qq)) if qq > 0.0 => format!("{:.1}", b / qq),
             _ => "-".into(),
@@ -187,14 +222,24 @@ fn run_bench(root: &Path) {
 /// a real geometry edit re-renders only the changed root-to-leaf path.
 fn warm_edit_bench(root: &Path, models: &[(&str, &str)]) {
     println!("\nWarm re-render — in-process, native kernel, cache reused (ms):\n");
-    println!("{:<12} {:>10} {:>10} {:>10}", "model", "cold", "warm", "speed-up");
+    println!(
+        "{:<12} {:>10} {:>10} {:>10}",
+        "model", "cold", "warm", "speed-up"
+    );
     println!("{}", "-".repeat(46));
     let kernel = quito_geom::ManifoldKernel::new();
     for (name, rel) in models {
         let path = root.join(rel);
-        let Ok(src) = fs::read_to_string(&path) else { continue };
-        let Ok(prog) = quito_syntax::parse(&src) else { continue };
-        let dir = path.parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default();
+        let Ok(src) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(prog) = quito_syntax::parse(&src) else {
+            continue;
+        };
+        let dir = path
+            .parent()
+            .map(|d| d.to_string_lossy().into_owned())
+            .unwrap_or_default();
         let eval = |()| quito_eval::eval_program_with(&prog, &DiskResolver, &dir).ok();
         let Some(out) = eval(()) else { continue };
         let mut cache = quito_geom::GeomCache::new();
@@ -206,7 +251,11 @@ fn warm_edit_bench(root: &Path, models: &[(&str, &str)]) {
         let t1 = Instant::now();
         let _ = quito_geom::render_cached(&out2.node, &kernel, &mut cache);
         let warm = t1.elapsed().as_secs_f64() * 1000.0;
-        let speedup = if warm > 0.0 { format!("{:.0}×", cold / warm) } else { "-".into() };
+        let speedup = if warm > 0.0 {
+            format!("{:.0}×", cold / warm)
+        } else {
+            "-".into()
+        };
         println!("{:<12} {:>10.1} {:>10.2} {:>10}", name, cold, warm, speedup);
     }
     println!("\n(warm = unchanged tree, all cache hits — the incremental-edit floor.)");
@@ -351,7 +400,11 @@ fn check_echo(cases: &Path, goldens: &Path) -> bool {
         }
     }
 
-    let pct = if total == 0 { 0.0 } else { pass as f64 / total as f64 * 100.0 };
+    let pct = if total == 0 {
+        0.0
+    } else {
+        pass as f64 / total as f64 * 100.0
+    };
     println!("\necho oracle: {pass}/{total} passed ({pct:.0}%)");
     pass == total
 }

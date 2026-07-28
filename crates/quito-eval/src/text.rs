@@ -41,7 +41,12 @@ struct Outliner {
 
 impl Outliner {
     fn new(seg: usize) -> Self {
-        Outliner { contours: Vec::new(), cur: Vec::new(), last: [0.0, 0.0], seg: seg.max(1) }
+        Outliner {
+            contours: Vec::new(),
+            cur: Vec::new(),
+            last: [0.0, 0.0],
+            seg: seg.max(1),
+        }
     }
     fn flush(&mut self) {
         if self.cur.len() >= 2 {
@@ -75,8 +80,12 @@ impl ttf_parser::OutlineBuilder for Outliner {
         self.last = p1;
     }
     fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
-        let (p0, c1, c2, p1) =
-            (self.last, [x1 as f64, y1 as f64], [x2 as f64, y2 as f64], [x as f64, y as f64]);
+        let (p0, c1, c2, p1) = (
+            self.last,
+            [x1 as f64, y1 as f64],
+            [x2 as f64, y2 as f64],
+            [x as f64, y as f64],
+        );
         for i in 1..=self.seg {
             let t = i as f64 / self.seg as f64;
             let u = 1.0 - t;
@@ -133,8 +142,11 @@ pub fn text_contours(opts: &TextOpts) -> (Vec<[f64; 2]>, Vec<Vec<u32>>) {
 
     // Right-to-left just reverses the placement order.
     let rtl = opts.direction == "rtl";
-    let order: Vec<usize> =
-        if rtl { (0..chars.len()).rev().collect() } else { (0..chars.len()).collect() };
+    let order: Vec<usize> = if rtl {
+        (0..chars.len()).rev().collect()
+    } else {
+        (0..chars.len()).collect()
+    };
 
     let mut points: Vec<[f64; 2]> = Vec::new();
     let mut paths: Vec<Vec<u32>> = Vec::new();

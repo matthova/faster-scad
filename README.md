@@ -1,8 +1,11 @@
 # Quito
 
+[![playground: live](https://img.shields.io/badge/playground-live-2ea44f)](https://matthova.github.io/faster-scad/)
+
 A fast, greenfield reimplementation of the [OpenSCAD](https://openscad.org)
 language — same language spirit, a modern geometry kernel, one Rust core
-shipping to the browser (wasm) and desktop (Tauri).
+shipping to the browser (wasm) and desktop (Tauri). **Try it live, no install,
+in your browser: <https://matthova.github.io/faster-scad/>.**
 
 > **Status: M4 met, M5 (playground → product) landing.**
 > M0–M2 (native skeleton, playground+kernel bake-off, full language) and M3 (full
@@ -50,8 +53,9 @@ Geometry booleans run behind a `Kernel` trait with two backends:
 
 The engine runs as wasm in a Web Worker with a three.js preview; edits re-render
 live in single-digit milliseconds, with worker-terminate cancellation and parse
-errors surfaced inline. Run it locally with `cd web && npm install && npm run
-build:wasm && npm run dev`; see [`web/`](web/README.md).
+errors reported in the status bar and console (inline editor squiggles are still
+to come). Run it locally with `cd web && npm install && npm run build:wasm &&
+npm run dev`; see [`web/`](web/README.md).
 
 **Product features (M5):**
 
@@ -168,24 +172,24 @@ cargo test                                                # unit + kernel tests
 
 | crate | responsibility |
 |---|---|
-| `quito-syntax` | logos lexer + recursive-descent parser → typed AST |
+| `quito-syntax` | logos lexer + recursive-descent parser → typed AST; customizer schema |
 | `quito-ir` | CSG tree/DAG node types |
-| `quito-eval` | tree-walk interpreter: AST → CSG tree |
-| `quito-geom` | fragment formula, tessellation, `Kernel` trait, Manifold backend, STL |
+| `quito-eval` | tree-walk interpreter + bytecode VM: AST → CSG tree; `text()` |
+| `quito-geom` | fragment formula, tessellation, `Kernel` trait, Manifold backend, mesh/2D I/O |
 | `quito-cli` | the `quito` binary |
-
 | `quito-wasm` | wasm-bindgen engine surface (`render(source)` → mesh + diagnostics) |
 
-The `web/` playground is live. Planned crates (`quito-text`, `quito-io`,
-`quito-engine`) and the `desktop/` shell arrive in later milestones.
+The `web/` playground is live at <https://matthova.github.io/faster-scad/>, and
+the `desktop/` Tauri shell ships alongside it — both drive the same Rust core.
 
-## Next steps
+## Roadmap
 
-- Deploy the `web/` bundle to a public URL and benchmark live-edit latency vs
-  `openscad-playground` on the same models (M1 exit criterion).
-- Lezer grammar for the editor (replacing the StreamLanguage highlighter).
-- Begin M2: full expression language, list comprehensions, `children()`/
-  `$children`, proper hoisting + lexical scoping, and the echo-oracle harness.
+M0–M5 are complete (native skeleton, playground + kernel bake-off, full language,
+full geometry, perf, and the M5 product surface). The candidate post-M5 tracks —
+trustworthy geometry (a geometry oracle), the switcher experience (desktop Save,
+inline diagnostics, `color`/`#`/`%` rendering), and CI hardening — are written up
+in [`docs/roadmap/`](docs/roadmap/). Known compatibility gaps and intentional
+divergences are tracked in [COMPAT.md](COMPAT.md).
 
 ## License
 

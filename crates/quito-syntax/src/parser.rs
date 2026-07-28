@@ -173,7 +173,10 @@ impl<'a> Parser<'a> {
                 }
             }
             other => Err(SyntaxError::new(
-                format!("unexpected token in statement position: {}", describe(other)),
+                format!(
+                    "unexpected token in statement position: {}",
+                    describe(other)
+                ),
                 self.span_here(),
             )),
         }
@@ -197,7 +200,10 @@ impl<'a> Parser<'a> {
         let mut stmts = Vec::new();
         while self.peek() != Some(&Token::RBrace) {
             if self.at_end() {
-                return Err(SyntaxError::new("unterminated block".into(), self.span_here()));
+                return Err(SyntaxError::new(
+                    "unterminated block".into(),
+                    self.span_here(),
+                ));
             }
             if self.eat(&Token::Semi) {
                 continue;
@@ -549,7 +555,10 @@ impl<'a> Parser<'a> {
             }
             Some(Token::LBracket) => self.parse_bracket(),
             other => Err(SyntaxError::new(
-                format!("unexpected token in expression: {}", describe(other.as_ref())),
+                format!(
+                    "unexpected token in expression: {}",
+                    describe(other.as_ref())
+                ),
                 self.span_here(),
             )),
         }

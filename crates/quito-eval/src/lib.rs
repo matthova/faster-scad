@@ -211,7 +211,8 @@ pub fn eval_program_with_params(
     overrides: &[(String, Value)],
 ) -> EResult<EvalOutput> {
     let mut base = Scope::default();
-    base.vars.insert("PI".into(), Value::Number(std::f64::consts::PI));
+    base.vars
+        .insert("PI".into(), Value::Number(std::f64::consts::PI));
 
     // `$` special variables live in the dynamic frame stack.
     let mut globals = FastMap::default();
@@ -268,7 +269,10 @@ impl Interp<'_> {
 
     fn set_var(&mut self, name: &str, val: Value) {
         if name.starts_with('$') {
-            self.specials.last_mut().unwrap().insert(name.to_string(), val);
+            self.specials
+                .last_mut()
+                .unwrap()
+                .insert(name.to_string(), val);
         } else {
             self.scopes
                 .last()
@@ -407,15 +411,15 @@ impl Interp<'_> {
             match s {
                 Stmt::Include { path } => {
                     let Some(lf) = self.resolver.load(path, &self.cur_dir) else {
-                        self.warnings.push(format!("Can't open include file '{path}'"));
+                        self.warnings
+                            .push(format!("Can't open include file '{path}'"));
                         continue;
                     };
                     if !self.loading.insert(lf.key.clone()) {
                         continue; // cycle: already loading this file
                     }
-                    let prog = quito_syntax::parse(&lf.source).map_err(|e| {
-                        EvalError(format!("in include '{path}': {}", e.message))
-                    })?;
+                    let prog = quito_syntax::parse(&lf.source)
+                        .map_err(|e| EvalError(format!("in include '{path}': {}", e.message)))?;
                     let prev = std::mem::replace(&mut self.cur_dir, lf.dir.clone());
                     let expanded = self.expand_includes(&prog, true);
                     self.cur_dir = prev;
@@ -423,7 +427,9 @@ impl Interp<'_> {
                     out.extend(expanded?);
                 }
                 Stmt::Use { path } if in_include => {
-                    out.push(Stmt::Use { path: join_dir(&self.cur_dir, path) });
+                    out.push(Stmt::Use {
+                        path: join_dir(&self.cur_dir, path),
+                    });
                 }
                 other => out.push(other.clone()),
             }
@@ -436,7 +442,8 @@ impl Interp<'_> {
     /// over its own top-level scope so they can use its helpers/constants.
     fn import_use(&mut self, path: &str) -> EResult<()> {
         let Some(lf) = self.resolver.load(path, &self.cur_dir) else {
-            self.warnings.push(format!("Can't open 'use' file '{path}'"));
+            self.warnings
+                .push(format!("Can't open 'use' file '{path}'"));
             return Ok(());
         };
         if !self.loading.insert(lf.key.clone()) {
@@ -687,9 +694,11 @@ impl Interp<'_> {
             let sel = self.first_positional(args)?;
             Some(match sel {
                 Value::Number(n) => vec![n as usize],
-                Value::Vector(ref v) => {
-                    v.iter().filter_map(Value::as_number).map(|n| n as usize).collect()
-                }
+                Value::Vector(ref v) => v
+                    .iter()
+                    .filter_map(Value::as_number)
+                    .map(|n| n as usize)
+                    .collect(),
                 Value::Range { .. } => iter_values(&sel)?
                     .iter()
                     .filter_map(Value::as_number)
@@ -788,15 +797,12 @@ impl Interp<'_> {
             Some(Value::Str(s)) => s.clone(),
             _ => return Ok(Node::Empty),
         };
-        let format = path
-            .rsplit('.')
-            .next()
-            .unwrap_or("")
-            .to_ascii_lowercase();
+        let format = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
         match self.resolver.load_bytes(&path, &self.cur_dir) {
             Some(data) => Ok(Node::Import { data, format }),
             None => {
-                self.warnings.push(format!("Can't open import file '{path}'"));
+                self.warnings
+                    .push(format!("Can't open import file '{path}'"));
                 Ok(Node::Empty)
             }
         }
@@ -813,7 +819,8 @@ impl Interp<'_> {
         let is_png = path.to_ascii_lowercase().ends_with(".png");
         let rows = if is_png {
             let Some(bytes) = self.resolver.load_bytes(&path, &self.cur_dir) else {
-                self.warnings.push(format!("Can't open surface file '{path}'"));
+                self.warnings
+                    .push(format!("Can't open surface file '{path}'"));
                 return Ok(Node::Empty);
             };
             match png_heightmap(&bytes, invert) {
@@ -825,7 +832,8 @@ impl Interp<'_> {
             }
         } else {
             let Some(lf) = self.resolver.load(&path, &self.cur_dir) else {
-                self.warnings.push(format!("Can't open surface file '{path}'"));
+                self.warnings
+                    .push(format!("Can't open surface file '{path}'"));
                 return Ok(Node::Empty);
             };
             // Whitespace-separated rows of z-values; `#` lines are comments.
@@ -833,7 +841,11 @@ impl Interp<'_> {
                 .lines()
                 .map(str::trim)
                 .filter(|l| !l.is_empty() && !l.starts_with('#'))
-                .map(|l| l.split_whitespace().filter_map(|s| s.parse::<f64>().ok()).collect())
+                .map(|l| {
+                    l.split_whitespace()
+                        .filter_map(|s| s.parse::<f64>().ok())
+                        .collect()
+                })
                 .filter(|r: &Vec<f64>| !r.is_empty())
                 .collect()
         };
@@ -893,7 +905,11 @@ impl Interp<'_> {
         let direction = sopt("direction", "ltr");
         // Curve resolution follows `$fn` (like other curved primitives).
         let fn_ = self.lookup_var("$fn").as_number().unwrap_or(0.0);
-        let segments = if fn_ >= 3.0 { ((fn_ / 4.0).ceil() as usize).max(2) } else { 8 };
+        let segments = if fn_ >= 3.0 {
+            ((fn_ / 4.0).ceil() as usize).max(2)
+        } else {
+            8
+        };
 
         let (points, paths) = text::text_contours(&text::TextOpts {
             text: &text,
@@ -904,7 +920,10 @@ impl Interp<'_> {
             direction: &direction,
             segments,
         });
-        Ok(Node::Polygon { points, paths: Some(paths) })
+        Ok(Node::Polygon {
+            points,
+            paths: Some(paths),
+        })
     }
 
     fn b_polygon(&mut self, args: &[Arg]) -> EResult<Node> {
@@ -1028,12 +1047,7 @@ impl Interp<'_> {
         }
     }
 
-    fn transform(
-        &mut self,
-        args: &[Arg],
-        children: &[Stmt],
-        kind: TransformKind,
-    ) -> EResult<Node> {
+    fn transform(&mut self, args: &[Arg], children: &[Stmt], kind: TransformKind) -> EResult<Node> {
         let child = Node::group(self.eval_children(children)?);
         if matches!(child, Node::Empty) {
             return Ok(Node::Empty);
@@ -1131,14 +1145,10 @@ impl Interp<'_> {
         // Count every assert that executes (passing or failing) so the BOSL2
         // oracle can reject vacuous passes.
         self.asserts_run += 1;
-        let cond = self
-            .first_positional(args)
-            .unwrap_or(Value::Undef)
-            .truthy();
+        let cond = self.first_positional(args).unwrap_or(Value::Undef).truthy();
         if !cond {
             let msg = args
-                .iter()
-                .nth(1)
+                .get(1)
                 .map(|a| self.eval_expr(&a.value))
                 .transpose()?
                 .map(|v| v.to_str())
@@ -1236,13 +1246,21 @@ impl Interp<'_> {
                     // contradicts start/end).
                     Some(x) => {
                         let st = self.eval_expr(x)?.as_number().unwrap_or(1.0);
-                        Ok(Value::Range { start: s, step: st, end: e })
+                        Ok(Value::Range {
+                            start: s,
+                            step: st,
+                            end: e,
+                        })
                     }
                     // 2-arg range: OpenSCAD normalizes to ascending, step 1
                     // (so `[5:2]` becomes `[2:1:5]`).
                     None => {
                         let (lo, hi) = if s <= e { (s, e) } else { (e, s) };
-                        Ok(Value::Range { start: lo, step: 1.0, end: hi })
+                        Ok(Value::Range {
+                            start: lo,
+                            step: 1.0,
+                            end: hi,
+                        })
                     }
                 }
             }
@@ -1251,14 +1269,22 @@ impl Interp<'_> {
                 Ok(value::unary(*op, v))
             }
             // `&&` / `||` short-circuit (the right side may assert or error).
-            Expr::Binary { op: BinOp::And, lhs, rhs } => {
+            Expr::Binary {
+                op: BinOp::And,
+                lhs,
+                rhs,
+            } => {
                 if !self.eval_expr(lhs)?.truthy() {
                     Ok(Value::Bool(false))
                 } else {
                     Ok(Value::Bool(self.eval_expr(rhs)?.truthy()))
                 }
             }
-            Expr::Binary { op: BinOp::Or, lhs, rhs } => {
+            Expr::Binary {
+                op: BinOp::Or,
+                lhs,
+                rhs,
+            } => {
                 if self.eval_expr(lhs)?.truthy() {
                     Ok(Value::Bool(true))
                 } else {
@@ -1340,7 +1366,11 @@ impl Interp<'_> {
         // Positional fast path for compiled functions: evaluate arguments
         // straight into the VM's local frame, skipping the per-call binding map.
         if args.iter().all(|a| a.name.is_none()) && args.len() <= f.params.len() {
-            if let Some(chunk) = f.chunk.get_or_init(|| vm::compile_fn(f).map(Rc::new)).clone() {
+            if let Some(chunk) = f
+                .chunk
+                .get_or_init(|| vm::compile_fn(f).map(Rc::new))
+                .clone()
+            {
                 let mut locals = vec![Value::Undef; chunk.n_locals()];
                 // Defaults first (in caller scope), then positional overrides —
                 // matching `bind_params`' evaluation order.
@@ -1413,9 +1443,16 @@ impl Interp<'_> {
     /// Run a function whose parameters are already bound (by name → value),
     /// dispatching to the bytecode VM when the body compiled, else the tree-walk
     /// (which also handles tail-call elimination). Shared by all call paths.
-    fn run_bound(&mut self, f: &Rc<FnClosure>, mut bound: FastMap<String, Value>) -> EResult<Value> {
+    fn run_bound(
+        &mut self,
+        f: &Rc<FnClosure>,
+        mut bound: FastMap<String, Value>,
+    ) -> EResult<Value> {
         // Fast path: a compiled chunk uses slot-based locals (no per-call maps).
-        let compiled = f.chunk.get_or_init(|| vm::compile_fn(f).map(Rc::new)).clone();
+        let compiled = f
+            .chunk
+            .get_or_init(|| vm::compile_fn(f).map(Rc::new))
+            .clone();
         if let Some(chunk) = compiled {
             let mut locals = vec![Value::Undef; chunk.n_locals()];
             for (i, p) in f.params.iter().enumerate() {
@@ -1463,7 +1500,11 @@ impl Interp<'_> {
     fn eval_tail(&mut self, expr: &Expr, f: &Rc<FnClosure>) -> EResult<TailResult> {
         match expr {
             Expr::Ternary { cond, then, els } => {
-                let branch = if self.eval_expr(cond)?.truthy() { then } else { els };
+                let branch = if self.eval_expr(cond)?.truthy() {
+                    then
+                } else {
+                    els
+                };
                 self.eval_tail(branch, f)
             }
             Expr::Let { bindings, body } => {
@@ -1755,7 +1796,11 @@ fn surface_polyhedron(rows: &[Vec<f64>], center: bool, png: bool) -> Node {
         .flat_map(|r| (0..nc).map(move |c| (r, c)))
         .map(|(r, c)| h(r, c))
         .fold(f64::INFINITY, f64::min);
-    let bottom_z = if png { min_h - 1.0 } else { (min_h - 1.0).min(0.0) };
+    let bottom_z = if png {
+        min_h - 1.0
+    } else {
+        (min_h - 1.0).min(0.0)
+    };
 
     let mut points: Vec<Vec3> = Vec::with_capacity(nr * nc * 2 + (nr - 1) * (nc - 1));
     for r in 0..nr {
@@ -1786,28 +1831,126 @@ fn surface_polyhedron(rows: &[Vec<f64>], center: bool, png: bool) -> Node {
         for c in 0..nc - 1 {
             // Top: fan the 4 cell edges around the center vertex.
             let m = mid(r, c);
-            surf_face(&mut faces, &points, top(r, c), top(r, c + 1), m, [0.0, 0.0, 1.0]);
-            surf_face(&mut faces, &points, top(r, c + 1), top(r + 1, c + 1), m, [0.0, 0.0, 1.0]);
-            surf_face(&mut faces, &points, top(r + 1, c + 1), top(r + 1, c), m, [0.0, 0.0, 1.0]);
-            surf_face(&mut faces, &points, top(r + 1, c), top(r, c), m, [0.0, 0.0, 1.0]);
+            surf_face(
+                &mut faces,
+                &points,
+                top(r, c),
+                top(r, c + 1),
+                m,
+                [0.0, 0.0, 1.0],
+            );
+            surf_face(
+                &mut faces,
+                &points,
+                top(r, c + 1),
+                top(r + 1, c + 1),
+                m,
+                [0.0, 0.0, 1.0],
+            );
+            surf_face(
+                &mut faces,
+                &points,
+                top(r + 1, c + 1),
+                top(r + 1, c),
+                m,
+                [0.0, 0.0, 1.0],
+            );
+            surf_face(
+                &mut faces,
+                &points,
+                top(r + 1, c),
+                top(r, c),
+                m,
+                [0.0, 0.0, 1.0],
+            );
             // Bottom stays a flat quad (z=0 → volume-neutral either way).
-            surf_face(&mut faces, &points, bot(r, c), bot(r, c + 1), bot(r + 1, c + 1), [0.0, 0.0, -1.0]);
-            surf_face(&mut faces, &points, bot(r, c), bot(r + 1, c + 1), bot(r + 1, c), [0.0, 0.0, -1.0]);
+            surf_face(
+                &mut faces,
+                &points,
+                bot(r, c),
+                bot(r, c + 1),
+                bot(r + 1, c + 1),
+                [0.0, 0.0, -1.0],
+            );
+            surf_face(
+                &mut faces,
+                &points,
+                bot(r, c),
+                bot(r + 1, c + 1),
+                bot(r + 1, c),
+                [0.0, 0.0, -1.0],
+            );
         }
     }
     // Front (y=0) and back (y=max) walls.
     for c in 0..nc - 1 {
-        surf_face(&mut faces, &points, top(0, c), top(0, c + 1), bot(0, c + 1), [0.0, -1.0, 0.0]);
-        surf_face(&mut faces, &points, top(0, c), bot(0, c + 1), bot(0, c), [0.0, -1.0, 0.0]);
-        surf_face(&mut faces, &points, top(nr - 1, c), top(nr - 1, c + 1), bot(nr - 1, c + 1), [0.0, 1.0, 0.0]);
-        surf_face(&mut faces, &points, top(nr - 1, c), bot(nr - 1, c + 1), bot(nr - 1, c), [0.0, 1.0, 0.0]);
+        surf_face(
+            &mut faces,
+            &points,
+            top(0, c),
+            top(0, c + 1),
+            bot(0, c + 1),
+            [0.0, -1.0, 0.0],
+        );
+        surf_face(
+            &mut faces,
+            &points,
+            top(0, c),
+            bot(0, c + 1),
+            bot(0, c),
+            [0.0, -1.0, 0.0],
+        );
+        surf_face(
+            &mut faces,
+            &points,
+            top(nr - 1, c),
+            top(nr - 1, c + 1),
+            bot(nr - 1, c + 1),
+            [0.0, 1.0, 0.0],
+        );
+        surf_face(
+            &mut faces,
+            &points,
+            top(nr - 1, c),
+            bot(nr - 1, c + 1),
+            bot(nr - 1, c),
+            [0.0, 1.0, 0.0],
+        );
     }
     // Left (x=0) and right (x=max) walls.
     for r in 0..nr - 1 {
-        surf_face(&mut faces, &points, top(r, 0), top(r + 1, 0), bot(r + 1, 0), [-1.0, 0.0, 0.0]);
-        surf_face(&mut faces, &points, top(r, 0), bot(r + 1, 0), bot(r, 0), [-1.0, 0.0, 0.0]);
-        surf_face(&mut faces, &points, top(r, nc - 1), top(r + 1, nc - 1), bot(r + 1, nc - 1), [1.0, 0.0, 0.0]);
-        surf_face(&mut faces, &points, top(r, nc - 1), bot(r + 1, nc - 1), bot(r, nc - 1), [1.0, 0.0, 0.0]);
+        surf_face(
+            &mut faces,
+            &points,
+            top(r, 0),
+            top(r + 1, 0),
+            bot(r + 1, 0),
+            [-1.0, 0.0, 0.0],
+        );
+        surf_face(
+            &mut faces,
+            &points,
+            top(r, 0),
+            bot(r + 1, 0),
+            bot(r, 0),
+            [-1.0, 0.0, 0.0],
+        );
+        surf_face(
+            &mut faces,
+            &points,
+            top(r, nc - 1),
+            top(r + 1, nc - 1),
+            bot(r + 1, nc - 1),
+            [1.0, 0.0, 0.0],
+        );
+        surf_face(
+            &mut faces,
+            &points,
+            top(r, nc - 1),
+            bot(r + 1, nc - 1),
+            bot(r, nc - 1),
+            [1.0, 0.0, 0.0],
+        );
     }
     Node::Polyhedron { points, faces }
 }
@@ -2037,7 +2180,11 @@ thread_local! {
 fn rands_fn(args: &[Value]) -> Value {
     let min = args.first().and_then(Value::as_number).unwrap_or(0.0);
     let max = args.get(1).and_then(Value::as_number).unwrap_or(1.0);
-    let count = args.get(2).and_then(Value::as_number).unwrap_or(1.0).max(0.0) as usize;
+    let count = args
+        .get(2)
+        .and_then(Value::as_number)
+        .unwrap_or(1.0)
+        .max(0.0) as usize;
     let count = count.min(1_000_000);
     let seed = args.get(3).and_then(Value::as_number);
     // Seeded: reset the global generator; unseeded: continue from where it left.
@@ -2219,9 +2366,7 @@ fn search(args: &[Value]) -> Value {
                 .map(|c| pack(match_indices(&Value::Str(c.to_string()))))
                 .collect(),
         ),
-        Value::Vector(vs) => {
-            value::vector(vs.iter().map(|n| pack(match_indices(n))).collect())
-        }
+        Value::Vector(vs) => value::vector(vs.iter().map(|n| pack(match_indices(n))).collect()),
         _ => Value::Undef,
     }
 }
@@ -2263,19 +2408,19 @@ mod tests {
         let cases: Vec<String> = vec![
             "x=1e999999; echo(x);".into(),
             "echo(1/0); echo(0/0); echo(5%0);".into(),
-            "function f(x)=f(x); echo(f(1));".into(),        // infinite tail recursion
+            "function f(x)=f(x); echo(f(1));".into(), // infinite tail recursion
             "function g(n)=n<=0?0:1+g(n-1); echo(g(100000));".into(), // deep non-tail
             "a=[]; echo(a[999999999999]);".into(),
             "echo(chr(-1), chr(1114112)); echo(\"abc\"[-5]);".into(),
-            "echo([for(i=[0:1:1e9]) i]);".into(),           // huge range (capped)
+            "echo([for(i=[0:1:1e9]) i]);".into(), // huge range (capped)
             "echo(2^2^2^2^2);".into(),
             "echo(\"日本語\"[1]); echo(len(\"🎉\"));".into(),
             "polygon([[0,0]]); linear_extrude(-5) square(10);".into(),
             "echo(concat(), str(), lookup(5,[]));".into(),
             "for(i=[0:-1:10]) cube(1);".into(),
-            deep_open,       // unbalanced parens
-            deep_list,       // deeply nested list
-            "".into(),       // empty
+            deep_open, // unbalanced parens
+            deep_list, // deeply nested list
+            "".into(), // empty
             "\u{0}\u{1}garbage \" unterminated".into(),
         ];
         // Run on a production-sized stack (the CLI uses 256 MiB, wasm 64 MiB);
@@ -2302,7 +2447,13 @@ mod tests {
     #[test]
     fn single_cube() {
         let out = eval("cube(10);");
-        assert_eq!(out.node, Node::Cube { size: [10.0, 10.0, 10.0], center: false });
+        assert_eq!(
+            out.node,
+            Node::Cube {
+                size: [10.0, 10.0, 10.0],
+                center: false
+            }
+        );
     }
 
     #[test]
@@ -2327,19 +2478,37 @@ mod tests {
     fn last_assignment_wins() {
         // x is hoisted: cube should see x = 2.
         let out = eval("x = 1; cube(x); x = 2;");
-        assert_eq!(out.node, Node::Cube { size: [2.0, 2.0, 2.0], center: false });
+        assert_eq!(
+            out.node,
+            Node::Cube {
+                size: [2.0, 2.0, 2.0],
+                center: false
+            }
+        );
     }
 
     #[test]
     fn user_function() {
         let out = eval("function sq(a) = a * a; cube(sq(3));");
-        assert_eq!(out.node, Node::Cube { size: [9.0, 9.0, 9.0], center: false });
+        assert_eq!(
+            out.node,
+            Node::Cube {
+                size: [9.0, 9.0, 9.0],
+                center: false
+            }
+        );
     }
 
     #[test]
     fn user_module() {
         let out = eval("module box(s) { cube(s, center=true); } box(4);");
-        assert_eq!(out.node, Node::Cube { size: [4.0, 4.0, 4.0], center: true });
+        assert_eq!(
+            out.node,
+            Node::Cube {
+                size: [4.0, 4.0, 4.0],
+                center: true
+            }
+        );
     }
 
     #[test]
@@ -2351,7 +2520,13 @@ mod tests {
     #[test]
     fn recursion() {
         let out = eval("function fib(n) = n < 2 ? n : fib(n-1) + fib(n-2); cube(fib(10));");
-        assert_eq!(out.node, Node::Cube { size: [55.0, 55.0, 55.0], center: false });
+        assert_eq!(
+            out.node,
+            Node::Cube {
+                size: [55.0, 55.0, 55.0],
+                center: false
+            }
+        );
     }
 
     #[test]
@@ -2364,7 +2539,9 @@ mod tests {
     fn cylinder_d_and_center() {
         let out = eval("cylinder(h=10, d=8, center=true);");
         match out.node {
-            Node::Cylinder { h, r1, r2, center, .. } => {
+            Node::Cylinder {
+                h, r1, r2, center, ..
+            } => {
                 assert_eq!(h, 10.0);
                 assert_eq!(r1, 4.0);
                 assert_eq!(r2, 4.0);
@@ -2384,7 +2561,11 @@ mod tests {
         // condition and yields undef — BOSL2 relies on this. Must not warn.
         let out = eval("y = assert(1 < 2, \"ok\"); echo(y);");
         assert_eq!(out.echoes, vec!["ECHO: undef"]);
-        assert!(out.warnings.is_empty(), "unexpected warnings: {:?}", out.warnings);
+        assert!(
+            out.warnings.is_empty(),
+            "unexpected warnings: {:?}",
+            out.warnings
+        );
         // A failing bare assert still aborts.
         let prog = parse("z = assert(1 > 2); echo(z);").unwrap();
         assert!(eval_program(&prog).is_err(), "failing assert should error");
@@ -2394,7 +2575,10 @@ mod tests {
     fn cross_2d_is_scalar_3d_is_vector() {
         // OpenSCAD: 2D cross -> scalar z, 3D cross -> vector, mismatch -> undef.
         assert_eq!(echoes("echo(cross([1,2],[3,4]));"), vec!["ECHO: -2"]);
-        assert_eq!(echoes("echo(cross([2,3,4],[5,6,7]));"), vec!["ECHO: [-3, 6, -3]"]);
+        assert_eq!(
+            echoes("echo(cross([2,3,4],[5,6,7]));"),
+            vec!["ECHO: [-3, 6, -3]"]
+        );
         assert_eq!(echoes("echo(cross([1,2],[3,4,5]));"), vec!["ECHO: undef"]);
     }
 
@@ -2413,10 +2597,22 @@ mod tests {
 
     #[test]
     fn comprehensions() {
-        assert_eq!(echoes("echo([for(i=[0:4]) i*i]);"), vec!["ECHO: [0, 1, 4, 9, 16]"]);
-        assert_eq!(echoes("echo([for(i=[0:5]) if(i%2==0) i]);"), vec!["ECHO: [0, 2, 4]"]);
-        assert_eq!(echoes("echo([for(i=[1:3]) let(sq=i*i) sq]);"), vec!["ECHO: [1, 4, 9]"]);
-        assert_eq!(echoes("echo([each [1,2], each [3,4]]);"), vec!["ECHO: [1, 2, 3, 4]"]);
+        assert_eq!(
+            echoes("echo([for(i=[0:4]) i*i]);"),
+            vec!["ECHO: [0, 1, 4, 9, 16]"]
+        );
+        assert_eq!(
+            echoes("echo([for(i=[0:5]) if(i%2==0) i]);"),
+            vec!["ECHO: [0, 2, 4]"]
+        );
+        assert_eq!(
+            echoes("echo([for(i=[1:3]) let(sq=i*i) sq]);"),
+            vec!["ECHO: [1, 4, 9]"]
+        );
+        assert_eq!(
+            echoes("echo([each [1,2], each [3,4]]);"),
+            vec!["ECHO: [1, 2, 3, 4]"]
+        );
         assert_eq!(
             echoes("echo([for(i=[0:2], j=[0:2]) i*10+j]);"),
             vec!["ECHO: [0, 1, 2, 10, 11, 12, 20, 21, 22]"]
@@ -2468,9 +2664,7 @@ mod tests {
         );
         // Mutual (non-self) recursion: g calls h and vice versa.
         assert_eq!(
-            echoes(
-                "function h(n)=n==0?0:g(n-1); function g(n)=n==0?1:h(n-1); echo(g(7), h(7));"
-            ),
+            echoes("function h(n)=n==0?0:g(n-1); function g(n)=n==0?1:h(n-1); echo(g(7), h(7));"),
             vec!["ECHO: 0, 1"]
         );
     }
@@ -2546,10 +2740,20 @@ mod tests {
                 } else {
                     format!("{from}/{path}")
                 };
-                files.iter().find(|(k, _)| *k == full || *k == path).map(|(k, v)| {
-                    let dir = k.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default();
-                    LoadedFile { key: k.to_string(), source: v.to_string(), dir }
-                })
+                files
+                    .iter()
+                    .find(|(k, _)| *k == full || *k == path)
+                    .map(|(k, v)| {
+                        let dir = k
+                            .rsplit_once('/')
+                            .map(|(d, _)| d.to_string())
+                            .unwrap_or_default();
+                        LoadedFile {
+                            key: k.to_string(),
+                            source: v.to_string(),
+                            dir,
+                        }
+                    })
             }
         }
         let prog = quito_syntax::parse("include <lib/a.scad>\necho(val());").unwrap();
@@ -2594,9 +2798,15 @@ mod tests {
     #[test]
     fn range_indexing() {
         // A range indexes as [start, step, end] (BOSL2's is_range relies on it).
-        assert_eq!(echoes("r=[1:2:9]; echo(r[0], r[1], r[2], r[3]);"), vec!["ECHO: 1, 2, 9, undef"]);
+        assert_eq!(
+            echoes("r=[1:2:9]; echo(r[0], r[1], r[2], r[3]);"),
+            vec!["ECHO: 1, 2, 9, undef"]
+        );
         // 2-arg range normalizes to step 1.
-        assert_eq!(echoes("r=[3:7]; echo(r[0], r[1], r[2]);"), vec!["ECHO: 3, 1, 7"]);
+        assert_eq!(
+            echoes("r=[3:7]; echo(r[0], r[1], r[2]);"),
+            vec!["ECHO: 3, 1, 7"]
+        );
     }
 
     #[test]
@@ -2627,15 +2837,27 @@ mod tests {
             vec!["ECHO: [1]"]
         );
         // A scalar needle still matches column 0 of a table.
-        assert_eq!(echoes("echo(search([3],[[0,3],[1,4]]));"), vec!["ECHO: [[]]"]);
+        assert_eq!(
+            echoes("echo(search([3],[[0,3],[1,4]]));"),
+            vec!["ECHO: [[]]"]
+        );
     }
 
     #[test]
     fn string_repr_and_builtins() {
         assert_eq!(echoes("echo(\"hi\");"), vec!["ECHO: \"hi\""]);
-        assert_eq!(echoes("echo(chr(65), ord(\"A\"));"), vec!["ECHO: \"A\", 65"]);
-        assert_eq!(echoes("echo(str(\"n=\", 5, true));"), vec!["ECHO: \"n=5true\""]);
-        assert_eq!(echoes("echo([\"a\", \"b\"]);"), vec!["ECHO: [\"a\", \"b\"]"]);
+        assert_eq!(
+            echoes("echo(chr(65), ord(\"A\"));"),
+            vec!["ECHO: \"A\", 65"]
+        );
+        assert_eq!(
+            echoes("echo(str(\"n=\", 5, true));"),
+            vec!["ECHO: \"n=5true\""]
+        );
+        assert_eq!(
+            echoes("echo([\"a\", \"b\"]);"),
+            vec!["ECHO: [\"a\", \"b\"]"]
+        );
         assert_eq!(echoes("s=\"abc\"; echo(s[1]);"), vec!["ECHO: \"b\""]);
     }
 
@@ -2645,7 +2867,10 @@ mod tests {
             echoes("echo(1/3, 1e10, 1000000, 3.0, 0);"),
             vec!["ECHO: 0.333333, 1e+10, 1e+6, 3, 0"]
         );
-        assert_eq!(echoes("echo(sign(-4), sign(0), sign(4));"), vec!["ECHO: -1, 0, 1"]);
+        assert_eq!(
+            echoes("echo(sign(-4), sign(0), sign(4));"),
+            vec!["ECHO: -1, 0, 1"]
+        );
     }
 
     #[test]
@@ -2796,7 +3021,13 @@ mod tests {
     fn color_is_passthrough() {
         // color() must not drop its children.
         let out = eval("color(\"red\") cube(2);");
-        assert_eq!(out.node, Node::Cube { size: [2.0, 2.0, 2.0], center: false });
+        assert_eq!(
+            out.node,
+            Node::Cube {
+                size: [2.0, 2.0, 2.0],
+                center: false
+            }
+        );
     }
 
     #[test]
