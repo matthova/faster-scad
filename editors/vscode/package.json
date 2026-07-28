@@ -55,12 +55,11 @@
     }
   },
   "scripts": {
-    "build:wasm": "wasm-pack build ../../crates/quito-wasm --target web --out-dir ../../editors/vscode/media/engine --out-name quito",
     "build": "node esbuild.mjs",
     "typecheck": "tsc --noEmit",
     "compile": "npm run typecheck && npm run build",
     "watch": "node esbuild.mjs --watch",
-    "vscode:prepublish": "npm run build:wasm && npm run build"
+    "vscode:prepublish": "npm run build"
   },
   "dependencies": {
     "three": "^0.169.0",
