@@ -5,10 +5,18 @@ import { setDiagnostics, type Diagnostic } from "@codemirror/lint";
 import { basicSetup } from "codemirror";
 import { indentWithTab } from "@codemirror/commands";
 import { openscad } from "./lang/openscad";
-import { Viewer, type MeshInfo, type ViewPreset } from "./viewer";
+import { Viewer, type MeshInfo, type ViewPreset, type PreviewGroup } from "./viewer";
 import { Engine, export2dBrowser } from "./engine";
 import type { RenderResponse } from "./engineWorker";
-import { buildBinarySTL, buildOFF, buildOBJ, build3MF, buildAMF, downloadBlob } from "./stl";
+import {
+  buildBinarySTL,
+  buildOFF,
+  buildOBJ,
+  build3MF,
+  build3MFColored,
+  buildAMF,
+  downloadBlob,
+} from "./stl";
 import { CustomizerPanel } from "./CustomizerPanel";
 import { parseSchema, toLiteral, type Param, type ParamValue } from "./customizer";
 import { loadProject, saveProject, clearProject, type File } from "./project";
@@ -154,6 +162,11 @@ export function App() {
   const engineRef = useRef<Engine | DesktopEngine | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const lastPositions = useRef<Float32Array>(new Float32Array(0));
+  // Preview color channel from the last render, for colored 3MF export.
+  const lastPreview = useRef<{ positions: Float32Array; groups: PreviewGroup[] }>({
+    positions: new Float32Array(0),
+    groups: [],
+  });
   const debounceTimer = useRef<number | undefined>(undefined);
 
   // File + customizer state. A `#code/…` share link (browser only) wins over
@@ -690,7 +703,21 @@ export function App() {
 
     if (r.ok) {
       lastPositions.current = r.positions;
-      viewerRef.current?.setMesh(r.positions, r.normals);
+      // Colored preview groups (present only when the model uses color/`#`/`%`).
+      let groups: PreviewGroup[] = [];
+      if (r.groups) {
+        try {
+          groups = JSON.parse(r.groups) as PreviewGroup[];
+        } catch {
+          groups = [];
+        }
+      }
+      lastPreview.current = { positions: r.previewPositions, groups };
+      if (groups.length > 0) {
+        viewerRef.current?.setColoredMesh(r.previewPositions, r.previewNormals, groups);
+      } else {
+        viewerRef.current?.setMesh(r.positions, r.normals);
+      }
       // Offer vector formats for 2D models, mesh formats for 3D; keep the
       // selected format valid when the model's dimensionality changes.
       setIs2D(r.is2D);
@@ -798,16 +825,23 @@ export function App() {
     // 3D mesh formats: build client-side from the last render soup.
     const pos = lastPositions.current;
     if (pos.length === 0) return;
+    // Colored 3MF: one object per non-`%` color group (falls back to fused 3MF).
+    if (format === "3mf") {
+      const { positions, groups } = lastPreview.current;
+      const exportable = groups.filter((g) => g.mode !== "background");
+      const data =
+        exportable.length > 0 ? build3MFColored(positions, exportable) : build3MF(pos);
+      downloadBlob(data, `quito.3mf`);
+      return;
+    }
     const data =
       format === "off"
         ? buildOFF(pos)
         : format === "obj"
           ? buildOBJ(pos)
-          : format === "3mf"
-            ? build3MF(pos)
-            : format === "amf"
-              ? buildAMF(pos)
-              : buildBinarySTL(pos);
+          : format === "amf"
+            ? buildAMF(pos)
+            : buildBinarySTL(pos);
     downloadBlob(data, `quito.${format}`);
   }
 

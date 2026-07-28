@@ -89,6 +89,22 @@ pub fn render_with(node: &Node, kernel: &dyn Kernel) -> Result<Mesh, GeomError> 
     render_cached(node, kernel, &mut cache)
 }
 
+/// Render colored preview groups using the default kernel (no persistent cache).
+/// The fused [`render`] stays the source of truth for stats/export; this is the
+/// preview/`color`-aware view (and the basis for colored 3MF export).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn render_groups(node: &Node) -> Result<Vec<ColoredMesh>, GeomError> {
+    let mut cache = GeomCache::new();
+    render_groups_cached(node, &ManifoldKernel::new(), &mut cache)
+}
+
+/// See [`render_groups`]. wasm target uses the pure-Rust kernel.
+#[cfg(target_arch = "wasm32")]
+pub fn render_groups(node: &Node) -> Result<Vec<ColoredMesh>, GeomError> {
+    let mut cache = GeomCache::new();
+    render_groups_cached(node, &RustManifoldKernel::new(), &mut cache)
+}
+
 /// Render using the given kernel and a caller-owned [`GeomCache`], enabling
 /// incremental warm-edit re-renders (unchanged subtrees are not recomputed).
 pub fn render_cached(
@@ -117,6 +133,176 @@ fn render_node(node: &Node, ctx: &mut Ctx) -> Result<Mesh, GeomError> {
     Ok(mesh)
 }
 
+/// How a preview group is displayed.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DisplayMode {
+    /// Normal solid (uses the group's color).
+    Solid,
+    /// `#` highlight — drawn translucent-red on top of the model.
+    Highlight,
+    /// `%` background — drawn translucent-gray and excluded from exports.
+    Background,
+}
+
+/// A colored preview mesh: geometry plus its display color and mode.
+pub struct ColoredMesh {
+    pub mesh: Mesh,
+    pub color: [f32; 4],
+    pub mode: DisplayMode,
+}
+
+/// Default preview color for uncolored geometry (the viewer's gold).
+pub const DEFAULT_COLOR: [f32; 4] = [0.961, 0.647, 0.137, 1.0];
+
+/// Whether the tree uses any display attribute (`color`/`#`/`%`), so callers can
+/// skip the (additive) grouped-preview render for plain models.
+pub fn has_display_attrs(node: &Node) -> bool {
+    use Node::*;
+    match node {
+        Color { .. } | Highlight(_) | Background(_) => true,
+        Group(cs) | Union(cs) | Difference(cs) | Intersection(cs) | Hull(cs) | Minkowski(cs) => {
+            cs.iter().any(has_display_attrs)
+        }
+        Translate { child, .. }
+        | Rotate { child, .. }
+        | Scale { child, .. }
+        | Mirror { child, .. }
+        | MultMatrix { child, .. }
+        | Resize { child, .. }
+        | LinearExtrude { child, .. }
+        | RotateExtrude { child, .. }
+        | Offset { child, .. }
+        | Projection { child, .. } => has_display_attrs(child),
+        _ => false,
+    }
+}
+
+/// Render the tree into colored preview groups: each maximal subtree under a
+/// single effective color/mode becomes one mesh. Booleans/hull/minkowski (and
+/// resize/extrudes/projection/import) are opaque — rendered fused, taking the
+/// enclosing color — matching OpenSCAD's "color applies to the *result* of the
+/// subtree it wraps." Shares the cache with [`render_cached`], so opaque leaf
+/// meshes are reused (never recomputed just because they are colored).
+pub fn render_groups_cached(
+    node: &Node,
+    kernel: &dyn Kernel,
+    cache: &mut GeomCache,
+) -> Result<Vec<ColoredMesh>, GeomError> {
+    let mut hashes = HashMap::new();
+    hash_all(node, &mut hashes);
+    let mut ctx = Ctx {
+        kernel,
+        cache,
+        hashes: &hashes,
+    };
+    let mut out = Vec::new();
+    partition_groups(node, DEFAULT_COLOR, DisplayMode::Solid, &mut ctx, &mut out)?;
+    Ok(out)
+}
+
+/// Flatten colored groups into one triangle soup (for GPU upload) plus a JSON
+/// array of per-group ranges — the preview channel shipped across the
+/// wasm/Tauri boundary. `start`/`count` are **vertex** offsets into the soup
+/// (three.js `addGroup` units); `mode` is "solid"/"highlight"/"background".
+pub fn preview_channel(groups: &[ColoredMesh]) -> (Vec<f32>, Vec<f32>, String) {
+    let mut positions: Vec<f32> = Vec::new();
+    let mut normals: Vec<f32> = Vec::new();
+    let mut json = String::from("[");
+    for (i, g) in groups.iter().enumerate() {
+        let (p, n) = g.mesh.to_triangle_soup_f32();
+        let start = positions.len() / 3;
+        let count = g.mesh.tris.len() * 3;
+        positions.extend_from_slice(&p);
+        normals.extend_from_slice(&n);
+        let mode = match g.mode {
+            DisplayMode::Solid => "solid",
+            DisplayMode::Highlight => "highlight",
+            DisplayMode::Background => "background",
+        };
+        if i > 0 {
+            json.push(',');
+        }
+        json.push_str(&format!(
+            "{{\"start\":{start},\"count\":{count},\"color\":[{},{},{},{}],\"mode\":\"{mode}\"}}",
+            g.color[0], g.color[1], g.color[2], g.color[3]
+        ));
+    }
+    json.push(']');
+    (positions, normals, json)
+}
+
+fn partition_groups(
+    node: &Node,
+    color: [f32; 4],
+    mode: DisplayMode,
+    ctx: &mut Ctx,
+    out: &mut Vec<ColoredMesh>,
+) -> Result<(), GeomError> {
+    match node {
+        Node::Empty => {}
+        // Display attributes set the effective color/mode for their subtree.
+        Node::Color { rgba, child } => partition_groups(child, *rgba, mode, ctx, out)?,
+        Node::Highlight(child) => partition_groups(child, color, DisplayMode::Highlight, ctx, out)?,
+        Node::Background(child) => {
+            partition_groups(child, color, DisplayMode::Background, ctx, out)?
+        }
+        // Transparent to color: recurse so each child keeps its own regions.
+        Node::Group(children) | Node::Union(children) => {
+            for c in children {
+                partition_groups(c, color, mode, ctx, out)?;
+            }
+        }
+        // Affine transforms distribute over sub-meshes: recurse, then transform
+        // each produced mesh (reusing the fused path's vertex mutators).
+        Node::Translate { v, child } => {
+            let start = out.len();
+            partition_groups(child, color, mode, ctx, out)?;
+            out[start..]
+                .iter_mut()
+                .for_each(|cm| translate(&mut cm.mesh, *v));
+        }
+        Node::Rotate { deg, child } => {
+            let start = out.len();
+            partition_groups(child, color, mode, ctx, out)?;
+            out[start..]
+                .iter_mut()
+                .for_each(|cm| rotate(&mut cm.mesh, *deg));
+        }
+        Node::Scale { v, child } => {
+            let start = out.len();
+            partition_groups(child, color, mode, ctx, out)?;
+            out[start..]
+                .iter_mut()
+                .for_each(|cm| scale(&mut cm.mesh, *v));
+        }
+        Node::Mirror { v, child } => {
+            let start = out.len();
+            partition_groups(child, color, mode, ctx, out)?;
+            out[start..]
+                .iter_mut()
+                .for_each(|cm| mirror(&mut cm.mesh, *v));
+        }
+        Node::MultMatrix { m, child } => {
+            let start = out.len();
+            partition_groups(child, color, mode, ctx, out)?;
+            out[start..]
+                .iter_mut()
+                .for_each(|cm| mult_matrix(&mut cm.mesh, m));
+        }
+        // Everything else (booleans, hull, minkowski, resize, extrudes,
+        // projection, primitives, import) is opaque: one fused mesh in the
+        // current color. `Background` was already handled above, so the fused
+        // render here still excludes any nested `%`.
+        _ => {
+            let mesh = render_node(node, ctx)?;
+            if !mesh.tris.is_empty() {
+                out.push(ColoredMesh { mesh, color, mode });
+            }
+        }
+    }
+    Ok(())
+}
+
 /// The actual per-variant renderer (children go back through [`render_node`]).
 /// Is `node` a 2D subtree (result lies in the XY plane)?
 /// Whether a node renders as a 2D object (its output is a flat profile, exportable
@@ -142,6 +328,10 @@ pub fn is_2d(node: &Node) -> bool {
         Group(cs) | Union(cs) | Difference(cs) | Intersection(cs) | Hull(cs) | Minkowski(cs) => {
             cs.iter().any(is_2d)
         }
+        // Display attributes are transparent to geometry; `%` background is
+        // excluded from the fused output, so it never contributes 2D-ness.
+        Color { child, .. } | Highlight(child) => is_2d(child),
+        Background(_) => false,
     }
 }
 
@@ -277,6 +467,12 @@ fn render_uncached(node: &Node, ctx: &mut Ctx) -> Result<Mesh, GeomError> {
             resize(&mut mesh, *new, *auto);
             Ok(mesh)
         }
+
+        // Display attributes: `color`/`#` are transparent to the fused geometry;
+        // `%` background is excluded from the rendered/exported mesh.
+        Node::Color { child, .. } => render_node(child, ctx),
+        Node::Highlight(child) => render_node(child, ctx),
+        Node::Background(_) => Ok(Mesh::new()),
     }
 }
 
@@ -430,6 +626,15 @@ fn hash_all(node: &Node, out: &mut HashMap<*const Node, u64>) -> u64 {
         }
         Node::Projection { cut, child } => {
             cut.hash(&mut h);
+            hash_all(child, out).hash(&mut h);
+        }
+        Node::Color { rgba, child } => {
+            for c in rgba {
+                c.to_bits().hash(&mut h);
+            }
+            hash_all(child, out).hash(&mut h);
+        }
+        Node::Highlight(child) | Node::Background(child) => {
             hash_all(child, out).hash(&mut h);
         }
     }
@@ -1174,5 +1379,114 @@ mod tests {
                 "case {i}: rust-manifold output inward-facing"
             );
         }
+    }
+
+    // ---- B3: color / highlight / background ---------------------------------
+
+    fn unit_cube() -> Node {
+        Node::Cube {
+            size: [1.0, 1.0, 1.0],
+            center: false,
+        }
+    }
+
+    #[test]
+    fn background_excluded_and_highlight_kept_in_fused() {
+        // `%` background is dropped from the fused (exported) mesh; `#` is kept.
+        let with_bg = Node::Union(vec![
+            unit_cube(),
+            Node::Background(Box::new(Node::Translate {
+                v: [5.0, 0.0, 0.0],
+                child: Box::new(unit_cube()),
+            })),
+        ]);
+        assert!((render(&with_bg).unwrap().volume() - 1.0).abs() < 1e-6);
+
+        let with_hl = Node::Union(vec![
+            unit_cube(),
+            Node::Highlight(Box::new(Node::Translate {
+                v: [5.0, 0.0, 0.0],
+                child: Box::new(unit_cube()),
+            })),
+        ]);
+        assert!((render(&with_hl).unwrap().volume() - 2.0).abs() < 1e-6);
+
+        // color() never changes fused geometry.
+        let colored = Node::Color {
+            rgba: [1.0, 0.0, 0.0, 1.0],
+            child: Box::new(unit_cube()),
+        };
+        assert!((render(&colored).unwrap().volume() - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn render_groups_partitions_by_color_and_mode() {
+        let node = Node::Union(vec![
+            Node::Color {
+                rgba: [1.0, 0.0, 0.0, 1.0],
+                child: Box::new(unit_cube()),
+            },
+            Node::Highlight(Box::new(Node::Translate {
+                v: [2.0, 0.0, 0.0],
+                child: Box::new(unit_cube()),
+            })),
+            Node::Background(Box::new(Node::Translate {
+                v: [4.0, 0.0, 0.0],
+                child: Box::new(unit_cube()),
+            })),
+        ]);
+        let mut cache = GeomCache::new();
+        let groups = render_groups_cached(&node, &RustManifoldKernel::new(), &mut cache).unwrap();
+        assert_eq!(groups.len(), 3);
+        assert_eq!(groups[0].color, [1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(groups[0].mode, DisplayMode::Solid);
+        assert_eq!(groups[1].mode, DisplayMode::Highlight);
+        assert_eq!(groups[2].mode, DisplayMode::Background);
+        // The highlight group was translated by +2 in x.
+        let min_x = groups[1]
+            .mesh
+            .verts
+            .iter()
+            .map(|v| v[0])
+            .fold(f64::MAX, f64::min);
+        assert!(
+            min_x >= 2.0 - 1e-6,
+            "highlight group not translated: min_x={min_x}"
+        );
+    }
+
+    #[test]
+    fn boolean_across_colors_takes_parent_color() {
+        // A difference whose children are colored renders as ONE group in the
+        // enclosing (default) color — booleans resolve to the parent's color.
+        let node = Node::Difference(vec![
+            Node::Color {
+                rgba: [1.0, 0.0, 0.0, 1.0],
+                child: Box::new(Node::Cube {
+                    size: [4.0, 4.0, 4.0],
+                    center: false,
+                }),
+            },
+            Node::Color {
+                rgba: [0.0, 0.0, 1.0, 1.0],
+                child: Box::new(unit_cube()),
+            },
+        ]);
+        let mut cache = GeomCache::new();
+        let groups = render_groups_cached(&node, &RustManifoldKernel::new(), &mut cache).unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].color, DEFAULT_COLOR);
+    }
+
+    #[test]
+    fn to_3mf_colored_model_has_materials_and_objects() {
+        let a = cube([1.0, 1.0, 1.0], false);
+        let b = cube([2.0, 2.0, 2.0], false);
+        let xml =
+            Mesh::to_3mf_colored_model(&[(&a, [1.0, 0.0, 0.0, 1.0]), (&b, [0.0, 0.0, 1.0, 0.5])]);
+        assert_eq!(xml.matches("<object ").count(), 2);
+        assert_eq!(xml.matches("<item ").count(), 2);
+        assert!(xml.contains("displaycolor=\"#FF0000FF\""), "{xml}");
+        assert!(xml.contains("displaycolor=\"#0000FF80\""), "{xml}");
     }
 }

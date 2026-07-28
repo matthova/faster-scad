@@ -71,6 +71,11 @@ struct RenderResult {
     params: String,
     /// Structured diagnostics (JSON array) for inline editor squiggles.
     diagnostics: String,
+    /// Preview color channel (only when the model uses `color`/`#`/`%`): a
+    /// concatenated triangle soup plus a JSON array of per-group ranges/colors.
+    preview_positions: Vec<f32>,
+    preview_normals: Vec<f32>,
+    groups: String,
 }
 
 /// An engine error plus the structured diagnostic (with source span, if any) the
@@ -191,7 +196,7 @@ fn eval_and_render(
     values: &[String],
     file_names: &[String],
     file_contents: &[String],
-) -> Result<(quito_geom::Mesh, Vec<String>, Vec<quito_eval::Warning>, bool), EngineError> {
+) -> Result<(quito_geom::Mesh, quito_eval::EvalOutput, bool), EngineError> {
     let program = quito_syntax::parse(source).map_err(|e| {
         let message = format!("parse error: {}", e.message);
         EngineError {
@@ -222,7 +227,7 @@ fn eval_and_render(
             }
         })?
     };
-    Ok((mesh, out.echoes, out.warnings, is_2d))
+    Ok((mesh, out, is_2d))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -241,14 +246,26 @@ fn render(
     let work = move || {
         let params = quito_syntax::customizer::extract(&source).to_json();
         match eval_and_render(&cache, &source, &dir, &param_names, &param_values, &file_names, &file_contents) {
-            Ok((mesh, echoes, warnings, is_2d)) => {
+            Ok((mesh, out, is_2d)) => {
                 let (positions, normals) = mesh.to_triangle_soup_f32();
-                let diagnostics = quito_eval::diagnostics_json(None, &warnings);
+                let diagnostics = quito_eval::diagnostics_json(None, &out.warnings);
+                // Preview color channel — only when the model uses color/`#`/`%`.
+                let (preview_positions, preview_normals, groups) =
+                    if quito_geom::has_display_attrs(&out.node) {
+                        let kernel = quito_geom::ManifoldKernel::new();
+                        let mut cache = cache.lock().unwrap();
+                        match quito_geom::render_groups_cached(&out.node, &kernel, &mut cache) {
+                            Ok(g) => quito_geom::preview_channel(&g),
+                            Err(_) => Default::default(),
+                        }
+                    } else {
+                        Default::default()
+                    };
                 RenderResult {
                     ok: true,
                     error: String::new(),
-                    echo: echoes.join("\n"),
-                    warnings: warnings.iter().map(|w| w.message.clone()).collect::<Vec<_>>().join("\n"),
+                    echo: out.echoes.join("\n"),
+                    warnings: out.warnings.iter().map(|w| w.message.clone()).collect::<Vec<_>>().join("\n"),
                     triangle_count: mesh.tris.len() as u32,
                     vertex_count: mesh.verts.len() as u32,
                     volume: mesh.volume(),
@@ -258,6 +275,9 @@ fn render(
                     normals,
                     params,
                     diagnostics,
+                    preview_positions,
+                    preview_normals,
+                    groups,
                 }
             }
             Err(e) => RenderResult {
@@ -314,7 +334,7 @@ fn save_model(
             };
             return std::fs::write(&path, text).map_err(|e| format!("write {path}: {e}"));
         }
-        let (mesh, _, _, _) = eval_and_render(
+        let (mesh, out, _) = eval_and_render(
             &cache,
             &source,
             &dir,
@@ -324,6 +344,18 @@ fn save_model(
             &file_contents,
         )
         .map_err(|e| e.message)?;
+        // 3MF carries per-object color when the model uses color/`#`/`%`.
+        if format == "3mf" && quito_geom::has_display_attrs(&out.node) {
+            let groups =
+                quito_geom::render_groups(&out.node).map_err(|e| format!("color groups: {e}"))?;
+            let colored: Vec<(&quito_geom::Mesh, [f32; 4])> = groups
+                .iter()
+                .filter(|g| g.mode != quito_geom::DisplayMode::Background)
+                .map(|g| (&g.mesh, g.color))
+                .collect();
+            return std::fs::write(&path, quito_geom::Mesh::to_3mf_colored(&colored))
+                .map_err(|e| format!("write {path}: {e}"));
+        }
         let bytes: Vec<u8> = match format.as_str() {
             "off" => mesh.to_off().into_bytes(),
             "obj" => mesh.to_obj().into_bytes(),
@@ -615,11 +647,11 @@ mod tests {
     #[test]
     fn native_render_command_logic() {
         let cache = Arc::new(Mutex::new(quito_geom::GeomCache::new()));
-        let (mesh, _, _, _) = eval_and_render(&cache, "cube([2,3,4]);", ".", &[], &[], &[], &[]).unwrap();
+        let (mesh, _, _) = eval_and_render(&cache, "cube([2,3,4]);", ".", &[], &[], &[], &[]).unwrap();
         assert!((mesh.volume() - 24.0).abs() < 1e-6);
 
         // Overrides apply, like the customizer.
-        let (mesh, echoes, _, _) = eval_and_render(
+        let (mesh, out, _) = eval_and_render(
             &cache,
             "w = 2;\necho(w);\ncube([w, 3, 4]);",
             ".",
@@ -630,10 +662,10 @@ mod tests {
         )
         .unwrap();
         assert!((mesh.volume() - 60.0).abs() < 1e-6);
-        assert_eq!(echoes, vec!["ECHO: 5"]);
+        assert_eq!(out.echoes, vec!["ECHO: 5"]);
 
         // In-memory library file resolves via the combined resolver.
-        let (mesh, _, _, _) = eval_and_render(
+        let (mesh, _, _) = eval_and_render(
             &cache,
             "use <lib.scad>\ncube([side(), side(), side()]);",
             ".",

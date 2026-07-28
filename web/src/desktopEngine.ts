@@ -24,6 +24,9 @@ interface NativeResult {
   is2D: boolean;
   params: string;
   diagnostics: string;
+  previewPositions: number[];
+  previewNormals: number[];
+  groups: string;
 }
 
 export class DesktopEngine {
@@ -73,6 +76,9 @@ export class DesktopEngine {
           version: "native",
           params: res.params,
           diagnostics: res.diagnostics,
+          previewPositions: new Float32Array(res.previewPositions),
+          previewNormals: new Float32Array(res.previewNormals),
+          groups: res.groups,
         });
       })
       .catch((e) => {
@@ -94,6 +100,9 @@ export class DesktopEngine {
           version: "native",
           params: `{"params":[]}`,
           diagnostics: "[]",
+          previewPositions: new Float32Array(0),
+          previewNormals: new Float32Array(0),
+          groups: "",
         });
       });
   }

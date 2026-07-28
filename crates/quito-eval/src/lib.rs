@@ -6,6 +6,7 @@
 //! that mirrors execution nesting). Function values and module `children()`
 //! both close over their definition / call-site environments.
 
+mod color;
 mod text;
 mod value;
 mod vm;
@@ -710,14 +711,58 @@ impl Interp<'_> {
 
         let node = self.dispatch_module(name, args, children)?;
 
+        // `#` highlight / `%` background wrap the produced node so the preview can
+        // render them specially — `#` translucent red (kept in exports), `%`
+        // translucent gray and excluded from the fused/exported mesh.
+        let node = match modifier {
+            Some(Modifier::Highlight) if !matches!(node, Node::Empty) => {
+                Node::Highlight(Box::new(node))
+            }
+            Some(Modifier::Background) if !matches!(node, Node::Empty) => {
+                Node::Background(Box::new(node))
+            }
+            _ => node,
+        };
+
         if modifier == Some(Modifier::Root) {
             self.root = Some(node.clone());
         }
-        // `#` highlight and `%` background are visual-only; passed through in M0.
         if matches!(node, Node::Empty) {
             Ok(Vec::new())
         } else {
             Ok(vec![node])
+        }
+    }
+
+    /// `color(c, alpha)` — wrap children in a [`Node::Color`]. `c` is a name/hex
+    /// string or an `[r,g,b(,a)]` vector; an optional second positional / `alpha=`
+    /// overrides the alpha. An unrecognized color warns and renders in the default.
+    fn b_color(&mut self, args: &[Arg], children: &[Spanned<Stmt>]) -> EResult<Node> {
+        let m = self.bind_named(&["c", "alpha"], args)?;
+        let child = Node::group(self.eval_children(children)?);
+        if matches!(child, Node::Empty) {
+            return Ok(Node::Empty);
+        }
+        let alpha = m.get("alpha").and_then(Value::as_number);
+        let rgba = m.get("c").and_then(|c| color::parse_color(c, alpha));
+        match rgba {
+            Some(rgba) => Ok(Node::Color {
+                rgba,
+                child: Box::new(child),
+            }),
+            None => {
+                if let Some(c) = m.get("c") {
+                    self.warn(format!("color: unknown color {}", c.repr()));
+                }
+                // Honor a bare `color(alpha=…)` against the default color.
+                match alpha {
+                    Some(a) => Ok(Node::Color {
+                        rgba: [0.961, 0.647, 0.137, a as f32],
+                        child: Box::new(child),
+                    }),
+                    None => Ok(child),
+                }
+            }
         }
     }
 
@@ -753,8 +798,10 @@ impl Interp<'_> {
             "mirror" => self.transform(args, children, TransformKind::Mirror),
             "multmatrix" => self.b_multmatrix(args, children),
             "resize" => self.b_resize(args, children),
-            // Visual-only / passthrough modules (ignored for geometry).
-            "color" | "render" => Ok(Node::group(self.eval_children(children)?)),
+            // `color()` tints the preview; geometry is unaffected. `render()` is
+            // a plain passthrough.
+            "color" => self.b_color(args, children),
+            "render" => Ok(Node::group(self.eval_children(children)?)),
             "union" => Ok(Node::Union(self.eval_children(children)?)),
             "difference" => Ok(Node::Difference(self.eval_children(children)?)),
             "intersection" => Ok(Node::Intersection(self.eval_children(children)?)),
@@ -3397,16 +3444,54 @@ mod tests {
     }
 
     #[test]
-    fn color_is_passthrough() {
-        // color() must not drop its children.
+    fn color_wraps_child() {
+        // color() wraps its child in a Color node (geometry unchanged inside).
         let out = eval("color(\"red\") cube(2);");
-        assert_eq!(
-            out.node,
-            Node::Cube {
-                size: [2.0, 2.0, 2.0],
-                center: false
+        match out.node {
+            Node::Color { rgba, child } => {
+                assert_eq!(rgba, [1.0, 0.0, 0.0, 1.0]);
+                assert_eq!(
+                    *child,
+                    Node::Cube {
+                        size: [2.0, 2.0, 2.0],
+                        center: false
+                    }
+                );
             }
-        );
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn color_vector_and_alpha() {
+        let out = eval("color([0,0,1], 0.5) cube(1);");
+        match out.node {
+            Node::Color { rgba, .. } => assert_eq!(rgba, [0.0, 0.0, 1.0, 0.5]),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unknown_color_warns_and_passes_through() {
+        let out = eval("color(\"chartreusey\") cube(1);");
+        // Falls back to the bare child (no Color wrapper) and warns.
+        assert!(matches!(out.node, Node::Cube { .. }));
+        assert!(out
+            .warnings
+            .iter()
+            .any(|w| w.message.contains("unknown color")));
+    }
+
+    #[test]
+    fn highlight_and_background_wrap() {
+        match eval("#cube(1);").node {
+            Node::Highlight(c) => assert!(matches!(*c, Node::Cube { .. })),
+            other => panic!("unexpected: {other:?}"),
+        }
+        match eval("%sphere(2);").node {
+            Node::Background(c) => assert!(matches!(*c, Node::Sphere { .. })),
+            other => panic!("unexpected: {other:?}"),
+        }
     }
 
     #[test]

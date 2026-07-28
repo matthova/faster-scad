@@ -191,6 +191,19 @@ fn run() -> Result<()> {
         match ext.as_str() {
             "off" => std::fs::write(path, mesh.to_off())?,
             "obj" => std::fs::write(path, mesh.to_obj())?,
+            // 3MF carries per-object color: partition into color groups (dropping
+            // `%` background) and write one object per color. Falls back to the
+            // fused single-object 3MF when the model uses no color.
+            "3mf" if quito_geom::has_display_attrs(&out.node) => {
+                let groups =
+                    quito_geom::render_groups(&out.node).context("rendering color groups")?;
+                let colored: Vec<(&quito_geom::Mesh, [f32; 4])> = groups
+                    .iter()
+                    .filter(|g| g.mode != quito_geom::DisplayMode::Background)
+                    .map(|g| (&g.mesh, g.color))
+                    .collect();
+                std::fs::write(path, quito_geom::Mesh::to_3mf_colored(&colored))?
+            }
             "3mf" => std::fs::write(path, mesh.to_3mf())?,
             "amf" => std::fs::write(path, mesh.to_amf())?,
             "stl" if matches!(cli.format, StlFormat::Ascii) => {

@@ -12,6 +12,14 @@ export interface MeshInfo {
 /** A named camera orientation. */
 export type ViewPreset = "iso" | "front" | "back" | "top" | "bottom" | "right" | "left";
 
+/** A colored preview group: a triangle range (vertex offsets) + color + mode. */
+export interface PreviewGroup {
+  start: number;
+  count: number;
+  color: [number, number, number, number];
+  mode: "solid" | "highlight" | "background";
+}
+
 export class Viewer {
   private renderer: THREE.WebGLRenderer;
   private scene: THREE.Scene;
@@ -19,6 +27,7 @@ export class Viewer {
   private controls: OrbitControls;
   private mesh: THREE.Mesh | null = null;
   private geometry: THREE.BufferGeometry | null = null;
+  private materials: THREE.Material[] = [];
   private hasFramed = false;
   private preset: ViewPreset = "iso";
 
@@ -73,34 +82,31 @@ export class Viewer {
     this.camera.updateProjectionMatrix();
   }
 
-  setMesh(positions: Float32Array, normals: Float32Array) {
+  /** Remove and dispose the current mesh, its geometry, and its material(s). */
+  private clearMesh() {
     if (this.mesh) {
       this.scene.remove(this.mesh);
       this.geometry?.dispose();
+      for (const m of this.materials) m.dispose();
+      this.materials = [];
       this.mesh = null;
       this.geometry = null;
     }
-    if (positions.length === 0) {
-      this.onInfo?.(null);
-      return;
-    }
+  }
 
+  private buildGeom(positions: Float32Array, normals: Float32Array): THREE.BufferGeometry {
     const geom = new THREE.BufferGeometry();
     geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
     geom.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
     geom.computeBoundingBox();
+    return geom;
+  }
 
-    const material = new THREE.MeshStandardMaterial({
-      color: 0xf5a623,
-      metalness: 0.1,
-      roughness: 0.6,
-      flatShading: true,
-      side: THREE.DoubleSide,
-    });
-
+  /** Add the mesh to the scene with a black edge overlay, report its size, and
+   *  frame it on first display. `material` may be a single material or a
+   *  per-group array (for colored geometry). */
+  private mountMesh(geom: THREE.BufferGeometry, material: THREE.Material | THREE.Material[]) {
     const mesh = new THREE.Mesh(geom, material);
-
-    // subtle edges
     const edges = new THREE.LineSegments(
       new THREE.EdgesGeometry(geom, 20),
       new THREE.LineBasicMaterial({ color: 0x000000, opacity: 0.15, transparent: true }),
@@ -119,6 +125,43 @@ export class Viewer {
       this.frame(geom);
       this.hasFramed = true;
     }
+  }
+
+  setMesh(positions: Float32Array, normals: Float32Array) {
+    this.clearMesh();
+    if (positions.length === 0) {
+      this.onInfo?.(null);
+      return;
+    }
+    const geom = this.buildGeom(positions, normals);
+    const material = new THREE.MeshStandardMaterial({
+      color: 0xf5a623,
+      metalness: 0.1,
+      roughness: 0.6,
+      flatShading: true,
+      side: THREE.DoubleSide,
+    });
+    this.materials = [material];
+    this.mountMesh(geom, material);
+  }
+
+  /** Render `color()`/`#`/`%` groups: one geometry, one material per group via
+   *  geometry groups. `#` highlight → translucent red, `%` background →
+   *  translucent gray, solid → the group's color (transparent when alpha < 1). */
+  setColoredMesh(positions: Float32Array, normals: Float32Array, groups: PreviewGroup[]) {
+    this.clearMesh();
+    if (positions.length === 0 || groups.length === 0) {
+      this.setMesh(positions, normals);
+      return;
+    }
+    const geom = this.buildGeom(positions, normals);
+    const materials: THREE.Material[] = [];
+    groups.forEach((g, i) => {
+      geom.addGroup(g.start, g.count, i);
+      materials.push(materialForGroup(g));
+    });
+    this.materials = materials;
+    this.mountMesh(geom, materials);
   }
 
   /** Unit view direction (camera → target points opposite this) + up vector. */
@@ -168,4 +211,25 @@ export class Viewer {
     this.preset = "iso";
     if (this.geometry) this.frame(this.geometry);
   }
+}
+
+/** The three.js material for a preview group: `#` → translucent red, `%` →
+ *  translucent gray, solid → the group color (transparent when alpha < 1). */
+function materialForGroup(g: PreviewGroup): THREE.Material {
+  const base = { flatShading: true, side: THREE.DoubleSide as THREE.Side };
+  if (g.mode === "highlight") {
+    return new THREE.MeshStandardMaterial({ ...base, color: 0xff3b30, transparent: true, opacity: 0.5 });
+  }
+  if (g.mode === "background") {
+    return new THREE.MeshStandardMaterial({ ...base, color: 0x888888, transparent: true, opacity: 0.3 });
+  }
+  const [r, gr, b, a] = g.color;
+  return new THREE.MeshStandardMaterial({
+    ...base,
+    color: new THREE.Color(r, gr, b),
+    metalness: 0.1,
+    roughness: 0.6,
+    transparent: a < 1,
+    opacity: a,
+  });
 }

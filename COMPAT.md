@@ -14,7 +14,6 @@ divergences unless noted):
 | # | Area | Current behavior | Upstream | Track to close |
 |---|---|---|---|---|
 | 2 | Assignment hoisting | Assignments in a scope are hoisted then evaluated in source order (last write wins). Handles the common `x=1; …; x=2;` case; does not yet resolve forward references the way a full pre-pass does. | Full "last assignment wins at first position" pre-pass with a lint. | Track A |
-| 5 | Modifiers `#` / `%` | Parsed and passed through (no visual distinction; geometry unchanged). | Highlight / transparent-background rendering. | Track B (item B3) |
 
 ## Current known divergences (with repro)
 
@@ -58,14 +57,6 @@ the dangerous kind. Each has a minimal repro. Tracks A/B track the fixes.
 
   ```scad
   difference() { square(10); projection() translate([0,0,-1]) sphere(4); }
-  ```
-
-- **`color()` is not rendered.** Children pass through and render, but the color
-  is discarded (geometry is always the default material). No visible color in
-  the viewer or exports.
-
-  ```scad
-  color("red") cube(10);               // renders, but not red
   ```
 
 - **`text(font=…)` is ignored.** Only the bundled Liberation Sans (the face

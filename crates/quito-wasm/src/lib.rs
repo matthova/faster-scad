@@ -49,6 +49,11 @@ pub struct RenderResult {
     error: Option<String>,
     /// Structured diagnostics (JSON array) for inline editor squiggles.
     diagnostics: String,
+    /// Preview color channel (only populated when the model uses `color`/`#`/`%`):
+    /// a concatenated triangle soup plus a JSON array of per-group ranges/colors.
+    preview_positions: Vec<f32>,
+    preview_normals: Vec<f32>,
+    groups: String,
     triangle_count: u32,
     vertex_count: u32,
     volume: f64,
@@ -101,6 +106,25 @@ impl RenderResult {
         self.diagnostics.clone()
     }
 
+    /// Preview triangle soup (concatenated colored groups); empty when the model
+    /// uses no color/`#`/`%` (the viewer then uses `positions`).
+    #[wasm_bindgen(getter)]
+    pub fn preview_positions(&self) -> Vec<f32> {
+        self.preview_positions.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn preview_normals(&self) -> Vec<f32> {
+        self.preview_normals.clone()
+    }
+
+    /// Per-group ranges/colors as JSON (`[{start,count,color,mode}]`); empty `[]`
+    /// when the model uses no display attributes.
+    #[wasm_bindgen(getter)]
+    pub fn groups(&self) -> String {
+        self.groups.clone()
+    }
+
     #[wasm_bindgen(getter)]
     pub fn triangle_count(&self) -> u32 {
         self.triangle_count
@@ -137,6 +161,9 @@ impl RenderResult {
             warnings,
             error: Some(msg),
             diagnostics,
+            preview_positions: Vec::new(),
+            preview_normals: Vec::new(),
+            groups: String::new(),
             triangle_count: 0,
             vertex_count: 0,
             volume: 0.0,
@@ -333,6 +360,23 @@ pub fn render_with_files(
     };
 
     let (positions, normals) = mesh.to_triangle_soup_f32();
+
+    // Preview color channel — only for models that actually use color/`#`/`%`, so
+    // plain models keep the fast single-mesh path (and the warm-edit budget).
+    let (preview_positions, preview_normals, groups) = if quito_geom::has_display_attrs(&eval.node)
+    {
+        let r = CACHE.with(|c| {
+            let mut cache = c.borrow_mut();
+            quito_geom::render_groups_cached(&eval.node, &kernel, &mut cache)
+        });
+        match r {
+            Ok(groups) => quito_geom::preview_channel(&groups),
+            Err(_) => (Vec::new(), Vec::new(), String::new()),
+        }
+    } else {
+        (Vec::new(), Vec::new(), String::new())
+    };
+
     RenderResult {
         triangle_count: mesh.tris.len() as u32,
         vertex_count: mesh.verts.len() as u32,
@@ -345,12 +389,38 @@ pub fn render_with_files(
         warnings,
         error: None,
         diagnostics,
+        preview_positions,
+        preview_normals,
+        groups,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn color_populates_preview_channel() {
+        // A plain model: no preview channel (viewer uses `positions`).
+        let plain = render_with_files("cube(2);", vec![], vec![], vec![], vec![]);
+        assert!(plain.ok());
+        assert_eq!(plain.groups(), "");
+        assert!(plain.preview_positions().is_empty());
+
+        // A colored model: preview soup + groups JSON populated.
+        let colored = render_with_files(
+            "color(\"red\") cube(2); color([0,0,1]) translate([5,0,0]) sphere(2);",
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        );
+        assert!(colored.ok());
+        assert!(!colored.preview_positions().is_empty());
+        let g = colored.groups();
+        assert!(g.contains("\"mode\":\"solid\""), "{g}");
+        assert!(g.contains("\"color\":[1,0,0,1]"), "{g}");
+    }
 
     #[test]
     fn diagnostics_surface_parse_eval_and_warnings() {
