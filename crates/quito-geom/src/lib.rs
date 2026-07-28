@@ -145,6 +145,104 @@ pub fn is_2d(node: &Node) -> bool {
     }
 }
 
+/// Rewrite a 2D subtree, resolving every `Projection` to a `Polygon` leaf by
+/// rendering its 3D child through the kernel. `shape2d::render2d` has no kernel,
+/// so a projection reaching it (e.g. under `offset`/`hull`/`minkowski` or a bare
+/// 2D boolean) would otherwise be dropped to empty geometry. The rest of the
+/// tree is left structurally identical.
+fn lower_projections(node: &Node, ctx: &mut Ctx) -> Result<Node, GeomError> {
+    use Node::*;
+    let lower = |c: &Node, ctx: &mut Ctx| lower_projections(c, ctx).map(Box::new);
+    Ok(match node {
+        Projection { cut, child } => {
+            let mesh = render_node(child, ctx)?;
+            let contours = if *cut {
+                shape2d::slice_z0(&mesh)
+            } else {
+                shape2d::silhouette(&mesh)
+            };
+            contours_to_polygon(&contours)
+        }
+        Offset {
+            r,
+            delta,
+            chamfer,
+            frags,
+            child,
+        } => Offset {
+            r: *r,
+            delta: *delta,
+            chamfer: *chamfer,
+            frags: *frags,
+            child: lower(child, ctx)?,
+        },
+        Translate { v, child } => Translate {
+            v: *v,
+            child: lower(child, ctx)?,
+        },
+        Rotate { deg, child } => Rotate {
+            deg: *deg,
+            child: lower(child, ctx)?,
+        },
+        Scale { v, child } => Scale {
+            v: *v,
+            child: lower(child, ctx)?,
+        },
+        Mirror { v, child } => Mirror {
+            v: *v,
+            child: lower(child, ctx)?,
+        },
+        MultMatrix { m, child } => MultMatrix {
+            m: *m,
+            child: lower(child, ctx)?,
+        },
+        Resize { new, auto, child } => Resize {
+            new: *new,
+            auto: *auto,
+            child: lower(child, ctx)?,
+        },
+        Group(cs) => Group(lower_children(cs, ctx)?),
+        Union(cs) => Union(lower_children(cs, ctx)?),
+        Difference(cs) => Difference(lower_children(cs, ctx)?),
+        Intersection(cs) => Intersection(lower_children(cs, ctx)?),
+        Hull(cs) => Hull(lower_children(cs, ctx)?),
+        Minkowski(cs) => Minkowski(lower_children(cs, ctx)?),
+        other => other.clone(),
+    })
+}
+
+fn lower_children(cs: &[Node], ctx: &mut Ctx) -> Result<Vec<Node>, GeomError> {
+    cs.iter().map(|c| lower_projections(c, ctx)).collect()
+}
+
+/// Pack even-odd contours into a single `Polygon` node (one path per contour);
+/// empty contour set → `Empty`. Round-trips through `render2d`'s polygon path.
+fn contours_to_polygon(contours: &[Contour]) -> Node {
+    let mut points: Vec<[f64; 2]> = Vec::new();
+    let mut paths: Vec<Vec<u32>> = Vec::new();
+    for c in contours {
+        if c.len() < 3 {
+            continue;
+        }
+        let start = points.len() as u32;
+        paths.push((0..c.len() as u32).map(|i| start + i).collect());
+        points.extend_from_slice(c);
+    }
+    if paths.is_empty() {
+        Node::Empty
+    } else {
+        Node::Polygon {
+            points,
+            paths: Some(paths),
+        }
+    }
+}
+
+/// `render2d` with projections first lowered to polygons (see `lower_projections`).
+fn render2d_lowered(node: &Node, ctx: &mut Ctx) -> Result<Vec<Contour>, GeomError> {
+    Ok(shape2d::render2d(&lower_projections(node, ctx)?))
+}
+
 fn render_uncached(node: &Node, ctx: &mut Ctx) -> Result<Mesh, GeomError> {
     // 2D CSG (boolean/hull/minkowski/group of 2D shapes) is clipped in the 2D
     // plane and returned as a flat mesh — the 3D kernel can't handle the
@@ -159,7 +257,7 @@ fn render_uncached(node: &Node, ctx: &mut Ctx) -> Result<Mesh, GeomError> {
             | Node::Minkowski(_)
     ) && is_2d(node)
     {
-        return Ok(shape2d::flat_mesh(&shape2d::render2d(node)));
+        return Ok(shape2d::flat_mesh(&render2d_lowered(node, ctx)?));
     }
     match node {
         Node::Empty => Ok(Mesh::new()),
@@ -184,7 +282,7 @@ fn render_uncached(node: &Node, ctx: &mut Ctx) -> Result<Mesh, GeomError> {
 
         // 2D shapes rendered as a flat mesh at z=0.
         Node::Square { .. } | Node::Circle { .. } | Node::Polygon { .. } | Node::Offset { .. } => {
-            Ok(shape2d::flat_mesh(&shape2d::render2d(node)))
+            Ok(shape2d::flat_mesh(&render2d_lowered(node, ctx)?))
         }
         Node::LinearExtrude {
             height,
@@ -510,8 +608,9 @@ fn extrude_csg(
             };
             Ok(extrude(&contours))
         }
-        // A leaf 2D shape (primitive or transform chain): render to contours.
-        leaf => Ok(extrude(&shape2d::render2d(leaf))),
+        // A leaf 2D shape (primitive or transform chain, possibly wrapping a
+        // projection): lower projections, then render to contours.
+        leaf => Ok(extrude(&render2d_lowered(leaf, ctx)?)),
     }
 }
 
@@ -901,6 +1000,27 @@ mod tests {
         assert!(
             (flat_area(&m) - 200.0).abs() < 1e-3,
             "area {}",
+            flat_area(&m)
+        );
+    }
+
+    /// A projection reached through the `render2d` path (here under `hull`) must
+    /// not vanish. `render2d` has no kernel, so before A4 it dropped the
+    /// projection to empty geometry; `lower_projections` now resolves it first.
+    #[test]
+    fn projection_inside_2d_op_not_dropped() {
+        let node = Node::Hull(vec![Node::Projection {
+            cut: false,
+            child: Box::new(Node::Cube {
+                size: [10.0, 20.0, 30.0],
+                center: false,
+            }),
+        }]);
+        let m = render(&node).unwrap();
+        // hull of a 10×20 rectangle is the rectangle itself (area 200), not empty.
+        assert!(
+            (flat_area(&m) - 200.0).abs() < 1e-3,
+            "hull-of-projection area {}",
             flat_area(&m)
         );
     }

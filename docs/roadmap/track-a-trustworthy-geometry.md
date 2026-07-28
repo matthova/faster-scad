@@ -28,28 +28,20 @@ different shape.
   `shape2d` unit tests. (Note: the doc's original "self-union" suggestion does not
   work in geo 0.29, which has no `unary_union` and does not resolve a
   self-intersecting input ring — hence the convex-piece construction.)
+- **A4** (fix `projection()` dropped inside 2D booleans) is **done** — a projection
+  reaching the pure-2D `render2d` (under `offset`/`hull`/`minkowski`, or a bare 2D
+  boolean) used to fall through to empty geometry, silently. `render2d` has no
+  kernel, so it can't render the projection's 3D child; instead a `Ctx`-aware
+  pre-pass (`lower_projections`) resolves every projection to a `Polygon` leaf
+  (via `slice_z0`/`silhouette`) before `render2d` runs. Covered by `corpus/geom`
+  cases (projection under offset/hull, both `cut` modes) and a unit test. (The
+  doc's original "add a `render2d` arm" idea can't work as written — no kernel
+  there. CLI 2D→DXF/SVG export of a bare projection stays unresolved, a separate
+  niche gap.)
 
-The remaining items (A4–A6) are still open.
+The remaining items (A5–A6) are still open.
 
-**Effort:** ~1.5 weeks remaining (A4–A6). **Exit criterion** at the bottom.
-
----
-
-## A4. Fix `projection()` silently dropped inside 2D booleans
-
-`shape2d::render2d`'s match has no `Node::Projection` arm, so a projection
-nested inside a bare 2D boolean (e.g.
-`difference() { square(10); projection(cut=true) sphere(6); }`) falls to the
-catch-all (~lines 272–275) and contributes **empty geometry** — the boolean
-computes against nothing, silently.
-
-Fix: route `Node::Projection` inside `render2d` through the existing 3D render
-→ `slice_z0`/`silhouette` path (both already exist in shape2d.rs; the miss is
-purely the dispatch arm). Add corpus cases for projection (both `cut` modes)
-under each 2D boolean, and audit the same catch-all for any other 3D→2D
-node that could silently vanish the same way.
-
-**Effort: small (≤1 day), fix + tests.**
+**Effort:** ~1 week remaining (A5–A6). **Exit criterion** at the bottom.
 
 ---
 
@@ -143,7 +135,7 @@ is open-ended and can trail.**
 > `cargo run -p xtask -- bosl2` reports **16/16 with assertion-output
 > checking**, both enforced in CI on every PR (0/0, skipped files, or missing
 > corpus = red). The geom harness + corpus are already in place and green in CI
-> (A2); named-arg/axis-angle transforms (A1) and offset self-intersection (A3)
-> are closed. Still open: projection-in-2D-boolean (A4), non-convex minkowski at
+> (A2); named-arg/axis-angle transforms (A1), offset self-intersection (A3), and
+> projection-in-2D-boolean (A4) are closed. Still open: non-convex minkowski at
 > minimum emitting a user-visible warning (A5), and BOSL2 assertion-output
 > checking (A6). COMPAT.md accurately lists every remaining known divergence.
