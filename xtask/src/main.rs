@@ -35,6 +35,7 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        "bless-bosl2" => bless_bosl2(&root),
         "bosl2" => {
             if !run_bosl2(&root) {
                 std::process::exit(1);
@@ -48,107 +49,172 @@ fn main() {
         }
         other => {
             eprintln!("unknown command: {other}");
-            eprintln!("usage: xtask [bless-echo|echo|bless-geom|geom|bosl2|bench|warm-gate]");
+            eprintln!(
+                "usage: xtask [bless-echo|echo|bless-geom|geom|bless-bosl2|bosl2|bench|warm-gate]"
+            );
             std::process::exit(2);
         }
     }
 }
 
-/// Run BOSL2's function-oriented test suite (BSD-licensed submodule) through
-/// quito and report the pass rate — the M2 exit metric.
-///
-/// Returns `true` only if every listed test file exists, parses, evaluates
-/// without error, and actually executed at least one `assert()` (a test that
-/// runs zero assertions is a vacuous pass and is rejected). A missing file or
-/// an empty subset is a hard failure — this is what makes the check meaningful
-/// in CI, where the submodule not being checked out would otherwise report
-/// 0/0 and exit 0.
-fn run_bosl2(root: &Path) -> bool {
-    let dir = root.join("corpus/BOSL2/tests");
-    // Function-oriented subset (M2). `test_quaternions` is intentionally absent:
-    // it does not exist in the pinned BOSL2 submodule. Adding a name here that
-    // has no `.scadtest` file is now a hard failure rather than a silent skip.
-    let subset = [
-        "test_math",
-        "test_lists",
-        "test_comparisons",
-        "test_strings",
-        "test_vectors",
-        "test_linalg",
-        "test_trigonometry",
-        "test_utility",
-        "test_fnliterals",
-        "test_structs",
-        "test_coords",
-        "test_affine",
-        "test_geometry",
-        "test_paths",
-        "test_regions",
-    ];
-    let dir_str = dir.to_string_lossy().into_owned();
-    let mut pass = 0;
-    let mut total = 0;
-    let mut missing = Vec::new();
-    let mut failed: Vec<(&str, String)> = Vec::new();
+/// The BOSL2 function-oriented test files (BSD-licensed submodule). Each holds
+/// many `[[test]]` blocks; the gate runs **all** of them (M2 originally ran only
+/// the first per file). `test_quaternions` is intentionally absent — it does not
+/// exist in the pinned submodule.
+const BOSL2_SUBSET: [&str; 15] = [
+    "test_math",
+    "test_lists",
+    "test_comparisons",
+    "test_strings",
+    "test_vectors",
+    "test_linalg",
+    "test_trigonometry",
+    "test_utility",
+    "test_fnliterals",
+    "test_structs",
+    "test_coords",
+    "test_affine",
+    "test_geometry",
+    "test_paths",
+    "test_regions",
+];
 
-    for name in subset {
-        let path = dir.join(format!("{name}.scadtest"));
-        let raw = match fs::read_to_string(&path) {
-            Ok(raw) => raw,
+/// Extract every `[[test]]` block's `(name, script)` from a `.scadtest` file.
+fn extract_tests(raw: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for chunk in raw.split("[[test]]").skip(1) {
+        let name = chunk.find("name = \"").and_then(|i| {
+            let rest = &chunk[i + "name = \"".len()..];
+            rest.find('"').map(|j| rest[..j].to_string())
+        });
+        let script = chunk.find("script = '''").and_then(|i| {
+            let rest = &chunk[i + "script = '''".len()..];
+            rest.find("'''").map(|j| rest[..j].to_string())
+        });
+        if let (Some(n), Some(s)) = (name, script) {
+            out.push((n, s));
+        }
+    }
+    out
+}
+
+/// Run every `[[test]]` block of one file through quito; return the sorted names
+/// of the blocks that pass (parse + eval Ok + at least one assert executed) and
+/// the total block count. `Err` = the file is missing/unreadable/corrupt.
+fn bosl2_file_results(dir: &Path, name: &str) -> Result<(Vec<String>, usize), String> {
+    let raw =
+        fs::read_to_string(dir.join(format!("{name}.scadtest"))).map_err(|e| e.to_string())?;
+    let tests = extract_tests(&raw);
+    if tests.is_empty() {
+        return Err("no [[test]] blocks (corrupt or wrong format)".into());
+    }
+    let dir_str = dir.to_string_lossy().into_owned();
+    let mut passing: Vec<String> = tests
+        .iter()
+        .filter(|(_, script)| match quito_syntax::parse(script) {
+            // A block passes only if it evaluates AND actually ran an assert —
+            // a test that executes zero asserts is a vacuous pass.
+            Ok(prog) => matches!(
+                quito_eval::eval_program_with(&prog, &DiskResolver, &dir_str),
+                Ok(out) if out.asserts_run > 0
+            ),
+            Err(_) => false,
+        })
+        .map(|(n, _)| n.clone())
+        .collect();
+    passing.sort();
+    passing.dedup();
+    Ok((passing, tests.len()))
+}
+
+/// Regenerate the BOSL2 baselines (the set of passing block names per file) from
+/// quito's current behavior. Dev-only; needs the submodule checked out.
+fn bless_bosl2(root: &Path) {
+    let dir = root.join("corpus/BOSL2/tests");
+    let goldens = root.join("corpus/golden/bosl2");
+    fs::create_dir_all(&goldens).unwrap();
+    for name in BOSL2_SUBSET {
+        match bosl2_file_results(&dir, name) {
+            Ok((passing, total)) => {
+                fs::write(
+                    goldens.join(format!("{name}.txt")),
+                    format!("{}\n", passing.join("\n")),
+                )
+                .unwrap();
+                eprintln!("  {name}: {}/{} blessed", passing.len(), total);
+            }
+            Err(e) => eprintln!("  !  {name}: {e}"),
+        }
+    }
+    eprintln!("blessed BOSL2 baselines into {}", goldens.display());
+}
+
+/// Run BOSL2's function suite through quito, block by block, gated against the
+/// committed per-file baseline of passing block names. Returns `true` only if
+/// every file exists, has blocks, and its current passing set exactly matches
+/// its baseline — a **regression** (a baselined block now failing) and an
+/// unblessed **improvement** (a block now passing) both fail, as does a missing
+/// file/golden or a zero-block run (submodule absent → 0/0 is never a pass).
+/// Known-failing blocks are recorded by their absence from the baseline, so the
+/// gate guards them without pretending they pass.
+fn run_bosl2(root: &Path) -> bool {
+    use std::collections::BTreeSet;
+    let dir = root.join("corpus/BOSL2/tests");
+    let goldens = root.join("corpus/golden/bosl2");
+    let mut ok = true;
+    let mut total_pass = 0usize;
+    let mut total_blocks = 0usize;
+
+    for name in BOSL2_SUBSET {
+        let (passing, total) = match bosl2_file_results(&dir, name) {
+            Ok(r) => r,
             Err(e) => {
-                // Missing/unreadable file: hard failure, not a silent skip.
-                missing.push((name, e.to_string()));
+                println!("  MISSING {name} ({e})");
+                ok = false;
                 continue;
             }
         };
-        let Some(script) = extract_script(&raw) else {
-            failed.push((name, "no `script = '''...'''` block".into()));
-            total += 1;
+        total_pass += passing.len();
+        total_blocks += total;
+
+        let Ok(golden_txt) = fs::read_to_string(goldens.join(format!("{name}.txt"))) else {
+            println!("  ?  {name}: no baseline (run `xtask bless-bosl2`)");
+            ok = false;
             continue;
         };
-        total += 1;
-        let result = match quito_syntax::parse(&script) {
-            Ok(prog) => match quito_eval::eval_program_with(&prog, &DiskResolver, &dir_str) {
-                Ok(out) if out.asserts_run > 0 => Ok(()),
-                Ok(_) => Err("evaluated but ran zero asserts (vacuous)".to_string()),
-                Err(e) => Err(format!("eval error: {}", e.message)),
-            },
-            Err(e) => Err(format!("parse error: {}", e.message)),
-        };
-        match result {
-            Ok(()) => {
-                pass += 1;
-                println!("  PASS {name}");
+        let golden: BTreeSet<&str> = golden_txt.lines().filter(|l| !l.is_empty()).collect();
+        let current: BTreeSet<&str> = passing.iter().map(String::as_str).collect();
+        let regressions: Vec<&&str> = golden.difference(&current).collect();
+        let improvements: Vec<&&str> = current.difference(&golden).collect();
+
+        if regressions.is_empty() && improvements.is_empty() {
+            println!("  PASS {name}: {}/{}", passing.len(), total);
+        } else {
+            ok = false;
+            println!(
+                "  FAIL {name}: {}/{} (baseline {})",
+                passing.len(),
+                total,
+                golden.len()
+            );
+            for r in &regressions {
+                println!("     - regression: {r} was passing, now fails");
             }
-            Err(reason) => {
-                println!("  FAIL {name} ({reason})");
-                failed.push((name, reason));
+            for i in &improvements {
+                println!("     + improvement: {i} now passes — run `xtask bless-bosl2`");
             }
         }
     }
 
-    for (name, e) in &missing {
-        println!("  MISSING {name}.scadtest ({e})");
-    }
-
-    let pct = if total == 0 {
+    let pct = if total_blocks == 0 {
         0.0
     } else {
-        pass as f64 / total as f64 * 100.0
+        total_pass as f64 / total_blocks as f64 * 100.0
     };
-    println!("\nBOSL2 function tests: {pass}/{total} ({pct:.0}%)");
-
-    let ok = missing.is_empty() && failed.is_empty() && total > 0;
-    if !ok {
-        if !missing.is_empty() {
-            eprintln!(
-                "error: {} test file(s) missing — is the corpus/BOSL2 submodule checked out?",
-                missing.len()
-            );
-        }
-        if total == 0 {
-            eprintln!("error: no BOSL2 tests executed (0/0 is never a pass)");
-        }
+    println!("\nBOSL2 test blocks: {total_pass}/{total_blocks} ({pct:.0}%)");
+    if total_blocks == 0 {
+        eprintln!("error: no BOSL2 blocks executed — is the corpus/BOSL2 submodule checked out?");
+        ok = false;
     }
     ok
 }
@@ -417,14 +483,6 @@ fn bench_cmd(cmd: &str, args: &[&str], runs: usize) -> Option<f64> {
         }
     }
     best
-}
-
-/// Extract the OpenSCAD source from a BOSL2 `.scadtest` `script = '''...'''` block.
-fn extract_script(raw: &str) -> Option<String> {
-    let start = raw.find("script = '''")? + "script = '''".len();
-    let rest = &raw[start..];
-    let end = rest.find("'''")?;
-    Some(rest[..end].to_string())
 }
 
 fn workspace_root() -> PathBuf {

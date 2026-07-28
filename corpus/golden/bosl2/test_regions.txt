@@ -1,0 +1,14 @@
+test_are_regions_equal
+test_exclusive_or
+test_fill
+test_force_region
+test_hull_region
+test_is_region
+test_is_region_simple
+test_is_valid_region
+test_make_region
+test_offset
+test_point_in_region
+test_region_area
+test_region_parts
+test_split_region_at_region_crossings

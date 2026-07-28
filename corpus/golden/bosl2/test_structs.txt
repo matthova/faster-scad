@@ -1,0 +1,5 @@
+test_echo_struct
+test_is_struct
+test_struct_keys
+test_struct_remove
+test_struct_set
