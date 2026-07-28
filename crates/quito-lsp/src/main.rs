@@ -354,9 +354,10 @@ enum PreviewMsg {
         volume: f64,
         area: f64,
         /// Colored preview channel, when the model uses `color()`/`#`/`%`.
-        groups: Option<PreviewGroups>,
-        /// Provenance channel for editor↔preview linking (3D models).
-        provenance: Option<ProvenanceChannel>,
+        /// Boxed to keep the `Ok` variant small (both channels carry full soups).
+        groups: Option<Box<PreviewGroups>>,
+        /// Provenance channel for editor↔preview linking (3D models). Boxed too.
+        provenance: Option<Box<ProvenanceChannel>>,
     },
     Err(String),
 }
@@ -448,11 +449,11 @@ fn render_preview(source: &str, base_dir: &str, overlay: Overlay) -> PreviewMsg 
             Ok(g) => {
                 let (positions, normals, json) = quito_geom::preview_channel(&g);
                 let groups = serde_json::from_str(&json).unwrap_or_else(|_| json!([]));
-                Some(PreviewGroups {
+                Some(Box::new(PreviewGroups {
                     positions,
                     normals,
                     groups,
-                })
+                }))
             }
             // A grouped-render failure just drops color; the plain mesh still shows.
             Err(_) => None,
@@ -469,11 +470,11 @@ fn render_preview(source: &str, base_dir: &str, overlay: Overlay) -> PreviewMsg 
             Ok(g) => {
                 let (positions, normals, json) = quito_geom::provenance_channel(&g);
                 let groups = serde_json::from_str(&json).unwrap_or_else(|_| json!([]));
-                Some(ProvenanceChannel {
+                Some(Box::new(ProvenanceChannel {
                     positions,
                     normals,
                     groups,
-                })
+                }))
             }
             Err(_) => None,
         }
