@@ -12,29 +12,45 @@ import type { Project } from "./project";
 
 const PREFIX = "#code/";
 
+/** Animation playback state carried in a share link, so the recipient opens on
+ *  the same frame ($t), speed (fps), range (steps), and play/pause state. */
+export interface Anim {
+  t?: number; // $t, 0–1
+  fps?: number;
+  steps?: number;
+  playing?: boolean;
+}
+
 // Compact on-wire shape — short keys keep the encoded link small.
 interface Wire {
   f: { n: string; c: string }[];
   o?: Record<string, ParamValue>;
+  a?: Anim;
 }
 
-/** Encode a project into the `#code/…` fragment payload (no leading `#code/`). */
-export function encodeProject(p: Project): string {
+/** Encode a project into the `#code/…` fragment payload (no leading `#code/`).
+ *  `anim` is omitted from the link when undefined, so default (non-animated)
+ *  projects encode exactly as before. */
+export function encodeProject(p: Project, anim?: Anim): string {
   const wire: Wire = {
     f: p.files.map((f) => ({ n: f.name, c: f.content })),
     o: Object.keys(p.overrides).length ? p.overrides : undefined,
+    a: anim,
   };
   return compressToEncodedURIComponent(JSON.stringify(wire));
 }
 
 /** Build a full shareable URL for the current project, at the current page. */
-export function shareUrl(p: Project): string {
+export function shareUrl(p: Project, anim?: Anim): string {
   const { origin, pathname, search } = window.location;
-  return `${origin}${pathname}${search}${PREFIX}${encodeProject(p)}`;
+  return `${origin}${pathname}${search}${PREFIX}${encodeProject(p, anim)}`;
 }
 
+/** A decoded share link: the project plus any animation playback state. */
+export type SharedProject = Project & { anim?: Anim };
+
 /** Decode a project from a URL hash, or null if it isn't a valid share link. */
-export function decodeSharedProject(hash: string = window.location.hash): Project | null {
+export function decodeSharedProject(hash: string = window.location.hash): SharedProject | null {
   if (!hash.startsWith(PREFIX)) return null;
   const raw = decompressFromEncodedURIComponent(hash.slice(PREFIX.length));
   if (!raw) return null;
@@ -49,8 +65,21 @@ export function decodeSharedProject(hash: string = window.location.hash): Projec
       files,
       overrides: w.o && typeof w.o === "object" ? w.o : {},
       active: 0,
+      anim: decodeAnim(w.a),
     };
   } catch {
     return null;
   }
+}
+
+/** Validate/normalize the animation payload; undefined if absent or malformed. */
+function decodeAnim(a: unknown): Anim | undefined {
+  if (!a || typeof a !== "object") return undefined;
+  const src = a as Record<string, unknown>;
+  const anim: Anim = {};
+  if (typeof src.t === "number" && isFinite(src.t)) anim.t = src.t;
+  if (typeof src.fps === "number" && isFinite(src.fps)) anim.fps = src.fps;
+  if (typeof src.steps === "number" && isFinite(src.steps)) anim.steps = src.steps;
+  if (typeof src.playing === "boolean") anim.playing = src.playing;
+  return Object.keys(anim).length ? anim : undefined;
 }

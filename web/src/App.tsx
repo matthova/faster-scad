@@ -111,8 +111,11 @@ export function App() {
   const paramsJsonRef = useRef("");
   const requestRenderRef = useRef<() => void>(() => {});
   const renderNowRef = useRef<() => void>(() => {}); // immediate render (animation frames bypass the debounce)
-  const timeRef = useRef(0); // $t for animation
-  const stepRef = useRef(0); // current animation frame index (0..steps-1)
+  // Animation playback: a share link may carry $t/fps/steps/play-state so the
+  // recipient opens on the same frame and speed.
+  const sharedAnim = sharedRef.current?.anim;
+  const timeRef = useRef(sharedAnim?.t ?? 0); // $t for animation
+  const stepRef = useRef(Math.round((sharedAnim?.t ?? 0) * (sharedAnim?.steps ?? 20))); // current animation frame index (0..steps-1)
 
   const [files, setFiles] = useState<File[]>(filesRef.current);
   const [active, setActive] = useState(activeRef.current);
@@ -131,10 +134,10 @@ export function App() {
   const [exportFmt, setExportFmt] = useState<ExportFmt>("stl");
   const [is2D, setIs2D] = useState(false);
   const [dims, setDims] = useState<MeshInfo | null>(null);
-  const [time, setTime] = useState(0);
-  const [playing, setPlaying] = useState(false);
-  const [fps, setFps] = useState(15);
-  const [steps, setSteps] = useState(20);
+  const [time, setTime] = useState(sharedAnim?.t ?? 0);
+  const [playing, setPlaying] = useState(sharedAnim?.playing ?? false);
+  const [fps, setFps] = useState(sharedAnim?.fps ?? 15);
+  const [steps, setSteps] = useState(sharedAnim?.steps ?? 20);
   const [schema, setSchema] = useState<Param[]>([]);
   const [overrides, setOverrides] = useState<Record<string, ParamValue>>(overridesRef.current);
   const [shareMsg, setShareMsg] = useState("");
@@ -317,11 +320,17 @@ export function App() {
   }
 
   async function onShare() {
-    const url = shareUrl({
-      files: filesRef.current,
-      overrides: overridesRef.current,
-      active: activeRef.current,
-    });
+    // Only attach animation state when it differs from the defaults, so a
+    // still, unedited project produces the same compact link as before.
+    const animAtDefault = time === 0 && !playing && fps === 15 && steps === 20;
+    const url = shareUrl(
+      {
+        files: filesRef.current,
+        overrides: overridesRef.current,
+        active: activeRef.current,
+      },
+      animAtDefault ? undefined : { t: time, fps, steps, playing },
+    );
     // Reflect the link in the address bar (replaceState avoids a scroll/nav).
     try {
       window.history.replaceState(null, "", url);
