@@ -1059,7 +1059,10 @@ impl Interp<'_> {
         let node = match kind {
             TransformKind::Translate => {
                 let m = self.bind_named(&["v"], args)?;
-                let v = m.get("v").and_then(Value::as_vec3).unwrap_or([0.0, 0.0, 0.0]);
+                let v = m
+                    .get("v")
+                    .and_then(Value::as_vec3)
+                    .unwrap_or([0.0, 0.0, 0.0]);
                 Node::Translate { v, child }
             }
             TransformKind::Scale => {
@@ -1069,7 +1072,10 @@ impl Interp<'_> {
             }
             TransformKind::Mirror => {
                 let m = self.bind_named(&["v"], args)?;
-                let v = m.get("v").and_then(Value::as_vec3).unwrap_or([1.0, 0.0, 0.0]);
+                let v = m
+                    .get("v")
+                    .and_then(Value::as_vec3)
+                    .unwrap_or([1.0, 0.0, 0.0]);
                 Node::Mirror { v, child }
             }
             TransformKind::Rotate => {
@@ -2549,10 +2555,18 @@ mod tests {
         let expect = [[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]];
         for r in 0..3 {
             for c in 0..3 {
-                assert!((m[r][c] - expect[r][c]).abs() < 1e-12, "m[{r}][{c}]={}", m[r][c]);
+                assert!(
+                    (m[r][c] - expect[r][c]).abs() < 1e-12,
+                    "m[{r}][{c}]={}",
+                    m[r][c]
+                );
             }
         }
-        assert_eq!([m[0][3], m[1][3], m[2][3]], [0.0, 0.0, 0.0], "no translation");
+        assert_eq!(
+            [m[0][3], m[1][3], m[2][3]],
+            [0.0, 0.0, 0.0],
+            "no translation"
+        );
         assert_eq!(m[3], [0.0, 0.0, 0.0, 1.0], "affine bottom row");
 
         // Named form is identical to positional.
@@ -2574,7 +2588,10 @@ mod tests {
             m[2][0] * axis[0] + m[2][1] * axis[1] + m[2][2] * axis[2],
         ];
         for i in 0..3 {
-            assert!((mapped[i] - axis[i]).abs() < 1e-12, "axis not fixed: {mapped:?}");
+            assert!(
+                (mapped[i] - axis[i]).abs() < 1e-12,
+                "axis not fixed: {mapped:?}"
+            );
         }
     }
 
