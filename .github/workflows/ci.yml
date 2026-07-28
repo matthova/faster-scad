@@ -120,6 +120,13 @@ jobs:
         working-directory: web
         run: npm ci
 
+      # Vitest unit tests for the pure-logic modules (export writers, customizer
+      # schema parsing, share-link round-trip). No DOM/wasm needed, so they run
+      # before the wasm build and fail fast.
+      - name: Unit tests (vitest)
+        working-directory: web
+        run: npm test
+
       - name: Build wasm engine
         working-directory: web
         run: npm run build:wasm
