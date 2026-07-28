@@ -276,12 +276,22 @@ fn transforms_named_and_axis_angle() {
     // Named translate: the child moves to x = 100..110.
     let m = render_scad_src("translate(v=[100,0,0]) cube(10);", &dir);
     let (lo, hi) = bbox(&m);
-    assert!(close(lo, [100.0, 0.0, 0.0]) && close(hi, [110.0, 10.0, 10.0]), "translate(v=) bbox {lo:?}..{hi:?}");
+    assert!(
+        close(lo, [100.0, 0.0, 0.0]) && close(hi, [110.0, 10.0, 10.0]),
+        "translate(v=) bbox {lo:?}..{hi:?}"
+    );
 
     // Axis-angle, positional and named, must match OpenSCAD's bbox and volume.
-    for src in ["rotate(45,[1,1,0]) cube(10, center=true);", "rotate(a=45, v=[1,1,0]) cube(10, center=true);"] {
+    for src in [
+        "rotate(45,[1,1,0]) cube(10, center=true);",
+        "rotate(a=45, v=[1,1,0]) cube(10, center=true);",
+    ] {
         let m = render_scad_src(src, &dir);
-        assert!((m.volume() - 1000.0).abs() < 0.1, "{src}: volume {}", m.volume());
+        assert!(
+            (m.volume() - 1000.0).abs() < 0.1,
+            "{src}: volume {}",
+            m.volume()
+        );
         let (lo, hi) = bbox(&m);
         assert!(
             close(lo, [-7.5, -7.5, -8.5355]) && close(hi, [7.5, 7.5, 8.5355]),

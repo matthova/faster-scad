@@ -9,46 +9,15 @@ users into an engine that still silently mis-rotates `rotate(45,[1,1,0])`
 (track A, item A1) converts adopters into detractors — trust first, comfort
 second. Sequenced as M7, it inherits a geometry engine users can rely on.
 
-**Effort:** ~2 weeks remaining.
+**Effort:** ~1.5 weeks remaining.
 
 > **Done:** B1 (desktop Save source — `save_source`/`watch_files` commands, ⌘S /
 > Save As, native menu, dirty-tab indicator, watcher reentrancy, `.scad` file
-> association) shipped and is removed from this doc.
-
----
-
-## B2. Inline editor diagnostics (error squiggles)
-
-### Current state
-
-Errors appear only in the status bar and console panel. Verified:
-`web/package.json` has no `@codemirror/lint` dependency and nothing in
-`web/src` calls `setDiagnostics`. The frustrating part: **spans already exist
-end-to-end and are being thrown away** — `quito-syntax` parse errors carry
-`e.span` (byte range), but `crates/quito-wasm/src/lib.rs:246` and
-`desktop/src-tauri/src/lib.rs:178,254` flatten it into
-`format!("parse error: {} (at {}..{})")`, and `web/src/engineWorker.ts`
-exposes only `error: string`. The README's "parse errors surfaced inline" is
-currently an overstatement.
-
-### Work items
-
-1. **Structured error type across the boundary** — change the wasm
-   `RenderResponse` and the Tauri IPC payload from `error: String` to
-   `{ message, file, start, end, kind }` (keep a formatted string alongside
-   for the console). Parse errors have exact spans today; eval errors should
-   carry the best span available (call-site of the failing builtin) and can
-   improve incrementally.
-2. **`@codemirror/lint` integration** — add the dep, convert byte offsets to
-   the active document's positions, `setDiagnostics` on each render response,
-   clear on success. Multi-file wrinkle: an error in a library tab should
-   badge that tab and jump-to on click, not squiggle the wrong document.
-3. **Warnings too** — the console already receives warnings; give them spans
-   where available and render as yellow squiggles. This pays off double when
-   track A's minkowski warning (A5) and hoisting lint land.
-
-**Effort: small-medium (~2–3 days). High visible payoff; also makes the README
-claim true.**
+> association) and B2 (inline editor diagnostics — statement spans threaded
+> through the AST/evaluator, a structured `diagnostics` JSON channel across the
+> wasm + Tauri boundaries, and `@codemirror/lint` squiggles: red for errors,
+> yellow for warnings, cleared on success, with a badge on the main tab when it
+> isn't focused) shipped and are removed from this doc.
 
 ---
 
@@ -149,7 +118,6 @@ workflows expect it.
 ## Exit criterion
 
 > A user opens a multi-file OpenSCAD project in Quito desktop (saving with ⌘S
-> already works — B1), edits with inline error squiggles, sees `color()`/`#`/`%`
+> and inline error squiggles already work — B1, B2), sees `color()`/`#`/`%`
 > rendered correctly in the preview, and exports both an STL and a PNG thumbnail —
-> without touching OpenSCAD. COMPAT.md divergence #5 is closed; the README's
-> "parse errors surfaced inline" claim is true.
+> without touching OpenSCAD. COMPAT.md divergence #5 is closed.

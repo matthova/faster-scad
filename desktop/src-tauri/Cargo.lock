@@ -2661,6 +2661,8 @@ dependencies = [
  "quito-ir",
  "quito-syntax",
  "rustc-hash",
+ "serde",
+ "serde_json",
  "thiserror 2.0.19",
  "ttf-parser",
 ]

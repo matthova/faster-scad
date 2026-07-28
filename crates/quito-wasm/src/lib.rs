@@ -47,6 +47,8 @@ pub struct RenderResult {
     echo: String,
     warnings: String,
     error: Option<String>,
+    /// Structured diagnostics (JSON array) for inline editor squiggles.
+    diagnostics: String,
     triangle_count: u32,
     vertex_count: u32,
     volume: f64,
@@ -92,6 +94,13 @@ impl RenderResult {
         self.error.is_none()
     }
 
+    /// Structured diagnostics as a JSON array (`[{severity,message,start,end}]`),
+    /// where start/end are byte offsets into the source, or -1 when unknown.
+    #[wasm_bindgen(getter)]
+    pub fn diagnostics(&self) -> String {
+        self.diagnostics.clone()
+    }
+
     #[wasm_bindgen(getter)]
     pub fn triangle_count(&self) -> u32 {
         self.triangle_count
@@ -120,13 +129,14 @@ impl RenderResult {
 }
 
 impl RenderResult {
-    fn from_error(msg: String, echo: String, warnings: String) -> Self {
+    fn from_error(msg: String, echo: String, warnings: String, diagnostics: String) -> Self {
         RenderResult {
             positions: Vec::new(),
             normals: Vec::new(),
             echo,
             warnings,
             error: Some(msg),
+            diagnostics,
             triangle_count: 0,
             vertex_count: 0,
             volume: 0.0,
@@ -252,14 +262,14 @@ pub fn render_with_files(
     let program = match quito_syntax::parse(source) {
         Ok(p) => p,
         Err(e) => {
+            let msg = format!("parse error: {}", e.message);
+            let diag = quito_eval::parse_error_diagnostic(msg.clone(), e.span);
             return RenderResult::from_error(
-                format!(
-                    "parse error: {} (at {}..{})",
-                    e.message, e.span.start, e.span.end
-                ),
+                msg,
                 String::new(),
                 String::new(),
-            )
+                quito_eval::diagnostics_json(Some(&diag), &[]),
+            );
         }
     };
 
@@ -280,15 +290,23 @@ pub fn render_with_files(
     let eval = match quito_eval::eval_program_with_params(&program, &resolver, ".", &overrides) {
         Ok(o) => o,
         Err(e) => {
+            let diag = quito_eval::eval_error_diagnostic(&e);
             return RenderResult::from_error(
-                format!("evaluation error: {}", e.0),
+                format!("evaluation error: {}", e.message),
                 String::new(),
                 String::new(),
-            )
+                quito_eval::diagnostics_json(Some(&diag), &[]),
+            );
         }
     };
     let echo = eval.echoes.join("\n");
-    let warnings = eval.warnings.join("\n");
+    let warnings = eval
+        .warnings
+        .iter()
+        .map(|w| w.message.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let diagnostics = quito_eval::diagnostics_json(None, &eval.warnings);
 
     // Render geometry (pure-Rust Manifold on wasm), reusing the persistent cache
     // so unchanged subtrees survive across edits.
@@ -302,7 +320,16 @@ pub fn render_with_files(
     });
     let mesh = match mesh {
         Ok(m) => m,
-        Err(e) => return RenderResult::from_error(format!("geometry error: {e}"), echo, warnings),
+        Err(e) => {
+            let ge = quito_eval::EvalError::new(format!("geometry error: {e}"));
+            let diag = quito_eval::eval_error_diagnostic(&ge);
+            return RenderResult::from_error(
+                format!("geometry error: {e}"),
+                echo,
+                warnings,
+                quito_eval::diagnostics_json(Some(&diag), &eval.warnings),
+            );
+        }
     };
 
     let (positions, normals) = mesh.to_triangle_soup_f32();
@@ -317,12 +344,41 @@ pub fn render_with_files(
         echo,
         warnings,
         error: None,
+        diagnostics,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn diagnostics_surface_parse_eval_and_warnings() {
+        // Parse error → an error diagnostic with a byte span.
+        let r = render_with_files("cube(", vec![], vec![], vec![], vec![]);
+        assert!(!r.ok());
+        assert!(
+            r.diagnostics().contains("\"severity\":\"error\""),
+            "{}",
+            r.diagnostics()
+        );
+
+        // Eval error (assert) → an error diagnostic.
+        let r = render_with_files("assert(false);", vec![], vec![], vec![], vec![]);
+        assert!(!r.ok());
+        assert!(
+            r.diagnostics().contains("\"severity\":\"error\""),
+            "{}",
+            r.diagnostics()
+        );
+
+        // Unknown module → a warning diagnostic; the render still succeeds.
+        let r = render_with_files("nope();", vec![], vec![], vec![], vec![]);
+        assert!(r.ok());
+        let d = r.diagnostics();
+        assert!(d.contains("\"severity\":\"warning\""), "{d}");
+        assert!(d.contains("nope"), "{d}");
+    }
 
     #[test]
     fn schema_json_shapes() {

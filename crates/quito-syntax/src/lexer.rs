@@ -134,18 +134,18 @@ pub enum Token {
 
 /// A token together with its source byte span.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Spanned {
+pub struct SpannedToken {
     pub token: Token,
     pub span: std::ops::Range<usize>,
 }
 
 /// Lex an entire source string. Returns an error at the first invalid token.
-pub fn lex(src: &str) -> Result<Vec<Spanned>, crate::SyntaxError> {
+pub fn lex(src: &str) -> Result<Vec<SpannedToken>, crate::SyntaxError> {
     let mut out = Vec::new();
     let mut lexer = Token::lexer(src);
     while let Some(res) = lexer.next() {
         match res {
-            Ok(token) => out.push(Spanned {
+            Ok(token) => out.push(SpannedToken {
                 token,
                 span: lexer.span(),
             }),
