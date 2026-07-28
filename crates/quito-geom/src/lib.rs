@@ -217,7 +217,51 @@ pub fn render_groups_cached(
     };
     let mut out = Vec::new();
     partition_groups(node, DEFAULT_COLOR, DisplayMode::Solid, &mut ctx, &mut out)?;
+    coalesce_groups(&mut out);
     Ok(out)
+}
+
+/// Merge preview groups sharing the same display mode and (8-bit quantized)
+/// color into one mesh each, preserving first-appearance order. A model that
+/// emits many same-color solids (e.g. a `for` loop under a single `color()`, or
+/// the many colored regions a recursed boolean now yields) collapses to a
+/// handful of groups — capping viewer materials/draw-calls and colored-3MF
+/// `<object>`s at the number of distinct colors. `Background`/`Highlight` stay
+/// in their own buckets (drawn differently, and `%` is excluded from export).
+fn coalesce_groups(groups: &mut Vec<ColoredMesh>) {
+    let key = |g: &ColoredMesh| -> (u8, [u8; 4]) {
+        let m = match g.mode {
+            DisplayMode::Solid => 0u8,
+            DisplayMode::Highlight => 1,
+            DisplayMode::Background => 2,
+        };
+        let q = |x: f32| (x.clamp(0.0, 1.0) * 255.0).round() as u8;
+        (
+            m,
+            [q(g.color[0]), q(g.color[1]), q(g.color[2]), q(g.color[3])],
+        )
+    };
+    let mut index: HashMap<(u8, [u8; 4]), usize> = HashMap::new();
+    let mut merged: Vec<ColoredMesh> = Vec::new();
+    for g in groups.drain(..) {
+        match index.get(&key(&g)) {
+            Some(&i) => append_mesh(&mut merged[i].mesh, &g.mesh),
+            None => {
+                index.insert(key(&g), merged.len());
+                merged.push(g);
+            }
+        }
+    }
+    *groups = merged;
+}
+
+/// Append `src`'s geometry onto `dst`, offsetting `src`'s triangle indices by
+/// `dst`'s existing vertex count.
+fn append_mesh(dst: &mut Mesh, src: &Mesh) {
+    let base = dst.verts.len() as u32;
+    dst.verts.extend_from_slice(&src.verts);
+    dst.tris
+        .extend(src.tris.iter().map(|t| [t[0] + base, t[1] + base, t[2] + base]));
 }
 
 /// Flatten colored groups into one triangle soup (for GPU upload) plus a JSON
@@ -309,8 +353,59 @@ fn partition_groups(
                 .iter_mut()
                 .for_each(|cm| mult_matrix(&mut cm.mesh, m));
         }
-        // Everything else (booleans, hull, minkowski, resize, extrudes,
-        // projection, primitives, import) is opaque: one fused mesh in the
+        // A 3D difference keeps color: partition the base operand into its own
+        // colored regions, then subtract the (colorless) fused tools from each
+        // region. `∪(regionᵢ − tool) == (∪regionᵢ) − tool`, so the colored union
+        // equals the true fused difference. Tool color is irrelevant to a
+        // subtraction — sawn faces inherit the base solid's color. 2D differences
+        // fall through to the opaque arm (clipped in-plane by `render_node`).
+        Node::Difference(children) if !is_2d(node) => {
+            if let Some((base, tools)) = children.split_first() {
+                let mut regions = Vec::new();
+                partition_groups(base, color, mode, ctx, &mut regions)?;
+                // Fuse the tools into one mesh, dropping empties (e.g. a disabled
+                // cutaway whose operand is `Empty`) so a no-op difference does
+                // zero extra kernel work and passes the base regions through.
+                let tools: Vec<Mesh> = render_all(tools, ctx)?
+                    .into_iter()
+                    .filter(|m| !m.is_empty())
+                    .collect();
+                if tools.is_empty() {
+                    out.append(&mut regions);
+                } else {
+                    let tool = ctx.kernel.union(tools)?;
+                    for ColoredMesh { mesh, color, mode } in regions {
+                        let mesh = ctx.kernel.difference(mesh, vec![tool.clone()])?;
+                        if !mesh.is_empty() {
+                            out.push(ColoredMesh { mesh, color, mode });
+                        }
+                    }
+                }
+            }
+        }
+        // A 3D intersection keeps the first operand's color: partition it into
+        // regions, then clip each by the fused intersection of the rest.
+        // `∪(regionᵢ ∩ rest) == operand[0] ∩ rest`, colored by the base.
+        Node::Intersection(children) if !is_2d(node) => {
+            if let Some((base, rest)) = children.split_first() {
+                let mut regions = Vec::new();
+                partition_groups(base, color, mode, ctx, &mut regions)?;
+                if rest.is_empty() {
+                    // `intersection()` of a single operand is that operand.
+                    out.append(&mut regions);
+                } else {
+                    let clip = ctx.kernel.intersection(render_all(rest, ctx)?)?;
+                    for ColoredMesh { mesh, color, mode } in regions {
+                        let mesh = ctx.kernel.intersection(vec![mesh, clip.clone()])?;
+                        if !mesh.is_empty() {
+                            out.push(ColoredMesh { mesh, color, mode });
+                        }
+                    }
+                }
+            }
+        }
+        // Everything else (hull, minkowski, resize, extrudes, projection,
+        // primitives, import, and 2D booleans) is opaque: one fused mesh in the
         // current color. `Background` was already handled above, so the fused
         // render here still excludes any nested `%`.
         _ => {
@@ -1666,9 +1761,10 @@ mod tests {
     }
 
     #[test]
-    fn boolean_across_colors_takes_parent_color() {
-        // A difference whose children are colored renders as ONE group in the
-        // enclosing (default) color — booleans resolve to the parent's color.
+    fn difference_keeps_base_color() {
+        // `difference(red 4-cube, blue 1-cube)` → ONE group colored RED (the
+        // base operand's color survives the cut), with the true fused-difference
+        // geometry (volume < the base cube's 64).
         let node = Node::Difference(vec![
             Node::Color {
                 rgba: [1.0, 0.0, 0.0, 1.0],
@@ -1685,7 +1781,203 @@ mod tests {
         let mut cache = GeomCache::new();
         let groups = render_groups_cached(&node, &RustManifoldKernel::new(), &mut cache).unwrap();
         assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].color, [1.0, 0.0, 0.0, 1.0]);
+        let vol = groups[0].mesh.volume();
+        assert!((vol - 63.0).abs() < 1e-6, "difference volume {vol}");
+    }
+
+    #[test]
+    fn difference_with_empty_tool_preserves_nested_colors() {
+        // The Parthenon's top-level shape: `difference(){ union(red a; blue b); }`
+        // with no (or a disabled) tool operand must keep both nested colors —
+        // this is exactly the CUTAWAY=false case that used to collapse to gold.
+        let base = Node::Union(vec![
+            Node::Color {
+                rgba: [1.0, 0.0, 0.0, 1.0],
+                child: Box::new(unit_cube()),
+            },
+            Node::Color {
+                rgba: [0.0, 0.0, 1.0, 1.0],
+                child: Box::new(Node::Translate {
+                    v: [2.0, 0.0, 0.0],
+                    child: Box::new(unit_cube()),
+                }),
+            },
+        ]);
+        // A trailing `Empty` tool mirrors `if (CUTAWAY) …` evaluating to nothing.
+        let node = Node::Difference(vec![base, Node::Empty]);
+        let mut cache = GeomCache::new();
+        let groups = render_groups_cached(&node, &RustManifoldKernel::new(), &mut cache).unwrap();
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].color, [1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(groups[1].color, [0.0, 0.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn intersection_keeps_first_operand_color() {
+        // `intersection(red 4-cube, blue 1-cube)` → ONE group colored RED (the
+        // first operand wins), geometry equal to the 1-cube overlap (volume 1).
+        let node = Node::Intersection(vec![
+            Node::Color {
+                rgba: [1.0, 0.0, 0.0, 1.0],
+                child: Box::new(Node::Cube {
+                    size: [4.0, 4.0, 4.0],
+                    center: false,
+                }),
+            },
+            Node::Color {
+                rgba: [0.0, 0.0, 1.0, 1.0],
+                child: Box::new(unit_cube()),
+            },
+        ]);
+        let mut cache = GeomCache::new();
+        let groups = render_groups_cached(&node, &RustManifoldKernel::new(), &mut cache).unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].color, [1.0, 0.0, 0.0, 1.0]);
+        let vol = groups[0].mesh.volume();
+        assert!((vol - 1.0).abs() < 1e-6, "intersection volume {vol}");
+    }
+
+    #[test]
+    fn coalesce_merges_same_color_and_keeps_distinct_separate() {
+        // Three same-color solids under one color() coalesce to one group whose
+        // geometry is the sum of all three; a distinct color/mode stays separate.
+        let same = |x: f64| Node::Translate {
+            v: [x, 0.0, 0.0],
+            child: Box::new(unit_cube()),
+        };
+        let node = Node::Union(vec![
+            Node::Color {
+                rgba: [1.0, 0.0, 0.0, 1.0],
+                child: Box::new(Node::Union(vec![same(0.0), same(2.0), same(4.0)])),
+            },
+            Node::Color {
+                rgba: [0.0, 0.0, 1.0, 1.0],
+                child: Box::new(same(6.0)),
+            },
+        ]);
+        let mut cache = GeomCache::new();
+        let groups = render_groups_cached(&node, &RustManifoldKernel::new(), &mut cache).unwrap();
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].color, [1.0, 0.0, 0.0, 1.0]);
+        assert!((groups[0].mesh.volume() - 3.0).abs() < 1e-6);
+        assert_eq!(groups[1].color, [0.0, 0.0, 1.0, 1.0]);
+        assert!((groups[1].mesh.volume() - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn difference_subtracts_each_region_and_keeps_all_colors() {
+        // The CUTAWAY=true path: a *multi-color* base minus a real tool. Each
+        // colored region is subtracted independently and every color survives.
+        // red 4-cube at x∈[0,4], blue 4-cube at x∈[5,9]; the tool (unit cube at
+        // the origin) bites only the red one → red 63, blue 64, both present.
+        let big = |x: f64, rgba: [f32; 4]| Node::Color {
+            rgba,
+            child: Box::new(Node::Translate {
+                v: [x, 0.0, 0.0],
+                child: Box::new(Node::Cube {
+                    size: [4.0, 4.0, 4.0],
+                    center: false,
+                }),
+            }),
+        };
+        let node = Node::Difference(vec![
+            Node::Union(vec![
+                big(0.0, [1.0, 0.0, 0.0, 1.0]),
+                big(5.0, [0.0, 0.0, 1.0, 1.0]),
+            ]),
+            unit_cube(), // tool at the origin, inside the red cube only
+        ]);
+        let mut cache = GeomCache::new();
+        let groups = render_groups_cached(&node, &RustManifoldKernel::new(), &mut cache).unwrap();
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].color, [1.0, 0.0, 0.0, 1.0]);
+        assert!((groups[0].mesh.volume() - 63.0).abs() < 1e-6);
+        assert_eq!(groups[1].color, [0.0, 0.0, 1.0, 1.0]);
+        assert!((groups[1].mesh.volume() - 64.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn difference_drops_fully_consumed_region() {
+        // A base region entirely inside the tool disappears (empty meshes are not
+        // emitted); an untouched region survives. red 4-cube at x∈[0,4], blue
+        // unit cube at x∈[5,6]; the tool covers x∈[5,10], swallowing the blue.
+        let node = Node::Difference(vec![
+            Node::Union(vec![
+                Node::Color {
+                    rgba: [1.0, 0.0, 0.0, 1.0],
+                    child: Box::new(Node::Cube {
+                        size: [4.0, 4.0, 4.0],
+                        center: false,
+                    }),
+                },
+                Node::Color {
+                    rgba: [0.0, 0.0, 1.0, 1.0],
+                    child: Box::new(Node::Translate {
+                        v: [5.0, 0.0, 0.0],
+                        child: Box::new(unit_cube()),
+                    }),
+                },
+            ]),
+            Node::Translate {
+                v: [5.0, -1.0, -1.0],
+                child: Box::new(Node::Cube {
+                    size: [5.0, 5.0, 5.0],
+                    center: false,
+                }),
+            },
+        ]);
+        let mut cache = GeomCache::new();
+        let groups = render_groups_cached(&node, &RustManifoldKernel::new(), &mut cache).unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].color, [1.0, 0.0, 0.0, 1.0]);
+        assert!((groups[0].mesh.volume() - 64.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn intersection_with_empty_operand_is_empty() {
+        // Unlike difference (which skips empty tools), an intersection with an
+        // empty operand yields nothing — matching the fused `render` semantics.
+        let node = Node::Intersection(vec![
+            Node::Color {
+                rgba: [1.0, 0.0, 0.0, 1.0],
+                child: Box::new(unit_cube()),
+            },
+            Node::Empty,
+        ]);
+        let mut cache = GeomCache::new();
+        let groups = render_groups_cached(&node, &RustManifoldKernel::new(), &mut cache).unwrap();
+        assert!(groups.is_empty(), "expected no groups, got {}", groups.len());
+    }
+
+    #[test]
+    fn two_d_difference_stays_opaque_in_enclosing_color() {
+        // 2D booleans must NOT take the color-recursion path (their flat, coplanar
+        // meshes would break the 3D kernel). A `difference(square, circle)` is
+        // clipped in-plane and emitted as ONE group in the *enclosing* color
+        // (DEFAULT here — the inner `color(red)` is swallowed, as before).
+        let frags = FragmentSpec {
+            fn_: 32.0,
+            fa: 12.0,
+            fs: 2.0,
+        };
+        let node = Node::Difference(vec![
+            Node::Color {
+                rgba: [1.0, 0.0, 0.0, 1.0],
+                child: Box::new(Node::Square {
+                    size: [4.0, 4.0],
+                    center: true,
+                }),
+            },
+            Node::Circle { r: 1.0, frags },
+        ]);
+        let mut cache = GeomCache::new();
+        let groups = render_groups_cached(&node, &RustManifoldKernel::new(), &mut cache).unwrap();
+        assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].color, DEFAULT_COLOR);
+        // A real flat profile came through the 2D path (square − hole ≈ 16 − π).
+        let area = flat_area(&groups[0].mesh);
+        assert!((area - (16.0 - std::f64::consts::PI)).abs() < 0.05, "area {area}");
     }
 
     #[test]
