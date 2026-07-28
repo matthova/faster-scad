@@ -327,7 +327,7 @@ pub fn render_with_files(
         }
     };
     let echo = eval.echoes.join("\n");
-    let warnings = eval
+    let mut warnings = eval
         .warnings
         .iter()
         .map(|w| w.message.clone())
@@ -343,10 +343,10 @@ pub fn render_with_files(
         if cache.len() > CACHE_CAP {
             cache.clear();
         }
-        quito_geom::render_cached(&eval.node, &kernel, &mut cache)
+        quito_geom::render_cached_warns(&eval.node, &kernel, &mut cache)
     });
-    let mesh = match mesh {
-        Ok(m) => m,
+    let (mesh, geom_warnings) = match mesh {
+        Ok(v) => v,
         Err(e) => {
             let ge = quito_eval::EvalError::new(format!("geometry error: {e}"));
             let diag = quito_eval::eval_error_diagnostic(&ge);
@@ -358,6 +358,14 @@ pub fn render_with_files(
             );
         }
     };
+    // Fold non-fatal geometry warnings (e.g. non-convex minkowski) into the
+    // console warnings stream.
+    for w in geom_warnings {
+        if !warnings.is_empty() {
+            warnings.push('\n');
+        }
+        warnings.push_str(&w);
+    }
 
     let (positions, normals) = mesh.to_triangle_soup_f32();
 

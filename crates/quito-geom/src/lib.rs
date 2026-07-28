@@ -67,6 +67,9 @@ struct Ctx<'a> {
     cache: &'a mut GeomCache,
     /// Precomputed structural hash of every node in the tree, by address.
     hashes: &'a HashMap<*const Node, u64>,
+    /// Non-fatal geometry warnings collected during the render (e.g. non-convex
+    /// `minkowski`). Deduped by the caller.
+    warnings: &'a mut Vec<String>,
 }
 
 /// Render a CSG tree to a mesh using the default kernel for the target:
@@ -112,14 +115,29 @@ pub fn render_cached(
     kernel: &dyn Kernel,
     cache: &mut GeomCache,
 ) -> Result<Mesh, GeomError> {
+    render_cached_warns(node, kernel, cache).map(|(m, _)| m)
+}
+
+/// Like [`render_cached`], but also returns non-fatal geometry warnings (e.g.
+/// non-convex `minkowski`, which renders as the convex approximation), deduped.
+pub fn render_cached_warns(
+    node: &Node,
+    kernel: &dyn Kernel,
+    cache: &mut GeomCache,
+) -> Result<(Mesh, Vec<String>), GeomError> {
     let mut hashes = HashMap::new();
     hash_all(node, &mut hashes);
+    let mut warnings = Vec::new();
     let mut ctx = Ctx {
         kernel,
         cache,
         hashes: &hashes,
+        warnings: &mut warnings,
     };
-    render_node(node, &mut ctx)
+    let mesh = render_node(node, &mut ctx)?;
+    warnings.sort();
+    warnings.dedup();
+    Ok((mesh, warnings))
 }
 
 /// Memoized render of one node: cache hit → clone; miss → render + store.
@@ -190,10 +208,12 @@ pub fn render_groups_cached(
 ) -> Result<Vec<ColoredMesh>, GeomError> {
     let mut hashes = HashMap::new();
     hash_all(node, &mut hashes);
+    let mut warnings = Vec::new();
     let mut ctx = Ctx {
         kernel,
         cache,
         hashes: &hashes,
+        warnings: &mut warnings,
     };
     let mut out = Vec::new();
     partition_groups(node, DEFAULT_COLOR, DisplayMode::Solid, &mut ctx, &mut out)?;
@@ -523,6 +543,17 @@ fn render_uncached(node: &Node, ctx: &mut Ctx) -> Result<Mesh, GeomError> {
         }
         Node::Minkowski(children) => {
             let meshes = render_all(children, ctx)?;
+            // 3D minkowski is exact only for convex operands (hull of vertex
+            // sums); a non-convex operand yields the convex approximation. Warn
+            // rather than silently mislead. (2D minkowski is exact — see
+            // shape2d::minkowski_2d.)
+            if meshes.iter().any(|m| !m.is_empty() && !is_convex(m)) {
+                ctx.warnings.push(
+                    "minkowski: non-convex operand; result is the convex approximation \
+                     (exact 3D minkowski is not yet implemented)"
+                        .to_string(),
+                );
+            }
             Ok(minkowski_fold(meshes))
         }
         Node::Difference(children) => {
@@ -739,6 +770,15 @@ fn hash_all(node: &Node, out: &mut HashMap<*const Node, u64>) -> u64 {
     let val = h.finish();
     out.insert(node as *const Node, val);
     val
+}
+
+/// Whether a closed mesh is (approximately) convex: its volume matches its
+/// convex hull's. A non-convex solid has strictly less volume than its hull; a
+/// convex faceted mesh (e.g. a tessellated sphere) equals its own hull. The
+/// relative tolerance absorbs tessellation/float noise.
+fn is_convex(m: &Mesh) -> bool {
+    let hull_vol = hull::convex_hull(&m.verts).volume();
+    hull_vol <= 1e-9 || m.volume() >= hull_vol * (1.0 - 1e-3)
 }
 
 /// Minkowski sum of a chain of meshes. Exact for convex operands (the common
@@ -1280,6 +1320,56 @@ mod tests {
             m.volume()
         );
         assert!(m.signed_volume() > 0.0);
+    }
+
+    #[test]
+    fn minkowski_convex_3d_does_not_warn() {
+        let frags = FragmentSpec {
+            fn_: 16.0,
+            fa: 12.0,
+            fs: 2.0,
+        };
+        let node = Node::Minkowski(vec![
+            Node::Cube {
+                size: [10.0, 10.0, 10.0],
+                center: true,
+            },
+            Node::Sphere { r: 2.0, frags },
+        ]);
+        let (_, warns) =
+            render_cached_warns(&node, &ManifoldKernel::new(), &mut GeomCache::new()).unwrap();
+        assert!(
+            warns.is_empty(),
+            "convex minkowski should not warn: {warns:?}"
+        );
+    }
+
+    #[test]
+    fn minkowski_nonconvex_3d_warns() {
+        // Two cubes forming an L — a non-convex operand — summed with a cube.
+        let lbar = Node::Union(vec![
+            Node::Cube {
+                size: [20.0, 6.0, 6.0],
+                center: false,
+            },
+            Node::Cube {
+                size: [6.0, 20.0, 6.0],
+                center: false,
+            },
+        ]);
+        let node = Node::Minkowski(vec![
+            lbar,
+            Node::Cube {
+                size: [2.0, 2.0, 2.0],
+                center: false,
+            },
+        ]);
+        let (_, warns) =
+            render_cached_warns(&node, &ManifoldKernel::new(), &mut GeomCache::new()).unwrap();
+        assert!(
+            warns.iter().any(|w| w.contains("non-convex")),
+            "expected non-convex warning, got {warns:?}"
+        );
     }
 
     #[test]

@@ -304,25 +304,66 @@ pub fn render2d(node: &Node) -> Vec<Contour> {
     }
 }
 
-/// Convex 2D Minkowski sum of several contour sets (hull of pairwise vertex
-/// sums — exact for convex operands, e.g. `minkowski(){ square; circle; }`).
+/// Exact 2D Minkowski sum of several contour sets. Minkowski distributes over
+/// union, and a triangle⊕triangle is convex (the hull of the 9 vertex sums is
+/// exact), so decompose each operand into triangles (earcut), sum every pair,
+/// and union the pieces — correct for non-convex operands (e.g. rounding an
+/// L-outline or gear), not just the convex hull.
 fn minkowski_2d(sets: Vec<Vec<Contour>>) -> Vec<Contour> {
-    let mut it = sets.into_iter();
-    let Some(first) = it.next() else {
+    let mut it = sets.into_iter().filter(|s| !s.is_empty());
+    let Some(mut acc) = it.next() else {
         return Vec::new();
     };
-    let mut acc: Vec<Point2> = first.into_iter().flatten().collect();
     for s in it {
-        let bpts: Vec<Point2> = s.into_iter().flatten().collect();
-        let mut sums = Vec::with_capacity(acc.len() * bpts.len());
-        for a in &acc {
-            for b in &bpts {
-                sums.push([a[0] + b[0], a[1] + b[1]]);
+        acc = minkowski_pair_2d(&acc, &s);
+        if acc.is_empty() {
+            break;
+        }
+    }
+    acc
+}
+
+/// The convex triangles of a contour set (earcut, holes cut out).
+fn triangles_2d(contours: &[Contour]) -> Vec<[Point2; 3]> {
+    let (points, _ranges, tris) = prepare(contours);
+    tris.iter()
+        .map(|t| {
+            [
+                points[t[0] as usize],
+                points[t[1] as usize],
+                points[t[2] as usize],
+            ]
+        })
+        .collect()
+}
+
+fn minkowski_pair_2d(a: &[Contour], b: &[Contour]) -> Vec<Contour> {
+    let (ta, tb) = (triangles_2d(a), triangles_2d(b));
+    if ta.is_empty() || tb.is_empty() {
+        return Vec::new();
+    }
+    let mut pieces: Vec<MultiPolygon<f64>> = Vec::new();
+    for x in &ta {
+        for y in &tb {
+            let mut sums = Vec::with_capacity(9);
+            for p in x {
+                for q in y {
+                    sums.push([p[0] + q[0], p[1] + q[1]]);
+                }
+            }
+            for c in hull_2d(sums) {
+                if c.len() >= 3 {
+                    pieces.push(MultiPolygon::new(vec![Polygon::new(
+                        to_linestring(&c),
+                        vec![],
+                    )]));
+                }
             }
         }
-        acc = hull_2d(sums).into_iter().flatten().collect();
     }
-    hull_2d(acc)
+    union_multi(pieces)
+        .map(from_multipolygon)
+        .unwrap_or_default()
 }
 
 fn map_contours(cs: Vec<Contour>, f: impl Fn(Point2) -> Point2) -> Vec<Contour> {
@@ -976,5 +1017,44 @@ mod offset_tests {
     fn offset_over_inset_collapses_to_empty() {
         let r = offset(&[square(10.0)], 0.0, -10.0, false, FragmentSpec::default());
         assert!(r.is_empty(), "over-inset should be empty, got {r:?}");
+    }
+
+    /// Convex ⊕ convex stays exact: [0,10]² ⊕ [0,2]² = [0,12]² (area 144).
+    #[test]
+    fn minkowski_2d_convex_is_exact() {
+        let r = minkowski_2d(vec![vec![square(10.0)], vec![square(2.0)]]);
+        assert!(
+            (area(&r) - 144.0).abs() < 1e-6,
+            "square⊕square area {}",
+            area(&r)
+        );
+    }
+
+    /// A non-convex operand keeps its concavity: the L ⊕ square area is strictly
+    /// below the convex-hull approximation (the A5 bug) and above the un-grown L.
+    #[test]
+    fn minkowski_2d_nonconvex_beats_convex_hull() {
+        let l: Contour = vec![
+            [0.0, 0.0],
+            [24.0, 0.0],
+            [24.0, 6.0],
+            [6.0, 6.0],
+            [6.0, 24.0],
+            [0.0, 24.0],
+        ];
+        let got = area(&minkowski_2d(vec![vec![l.clone()], vec![square(2.0)]]));
+        // Old convex approximation: hull of all pairwise vertex sums.
+        let mut sums = Vec::new();
+        for a in &l {
+            for b in &square(2.0) {
+                sums.push([a[0] + b[0], a[1] + b[1]]);
+            }
+        }
+        let convex_area = area(&hull_2d(sums));
+        assert!(got > 252.0, "should exceed the L's own area (252): {got}");
+        assert!(
+            got < convex_area - 10.0,
+            "exact {got} not below convex approx {convex_area}"
+        );
     }
 }

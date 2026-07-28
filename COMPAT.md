@@ -20,43 +20,18 @@ divergences unless noted):
 These produce output that differs from OpenSCAD — several **silently**, which is
 the dangerous kind. Each has a minimal repro. Tracks A/B track the fixes.
 
-- **Named-argument transforms are unbound.** `translate`/`rotate`/`scale`/
-  `mirror` read only their first *positional* argument, so the named form binds
-  nothing and falls back to identity — the transform silently does nothing.
+- **Non-convex 3D `minkowski()` is a convex approximation (now warned).** The 3D
+  Minkowski sum is the convex hull of pairwise vertex sums — exact only for
+  convex operands. A concave 3D operand yields the convex swept solid; the
+  renderer now emits a warning (`minkowski: non-convex operand; result is the
+  convex approximation`) rather than failing silently. **2D `minkowski()` is now
+  exact** (each operand is triangulated and the pairwise sums are unioned), so
+  the common `minkowski(){ poly; circle; }` rounding case is correct. Exact
+  non-convex *3D* minkowski (convex decomposition) is deferred to a later
+  milestone.
 
   ```scad
-  translate(v = [10, 0, 0]) cube(1);   // not moved (should shift +10 X)
-  ```
-
-- **Axis-angle `rotate(a, v)` ignores the axis.** Only `rotate(scalar)` (about
-  Z) and `rotate([x,y,z])` (Euler) are handled; the two-argument axis-angle form
-  keeps the angle but drops the axis vector, rotating about Z instead.
-
-  ```scad
-  rotate(45, [1, 1, 0]) cube(10);      // rotates about Z, not the [1,1,0] axis
-  ```
-
-- **Non-convex `minkowski()` is a convex approximation.** The Minkowski sum is
-  computed as though both operands were convex, so a concave input gives the
-  wrong swept solid.
-
-  ```scad
-  minkowski() { difference() { square(20); square([20,10]); } circle(2); }
-  ```
-
-- **Concave `offset()` does not clip self-intersections.** An inward/outward
-  offset that would make an edge cross itself is left self-intersecting instead
-  of being clipped.
-
-  ```scad
-  offset(r = -3) polygon([[0,0],[10,0],[10,2],[2,2],[2,10],[0,10]]);
-  ```
-
-- **`projection()` is dropped inside 2D booleans.** A `projection()` used as an
-  operand of a 2D `union`/`difference`/`intersection` contributes nothing.
-
-  ```scad
-  difference() { square(10); projection() translate([0,0,-1]) sphere(4); }
+  minkowski() { linear_extrude(6) polygon([[0,0],[24,0],[24,6],[6,6],[6,24],[0,24]]); sphere(2); }
   ```
 
 - **`text(font=…)` is ignored.** Only the bundled Liberation Sans (the face

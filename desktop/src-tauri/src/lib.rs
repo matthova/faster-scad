@@ -196,7 +196,7 @@ fn eval_and_render(
     values: &[String],
     file_names: &[String],
     file_contents: &[String],
-) -> Result<(quito_geom::Mesh, quito_eval::EvalOutput, bool), EngineError> {
+) -> Result<(quito_geom::Mesh, quito_eval::EvalOutput, bool, Vec<String>), EngineError> {
     let program = quito_syntax::parse(source).map_err(|e| {
         let message = format!("parse error: {}", e.message);
         EngineError {
@@ -215,9 +215,9 @@ fn eval_and_render(
         })?;
     let is_2d = quito_geom::is_2d(&out.node);
     let kernel = quito_geom::ManifoldKernel::new();
-    let mesh = {
+    let (mesh, geom_warnings) = {
         let mut cache = cache.lock().unwrap();
-        quito_geom::render_cached(&out.node, &kernel, &mut cache).map_err(|e| {
+        quito_geom::render_cached_warns(&out.node, &kernel, &mut cache).map_err(|e| {
             let message = format!("geometry error: {e}");
             EngineError {
                 diagnostic: quito_eval::eval_error_diagnostic(&quito_eval::EvalError::new(
@@ -227,7 +227,7 @@ fn eval_and_render(
             }
         })?
     };
-    Ok((mesh, out, is_2d))
+    Ok((mesh, out, is_2d, geom_warnings))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -246,7 +246,7 @@ fn render(
     let work = move || {
         let params = quito_syntax::customizer::extract(&source).to_json();
         match eval_and_render(&cache, &source, &dir, &param_names, &param_values, &file_names, &file_contents) {
-            Ok((mesh, out, is_2d)) => {
+            Ok((mesh, out, is_2d, geom_warnings)) => {
                 let (positions, normals) = mesh.to_triangle_soup_f32();
                 let diagnostics = quito_eval::diagnostics_json(None, &out.warnings);
                 // Preview color channel — only when the model uses color/`#`/`%`.
@@ -265,7 +265,13 @@ fn render(
                     ok: true,
                     error: String::new(),
                     echo: out.echoes.join("\n"),
-                    warnings: out.warnings.iter().map(|w| w.message.clone()).collect::<Vec<_>>().join("\n"),
+                    warnings: out
+                        .warnings
+                        .iter()
+                        .map(|w| w.message.clone())
+                        .chain(geom_warnings)
+                        .collect::<Vec<_>>()
+                        .join("\n"),
                     triangle_count: mesh.tris.len() as u32,
                     vertex_count: mesh.verts.len() as u32,
                     volume: mesh.volume(),
@@ -334,7 +340,7 @@ fn save_model(
             };
             return std::fs::write(&path, text).map_err(|e| format!("write {path}: {e}"));
         }
-        let (mesh, out, _) = eval_and_render(
+        let (mesh, out, _, _) = eval_and_render(
             &cache,
             &source,
             &dir,
@@ -655,11 +661,11 @@ mod tests {
     #[test]
     fn native_render_command_logic() {
         let cache = Arc::new(Mutex::new(quito_geom::GeomCache::new()));
-        let (mesh, _, _) = eval_and_render(&cache, "cube([2,3,4]);", ".", &[], &[], &[], &[]).unwrap();
+        let (mesh, _, _, _) = eval_and_render(&cache, "cube([2,3,4]);", ".", &[], &[], &[], &[]).unwrap();
         assert!((mesh.volume() - 24.0).abs() < 1e-6);
 
         // Overrides apply, like the customizer.
-        let (mesh, out, _) = eval_and_render(
+        let (mesh, out, _, _) = eval_and_render(
             &cache,
             "w = 2;\necho(w);\ncube([w, 3, 4]);",
             ".",
@@ -673,7 +679,7 @@ mod tests {
         assert_eq!(out.echoes, vec!["ECHO: 5"]);
 
         // In-memory library file resolves via the combined resolver.
-        let (mesh, _, _) = eval_and_render(
+        let (mesh, _, _, _) = eval_and_render(
             &cache,
             "use <lib.scad>\ncube([side(), side(), side()]);",
             ".",
