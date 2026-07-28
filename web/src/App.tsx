@@ -46,6 +46,7 @@ import {
   onOpenPath,
   onMenuAction,
 } from "./desktopEngine";
+import { checkForUpdates } from "./checkForUpdates";
 
 const TAURI = isTauri();
 
@@ -415,6 +416,9 @@ export function App() {
           case "reset-view":
             viewerRef.current?.resetView();
             break;
+          case "check-updates":
+            void checkForUpdates(true);
+            break;
         }
       })
         .then((u) => unlisteners.push(u))
@@ -438,6 +442,10 @@ export function App() {
           if (p) void openByPath(p);
         })
         .catch(() => {});
+
+      // Silent update check on launch: prompts only if an update is available,
+      // stays quiet on "up to date" and on errors (offline, etc.).
+      void checkForUpdates(false);
     }
 
     return () => {

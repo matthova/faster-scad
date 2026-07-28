@@ -557,8 +557,12 @@ fn run_big_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T
 fn build_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 
+    let check_updates =
+        MenuItemBuilder::with_id("check-updates", "Check for Updates…").build(app)?;
     let app_menu = SubmenuBuilder::new(app, "Quito")
         .about(None)
+        .separator()
+        .item(&check_updates)
         .separator()
         .services()
         .separator()
@@ -604,14 +608,26 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_fs::init());
+
+    // Auto-update is desktop-only: the updater fetches the signed release
+    // manifest, and `process::relaunch` restarts into the installed version.
+    #[cfg(desktop)]
+    let builder = builder
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init());
+
+    let app = builder
         .manage(AppState::default())
         .menu(build_menu)
         .on_menu_event(|app, event| {
             let id = event.id().as_ref();
-            if matches!(id, "new" | "open" | "save" | "save-as" | "export" | "reset-view") {
+            if matches!(
+                id,
+                "new" | "open" | "save" | "save-as" | "export" | "reset-view" | "check-updates"
+            ) {
                 let _ = app.emit("menu-action", id.to_string());
             }
         })
