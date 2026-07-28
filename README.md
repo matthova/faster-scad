@@ -182,13 +182,66 @@ the changed root-to-leaf path.
 
 ## Build & run
 
-Requires a Rust toolchain and `cmake` (for the C++ Manifold backend).
+### Prerequisites
+
+Install these once. Commands are shown for macOS (Homebrew), with equivalents
+noted for Linux/Windows. The CLI/engine needs only steps 1–2; the browser
+playground adds 3–4; the desktop app adds 5.
+
+1. **Rust** (stable, 1.85+) via [rustup](https://rustup.rs):
+   ```sh
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+   ```
+2. **cmake + a C/C++ compiler** — builds the C++ Manifold kernel used by the
+   native engine:
+   ```sh
+   brew install cmake          # macOS — the compiler comes with the Xcode CLT (step 5)
+   # Debian/Ubuntu: sudo apt install cmake build-essential
+   # Windows:       install CMake + the MSVC "Desktop development with C++" workload
+   ```
+3. **Node.js 18+ and npm** — for the browser playground and the desktop UI:
+   ```sh
+   brew install node           # macOS (or use nvm / your OS package manager)
+   ```
+4. **wasm-pack + the wasm target** — compiles the engine to wasm for the UI:
+   ```sh
+   rustup target add wasm32-unknown-unknown
+   cargo install wasm-pack
+   ```
+5. **Desktop only — Tauri platform deps:**
+   - **macOS:** `xcode-select --install` (Xcode command-line tools).
+   - **Linux/Windows:** see the
+     [Tauri prerequisites](https://tauri.app/start/prerequisites/) —
+     `webkit2gtk` + `build-essential` on Linux; the WebView2 runtime + MSVC
+     build tools on Windows.
+
+### CLI / engine (prereqs 1–2)
 
 ```sh
 cargo build --release
 ./target/release/quito examples/demo.scad -o out.stl
 ./target/release/quito examples/demo.scad --check        # echo/warnings only
-cargo test                                                # unit + kernel tests
+cargo test                                               # unit + kernel tests
+```
+
+### Browser playground (prereqs 1–4)
+
+```sh
+cd web
+npm install
+npm run build:wasm    # compile the Rust engine to wasm
+npm run dev           # serves http://localhost:5173
+```
+
+### Desktop app — Tauri (prereqs 1–5)
+
+The desktop build compiles the web UI (and wasm engine) for you.
+
+```sh
+cd desktop
+npm install           # first time only — installs the Tauri CLI
+npm run dev           # launch the native app with hot-reload
+npm run build         # bundle installers → src-tauri/target/release/bundle/…
 ```
 
 ## Repo layout
