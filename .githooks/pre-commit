@@ -1,0 +1,33 @@
+#!/bin/sh
+# Auto-format staged Rust files with rustfmt before committing, so commits always
+# satisfy the `cargo fmt --all --check` CI gate.
+#
+# Enable once per clone (also picked up by every git worktree):
+#   git config core.hooksPath .githooks
+#
+# Note: this formats the working-tree copy of each staged .rs file and re-stages
+# it. Avoid committing a file that has partially-staged (mixed) changes, or the
+# unstaged hunks in that file will be swept into the commit too.
+set -e
+
+# Only Rust files being added/copied/modified in this commit.
+rs_files=$(git diff --cached --name-only --diff-filter=ACM -- '*.rs')
+[ -z "$rs_files" ] && exit 0
+
+# Find rustfmt: PATH first, then the default rustup location.
+if command -v rustfmt >/dev/null 2>&1; then
+  RUSTFMT=rustfmt
+elif [ -x "$HOME/.cargo/bin/rustfmt" ]; then
+  RUSTFMT="$HOME/.cargo/bin/rustfmt"
+else
+  echo "pre-commit: rustfmt not found on PATH or in ~/.cargo/bin; skipping format." >&2
+  exit 0
+fi
+
+# The workspace is edition 2021 (see Cargo.toml); pass it so single-file output
+# matches `cargo fmt`.
+echo "$rs_files" | while IFS= read -r f; do
+  [ -f "$f" ] || continue
+  "$RUSTFMT" --edition 2021 "$f"
+  git add -- "$f"
+done

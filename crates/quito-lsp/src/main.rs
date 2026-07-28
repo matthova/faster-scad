@@ -377,7 +377,10 @@ impl PreviewMsg {
                 // back to the plain mesh otherwise.
                 if let Some(g) = groups {
                     let obj = v.as_object_mut().unwrap();
-                    obj.insert("previewPositions".into(), json!(f32_slice_b64(&g.positions)));
+                    obj.insert(
+                        "previewPositions".into(),
+                        json!(f32_slice_b64(&g.positions)),
+                    );
                     obj.insert("previewNormals".into(), json!(f32_slice_b64(&g.normals)));
                     obj.insert("groups".into(), g.groups.clone());
                 }

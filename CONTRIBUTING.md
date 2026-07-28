@@ -36,3 +36,16 @@ behavior in a way that differs from upstream, add a COMPAT entry.
   dev machine with `xtask bless-echo` / `xtask bless-geom` (needs `openscad` on PATH).
 - Geometry features land with a `corpus/geom` case blessed against OpenSCAD.
 - Run `cargo test` before submitting.
+
+## Formatting
+
+CI enforces `cargo fmt --all --check`. A repo-tracked pre-commit hook in
+`.githooks/` auto-formats staged Rust files so commits stay clean. Enable it once
+per clone (it applies to all git worktrees too):
+
+```sh
+git config core.hooksPath .githooks
+```
+
+Formatting still uses the standard tools directly — run `cargo fmt --all` anytime,
+and `cargo fmt --all --check` to verify.
