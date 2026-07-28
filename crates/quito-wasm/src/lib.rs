@@ -54,6 +54,13 @@ pub struct RenderResult {
     preview_positions: Vec<f32>,
     preview_normals: Vec<f32>,
     groups: String,
+    /// Provenance channel for editor↔preview linking (3D models only): a
+    /// concatenated per-statement triangle soup plus a JSON array of per-group
+    /// `{start,count,span}` ranges. `span` is `[start,end]` byte offsets into the
+    /// source, or `null` when unattributable. Empty for 2D/empty models.
+    provenance_positions: Vec<f32>,
+    provenance_normals: Vec<f32>,
+    provenance: String,
     /// `$vp*` viewport variables as JSON (only when the source references `$vp`).
     viewport: String,
     triangle_count: u32,
@@ -127,6 +134,25 @@ impl RenderResult {
         self.groups.clone()
     }
 
+    /// Provenance triangle soup (concatenated per-statement groups); empty for
+    /// 2D/empty models.
+    #[wasm_bindgen(getter)]
+    pub fn provenance_positions(&self) -> Vec<f32> {
+        self.provenance_positions.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn provenance_normals(&self) -> Vec<f32> {
+        self.provenance_normals.clone()
+    }
+
+    /// Per-group provenance ranges/spans as JSON (`[{start,count,span}]`); empty
+    /// when the model has no pickable geometry.
+    #[wasm_bindgen(getter)]
+    pub fn provenance(&self) -> String {
+        self.provenance.clone()
+    }
+
     /// `$vp*` viewport variables as JSON, or empty when the source has no `$vp`.
     #[wasm_bindgen(getter)]
     pub fn viewport(&self) -> String {
@@ -172,6 +198,9 @@ impl RenderResult {
             preview_positions: Vec::new(),
             preview_normals: Vec::new(),
             groups: String::new(),
+            provenance_positions: Vec::new(),
+            provenance_normals: Vec::new(),
+            provenance: String::new(),
             viewport: String::new(),
             triangle_count: 0,
             vertex_count: 0,
@@ -394,6 +423,23 @@ pub fn render_with_files(
         (Vec::new(), Vec::new(), String::new())
     };
 
+    // Provenance channel for editor↔preview linking — 3D models with geometry.
+    // Shares the cache with the fused render above, so opaque leaf meshes aren't
+    // recomputed just to tag them with a span. 2D picking is out of scope.
+    let (provenance_positions, provenance_normals, provenance) =
+        if !mesh.tris.is_empty() && !quito_geom::is_2d(&eval.node) {
+            let r = CACHE.with(|c| {
+                let mut cache = c.borrow_mut();
+                quito_geom::render_provenance_cached(&eval.node, &kernel, &mut cache)
+            });
+            match r {
+                Ok(groups) => quito_geom::provenance_channel(&groups),
+                Err(_) => (Vec::new(), Vec::new(), String::new()),
+            }
+        } else {
+            (Vec::new(), Vec::new(), String::new())
+        };
+
     // Viewport channel only for models that reference `$vp` (drives the camera).
     let viewport = if source.contains("$vp") {
         quito_eval::viewport_json(&eval.viewport)
@@ -416,6 +462,9 @@ pub fn render_with_files(
         preview_positions,
         preview_normals,
         groups,
+        provenance_positions,
+        provenance_normals,
+        provenance,
         viewport,
     }
 }
@@ -455,6 +504,29 @@ mod tests {
         let g = colored.groups();
         assert!(g.contains("\"mode\":\"solid\""), "{g}");
         assert!(g.contains("\"color\":[1,0,0,1]"), "{g}");
+    }
+
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+    fn provenance_channel_populated_for_3d() {
+        // A 3D model gets a provenance channel with per-statement spans.
+        let r = render_with_files(
+            "cube(2); translate([5,0,0]) sphere(2);",
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        );
+        assert!(r.ok());
+        assert!(!r.provenance_positions().is_empty());
+        let p = r.provenance();
+        assert!(p.contains("\"span\":["), "{p}");
+
+        // A 2D model has no provenance channel (picking is out of scope in v1).
+        let two_d = render_with_files("square(4);", vec![], vec![], vec![], vec![]);
+        assert!(two_d.ok());
+        assert!(two_d.provenance_positions().is_empty());
+        assert_eq!(two_d.provenance(), "");
     }
 
     #[cfg_attr(not(target_arch = "wasm32"), test)]

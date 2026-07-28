@@ -24,6 +24,29 @@ export interface PreviewGroup {
   mode: "solid" | "highlight" | "background";
 }
 
+/** A source byte-span `[start, end]` (into the main document). */
+export type Span = [number, number];
+
+/** A provenance group: a vertex range (offsets into the provenance soup) tagged
+ *  with the source span that produced it (`null` when unattributable). */
+export interface ProvenanceGroup {
+  start: number;
+  count: number;
+  span: Span | null;
+}
+
+/** Overlay material for the code→model highlight: a bright wash drawn on top of
+ *  the model (depthTest off) so the selected geometry reads clearly regardless of
+ *  the model's own per-group colors. */
+const HIGHLIGHT_MATERIAL = new THREE.MeshBasicMaterial({
+  color: 0x4fc3f7,
+  transparent: true,
+  opacity: 0.45,
+  depthTest: false,
+  depthWrite: false,
+  side: THREE.DoubleSide,
+});
+
 export class Viewer {
   private renderer: THREE.WebGLRenderer;
   private scene: THREE.Scene;
@@ -38,6 +61,21 @@ export class Viewer {
   private materials: THREE.Material[] = [];
   private hasFramed = false;
   private preset: ViewPreset = "iso";
+
+  // ---- provenance picking / highlighting ----
+  private raycaster = new THREE.Raycaster();
+  private pointer = new THREE.Vector2();
+  /** Off-scene mesh built from the provenance soup, raycast for model→code. */
+  private pickMesh: THREE.Mesh | null = null;
+  private pickGeometry: THREE.BufferGeometry | null = null;
+  private provPositions: Float32Array = new Float32Array(0);
+  private provNormals: Float32Array = new Float32Array(0);
+  private provGroups: ProvenanceGroup[] = [];
+  /** Overlay mesh showing the code→model highlight (added to the scene). */
+  private highlightMesh: THREE.Mesh | null = null;
+  private onPickCb: ((span: Span | null) => void) | null = null;
+  /** Pointer-down screen position, to tell a click from an orbit drag. */
+  private downPos: { x: number; y: number } | null = null;
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -79,6 +117,20 @@ export class Viewer {
     grid.rotation.x = Math.PI / 2; // grid in XY plane
     this.scene.add(grid);
     this.scene.add(new THREE.AxesHelper(20));
+
+    // Provenance picking: a click (not an orbit drag) selects the source
+    // statement under the cursor. We arm on pointerdown and only fire on
+    // pointerup if the pointer barely moved, so drags rotate/pan as usual.
+    this.renderer.domElement.addEventListener("pointerdown", (e) => {
+      if (e.button === 0) this.downPos = { x: e.clientX, y: e.clientY };
+    });
+    this.renderer.domElement.addEventListener("pointerup", (e) => {
+      const d = this.downPos;
+      this.downPos = null;
+      if (!d || e.button !== 0) return;
+      if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > 4) return; // a drag
+      this.pickAt(e.clientX, e.clientY);
+    });
 
     this.resize();
     window.addEventListener("resize", () => this.resize());
@@ -197,6 +249,97 @@ export class Viewer {
     });
     this.materials = materials;
     this.mountMesh(geom, materials);
+  }
+
+  /** Register the per-statement provenance soup for this render. Builds the
+   *  (off-scene) pick mesh used for model→code selection and code→model
+   *  highlighting, and clears any stale highlight. Pass empty data to disable
+   *  picking (e.g. a 2D model, which has no provenance channel). */
+  setProvenance(positions: Float32Array, normals: Float32Array, groups: ProvenanceGroup[]) {
+    this.highlightSpan(null);
+    this.pickGeometry?.dispose();
+    this.pickGeometry = null;
+    this.pickMesh = null;
+    this.provPositions = positions;
+    this.provNormals = normals;
+    this.provGroups = groups;
+    if (positions.length === 0 || groups.length === 0) return;
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    geom.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
+    this.pickGeometry = geom;
+    // Not added to the scene (invisible); raycasting doesn't require scene
+    // membership, only an up-to-date world matrix. The soup is already in world
+    // coordinates, so the identity transform is correct.
+    this.pickMesh = new THREE.Mesh(geom);
+    this.pickMesh.updateMatrixWorld(true);
+  }
+
+  /** Register a model→code pick callback (fires with the picked statement's span,
+   *  or `null` when the click hit empty space). Returns an unsubscribe fn. */
+  onPick(cb: (span: Span | null) => void): () => void {
+    this.onPickCb = cb;
+    return () => {
+      if (this.onPickCb === cb) this.onPickCb = null;
+    };
+  }
+
+  /** Raycast the provenance pick mesh at a screen point and report the enclosing
+   *  statement's span to the pick callback. */
+  private pickAt(clientX: number, clientY: number) {
+    if (!this.pickMesh || !this.onPickCb) return;
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    this.pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+    this.pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    const hit = this.raycaster.intersectObject(this.pickMesh, false)[0];
+    if (hit?.faceIndex == null) return;
+    const g = this.groupForFace(hit.faceIndex);
+    this.onPickCb(g?.span ?? null);
+  }
+
+  /** The provenance group owning triangle `faceIndex` (soup vertex ranges are in
+   *  multiples of 3, so a triangle t spans verts [3t, 3t+3)). */
+  private groupForFace(faceIndex: number): ProvenanceGroup | undefined {
+    return this.provGroups.find(
+      (g) => faceIndex >= g.start / 3 && faceIndex < (g.start + g.count) / 3,
+    );
+  }
+
+  /** Highlight the geometry produced by the statement at `span` (an overlay wash
+   *  drawn on top), or clear the highlight when `span` is `null`. All groups
+   *  sharing the span are highlighted (e.g. a `for` loop's instances). */
+  highlightSpan(span: Span | null) {
+    if (this.highlightMesh) {
+      this.scene.remove(this.highlightMesh);
+      this.highlightMesh.geometry.dispose();
+      this.highlightMesh = null;
+    }
+    if (!span || this.provPositions.length === 0) return;
+    // Collect the vertex ranges of every group with this exact span.
+    const ranges = this.provGroups.filter(
+      (g) => g.span && g.span[0] === span[0] && g.span[1] === span[1],
+    );
+    if (ranges.length === 0) return;
+    let total = 0;
+    for (const g of ranges) total += g.count * 3;
+    const pos = new Float32Array(total);
+    const nrm = new Float32Array(total);
+    let off = 0;
+    for (const g of ranges) {
+      const s = g.start * 3;
+      const len = g.count * 3;
+      pos.set(this.provPositions.subarray(s, s + len), off);
+      nrm.set(this.provNormals.subarray(s, s + len), off);
+      off += len;
+    }
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    geom.setAttribute("normal", new THREE.BufferAttribute(nrm, 3));
+    const mesh = new THREE.Mesh(geom, HIGHLIGHT_MATERIAL);
+    mesh.renderOrder = 999; // draw last, on top (material has depthTest off)
+    this.highlightMesh = mesh;
+    this.scene.add(mesh);
   }
 
   /** Unit view direction (camera → target points opposite this) + up vector. */

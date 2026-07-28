@@ -8,6 +8,17 @@ export interface PreviewGroup {
   mode: "solid" | "highlight" | "background";
 }
 
+/** A source byte-span `[start, end]` into the previewed document. */
+export type Span = [number, number];
+
+/** A provenance group: a vertex range into the provenance soup + the source span
+ *  that produced it (`null` when unattributable). */
+export interface ProvenanceGroup {
+  start: number;
+  count: number;
+  span: Span | null;
+}
+
 /** The `quito/preview` notification payload pushed by the language server. */
 export interface PreviewNotification {
   uri: string;
@@ -23,6 +34,10 @@ export interface PreviewNotification {
   previewPositions?: string;
   previewNormals?: string;
   groups?: PreviewGroup[];
+  // Provenance channel for editor↔preview linking — present for 3D models.
+  provenancePositions?: string;
+  provenanceNormals?: string;
+  provenance?: ProvenanceGroup[];
 }
 
 /** Callbacks wiring a panel to the server-side preview lifecycle. */
@@ -31,6 +46,9 @@ export interface PreviewHooks {
   onReady: () => void;
   /** The panel was closed. */
   onDispose: () => void;
+  /** The user clicked a face in the preview; `span` is the source statement's
+   *  byte range (or `null` for empty space). */
+  onPick: (span: Span | null) => void;
 }
 
 /**
@@ -91,6 +109,8 @@ export class PreviewPanel {
             this.pending = undefined;
           }
           this.hooks.onReady();
+        } else if (msg?.type === "pick") {
+          this.hooks.onPick((msg.span as Span | null) ?? null);
         }
       },
       undefined,
@@ -114,6 +134,9 @@ export class PreviewPanel {
         previewPositions: note.previewPositions,
         previewNormals: note.previewNormals,
         groups: note.groups,
+        provenancePositions: note.provenancePositions,
+        provenanceNormals: note.provenanceNormals,
+        provenance: note.provenance,
         triangleCount: note.triangleCount ?? 0,
         vertexCount: note.vertexCount ?? 0,
         volume: note.volume ?? 0,
@@ -125,6 +148,15 @@ export class PreviewPanel {
         message: note.error ?? "render error",
       });
     }
+  }
+
+  /** Highlight the geometry produced by the statement at `span` (code→model), or
+   *  clear the highlight when `span` is `null`. Posts to the webview. */
+  highlight(span: Span | null): void {
+    if (!this.ready) {
+      return;
+    }
+    this.panel.webview.postMessage({ type: "highlight", span });
   }
 
   private html(): string {

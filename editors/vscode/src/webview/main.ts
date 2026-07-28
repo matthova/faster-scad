@@ -78,6 +78,149 @@ interface PreviewGroup {
   mode: "solid" | "highlight" | "background";
 }
 
+/** A source byte-span `[start, end]` into the previewed document. */
+type Span = [number, number];
+
+/** A provenance group: a vertex range into the provenance soup + the source span
+ *  that produced it (`null` when unattributable). */
+interface ProvenanceGroup {
+  start: number;
+  count: number;
+  span: Span | null;
+}
+
+// ---- provenance picking / highlighting (mirrors web/src/viewer.ts) ------------
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+/** Off-scene mesh built from the provenance soup, raycast for model→code. */
+let pickMesh: THREE.Mesh | null = null;
+let pickGeometry: THREE.BufferGeometry | null = null;
+let provPositions: Float32Array = new Float32Array(0);
+let provNormals: Float32Array = new Float32Array(0);
+let provGroups: ProvenanceGroup[] = [];
+let highlightMesh: THREE.Mesh | null = null;
+/** Pointer-down screen position, to tell a click from an orbit drag. */
+let downPos: { x: number; y: number } | null = null;
+
+const HIGHLIGHT_MATERIAL = new THREE.MeshBasicMaterial({
+  color: 0x4fc3f7,
+  transparent: true,
+  opacity: 0.45,
+  depthTest: false,
+  depthWrite: false,
+  side: THREE.DoubleSide,
+});
+
+/** Register the provenance soup for this render (builds the off-scene pick mesh
+ *  and clears any stale highlight). */
+function setProvenance(
+  positions: Float32Array,
+  normals: Float32Array,
+  groups: ProvenanceGroup[]
+): void {
+  highlightSpan(null);
+  pickGeometry?.dispose();
+  pickGeometry = null;
+  pickMesh = null;
+  provPositions = positions;
+  provNormals = normals;
+  provGroups = groups;
+  if (positions.length === 0 || groups.length === 0) {
+    return;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
+  pickGeometry = geo;
+  pickMesh = new THREE.Mesh(geo);
+  pickMesh.updateMatrixWorld(true);
+}
+
+/** The provenance group owning triangle `faceIndex`. */
+function groupForFace(faceIndex: number): ProvenanceGroup | undefined {
+  return provGroups.find(
+    (g) => faceIndex >= g.start / 3 && faceIndex < (g.start + g.count) / 3
+  );
+}
+
+/** Raycast the pick mesh at a screen point and relay the source span to the host
+ *  (model→code). */
+function pickAt(clientX: number, clientY: number): void {
+  if (!pickMesh) {
+    return;
+  }
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+  pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(pointer, camera);
+  const hit = raycaster.intersectObject(pickMesh, false)[0];
+  if (hit?.faceIndex == null) {
+    return;
+  }
+  const g = groupForFace(hit.faceIndex);
+  if (g?.span) {
+    vscode.postMessage({ type: "pick", span: g.span });
+  }
+}
+
+/** Highlight the geometry produced by the statement at `span` (an overlay wash
+ *  on top), or clear it when `span` is `null`. */
+function highlightSpan(span: Span | null): void {
+  if (highlightMesh) {
+    scene.remove(highlightMesh);
+    highlightMesh.geometry.dispose();
+    highlightMesh = null;
+  }
+  if (!span || provPositions.length === 0) {
+    return;
+  }
+  const ranges = provGroups.filter(
+    (g) => g.span && g.span[0] === span[0] && g.span[1] === span[1]
+  );
+  if (ranges.length === 0) {
+    return;
+  }
+  let total = 0;
+  for (const g of ranges) {
+    total += g.count * 3;
+  }
+  const pos = new Float32Array(total);
+  const nrm = new Float32Array(total);
+  let off = 0;
+  for (const g of ranges) {
+    const s = g.start * 3;
+    const len = g.count * 3;
+    pos.set(provPositions.subarray(s, s + len), off);
+    nrm.set(provNormals.subarray(s, s + len), off);
+    off += len;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute("normal", new THREE.BufferAttribute(nrm, 3));
+  const m = new THREE.Mesh(geo, HIGHLIGHT_MATERIAL);
+  m.renderOrder = 999;
+  highlightMesh = m;
+  scene.add(m);
+}
+
+// A click (not an orbit drag) selects the source statement under the cursor.
+renderer.domElement.addEventListener("pointerdown", (e) => {
+  if (e.button === 0) {
+    downPos = { x: e.clientX, y: e.clientY };
+  }
+});
+renderer.domElement.addEventListener("pointerup", (e) => {
+  const d = downPos;
+  downPos = null;
+  if (!d || e.button !== 0) {
+    return;
+  }
+  if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > 4) {
+    return; // a drag, not a click
+  }
+  pickAt(e.clientX, e.clientY);
+});
+
 function resize(): void {
   const w = canvas.clientWidth;
   const h = canvas.clientHeight;
@@ -198,6 +341,9 @@ interface MeshMsg {
   previewPositions?: string;
   previewNormals?: string;
   groups?: PreviewGroup[];
+  provenancePositions?: string;
+  provenanceNormals?: string;
+  provenance?: ProvenanceGroup[];
   triangleCount: number;
   vertexCount: number;
   volume: number;
@@ -207,9 +353,13 @@ interface ErrorMsg {
   type: "error";
   message: string;
 }
+interface HighlightMsg {
+  type: "highlight";
+  span: Span | null;
+}
 
 window.addEventListener("message", (event: MessageEvent) => {
-  const msg = event.data as MeshMsg | ErrorMsg | undefined;
+  const msg = event.data as MeshMsg | ErrorMsg | HighlightMsg | undefined;
   switch (msg?.type) {
     case "mesh":
       // Colored channel when the model uses color()/#/%, else the plain mesh.
@@ -222,9 +372,22 @@ window.addEventListener("message", (event: MessageEvent) => {
       } else {
         setMesh(b64ToF32(msg.positions), b64ToF32(msg.normals));
       }
+      // Provenance channel for editor↔preview linking (picking + highlight).
+      if (msg.provenance && msg.provenancePositions) {
+        setProvenance(
+          b64ToF32(msg.provenancePositions),
+          b64ToF32(msg.provenanceNormals ?? ""),
+          msg.provenance
+        );
+      } else {
+        setProvenance(new Float32Array(0), new Float32Array(0), []);
+      }
       setStatus(
         `${msg.triangleCount.toLocaleString()} triangles · volume ${msg.volume.toFixed(2)} · area ${msg.area.toFixed(2)}`
       );
+      break;
+    case "highlight":
+      highlightSpan(msg.span);
       break;
     case "error":
       setStatus(msg.message || "render error", true);

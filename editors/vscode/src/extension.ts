@@ -8,12 +8,66 @@ import {
   ServerOptions,
   TransportKind,
 } from "vscode-languageclient/node";
-import { PreviewPanel, PreviewNotification } from "./preview";
+import { PreviewPanel, PreviewNotification, ProvenanceGroup, Span } from "./preview";
 
 let client: LanguageClient | undefined;
 
 /** URI (as a string) of the document currently mirrored in the preview panel. */
 let previewUri: string | undefined;
+
+/** Provenance groups for the previewed document (from the latest `quito/preview`
+ *  notification), used to resolve the editor cursor → source span (code→model). */
+let previewProvenance: ProvenanceGroup[] = [];
+
+/** UTF-8 byte length of a Unicode code point. */
+function utf8Len(cp: number): number {
+  return cp <= 0x7f ? 1 : cp <= 0x7ff ? 2 : cp <= 0xffff ? 3 : 4;
+}
+
+/** Map a UTF-8 byte offset (engine spans) to a UTF-16 index (VS Code positions). */
+function byteToChar(source: string, byte: number): number {
+  if (byte <= 0) return 0;
+  let b = 0;
+  let i = 0;
+  while (i < source.length) {
+    if (b >= byte) return i;
+    const cp = source.codePointAt(i)!;
+    b += utf8Len(cp);
+    i += cp > 0xffff ? 2 : 1;
+  }
+  return source.length;
+}
+
+/** Map a UTF-16 index (VS Code positions) to a UTF-8 byte offset (engine spans). */
+function charToByte(source: string, char: number): number {
+  if (char <= 0) return 0;
+  let b = 0;
+  let i = 0;
+  while (i < source.length && i < char) {
+    const cp = source.codePointAt(i)!;
+    b += utf8Len(cp);
+    i += cp > 0xffff ? 2 : 1;
+  }
+  return b;
+}
+
+/** Model → code: reveal and select the source statement at `span` (byte offsets)
+ *  in the previewed document. */
+async function revealSpan(span: Span): Promise<void> {
+  if (!previewUri) {
+    return;
+  }
+  const doc = await vscode.workspace.openTextDocument(vscode.Uri.parse(previewUri));
+  const text = doc.getText();
+  const from = doc.positionAt(byteToChar(text, span[0]));
+  const to = doc.positionAt(byteToChar(text, span[1]));
+  const editor = await vscode.window.showTextDocument(doc, { preview: false });
+  editor.selection = new vscode.Selection(from, to);
+  editor.revealRange(
+    new vscode.Range(from, to),
+    vscode.TextEditorRevealType.InCenterIfOutsideViewport
+  );
+}
 
 /**
  * Locate a Quito binary: an explicit setting wins, otherwise probe the
@@ -53,6 +107,7 @@ function startClient(context: vscode.ExtensionContext): LanguageClient {
   // panel when it's the document we're showing.
   c.onNotification("quito/preview", (params: PreviewNotification) => {
     if (params?.uri === previewUri) {
+      previewProvenance = params.provenance ?? [];
       PreviewPanel.current?.push(params);
     }
   });
@@ -107,6 +162,8 @@ function switchPreviewTo(editor: vscode.TextEditor | undefined, force = false): 
     stopPreview(previewUri);
   }
   previewUri = uri;
+  previewProvenance = []; // stale until the new document's preview arrives
+  PreviewPanel.current?.highlight(null);
   startPreview(uri);
 }
 
@@ -176,6 +233,13 @@ export function activate(context: vscode.ExtensionContext): void {
             stopPreview(previewUri);
             previewUri = undefined;
           }
+          previewProvenance = [];
+        },
+        // Model → code: a clicked face selects its source statement.
+        onPick: (span) => {
+          if (span) {
+            void revealSpan(span);
+          }
         },
       });
     }),
@@ -193,6 +257,19 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     // Follow the active editor: the preview mirrors whichever .scad has focus.
     vscode.window.onDidChangeActiveTextEditor((ed) => switchPreviewTo(ed)),
+    // Code → model: highlight the geometry under the cursor as the selection
+    // moves in the previewed document.
+    vscode.window.onDidChangeTextEditorSelection((e) => {
+      if (!PreviewPanel.current || e.textEditor.document.uri.toString() !== previewUri) {
+        return;
+      }
+      const text = e.textEditor.document.getText();
+      const byte = charToByte(text, e.textEditor.document.offsetAt(e.selections[0].active));
+      const g = previewProvenance.find(
+        (gr) => gr.span != null && byte >= gr.span[0] && byte < gr.span[1]
+      );
+      PreviewPanel.current.highlight(g?.span ?? null);
+    }),
     // Live-vs-save-only toggled: re-register the current preview with the flag.
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("quito.preview.autoRefresh") && previewUri) {

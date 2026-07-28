@@ -27,6 +27,11 @@ interface NativeResult {
   previewPositions: number[];
   previewNormals: number[];
   groups: string;
+  // Provenance channel — not yet produced by the native backend; picking is a
+  // web/VS Code feature for now, so these are optional and default to empty.
+  provenancePositions?: number[];
+  provenanceNormals?: number[];
+  provenance?: string;
   viewport: string;
 }
 
@@ -80,6 +85,9 @@ export class DesktopEngine {
           previewPositions: new Float32Array(res.previewPositions),
           previewNormals: new Float32Array(res.previewNormals),
           groups: res.groups,
+          provenancePositions: new Float32Array(res.provenancePositions ?? []),
+          provenanceNormals: new Float32Array(res.provenanceNormals ?? []),
+          provenance: res.provenance ?? "",
           viewport: res.viewport,
         });
       })
@@ -105,6 +113,9 @@ export class DesktopEngine {
           previewPositions: new Float32Array(0),
           previewNormals: new Float32Array(0),
           groups: "",
+          provenancePositions: new Float32Array(0),
+          provenanceNormals: new Float32Array(0),
+          provenance: "",
           viewport: "",
         });
       });

@@ -5,7 +5,13 @@ import { setDiagnostics, type Diagnostic } from "@codemirror/lint";
 import { basicSetup } from "codemirror";
 import { indentWithTab } from "@codemirror/commands";
 import { openscad } from "./lang/openscad";
-import { Viewer, type MeshInfo, type ViewPreset, type PreviewGroup } from "./viewer";
+import {
+  Viewer,
+  type MeshInfo,
+  type ViewPreset,
+  type PreviewGroup,
+  type ProvenanceGroup,
+} from "./viewer";
 import { Engine, export2dBrowser } from "./engine";
 import type { RenderResponse } from "./engineWorker";
 import {
@@ -133,6 +139,21 @@ function byteToChar(source: string, byte: number): number {
   return source.length;
 }
 
+/** Map a UTF-16 index (CodeMirror positions) to a UTF-8 byte offset (engine
+ *  spans) — the inverse of {@link byteToChar}, for resolving the editor cursor
+ *  against provenance spans. */
+function charToByte(source: string, char: number): number {
+  if (char <= 0) return 0;
+  let b = 0;
+  let i = 0;
+  while (i < source.length && i < char) {
+    const cp = source.codePointAt(i)!;
+    b += utf8Len(cp);
+    i += cp > 0xffff ? 2 : 1;
+  }
+  return b;
+}
+
 /** Convert engine diagnostics (with byte spans) to CodeMirror lint diagnostics,
  *  mapped against `source` (the main file). Entries without a span are dropped
  *  (they still show in the console). */
@@ -178,6 +199,10 @@ export function App() {
     groups: [],
   });
   const debounceTimer = useRef<number | undefined>(undefined);
+  // Provenance groups from the last render, for editor↔preview linking (the
+  // viewer owns the pick geometry; this resolves the cursor → span, code→model).
+  const provenanceRef = useRef<ProvenanceGroup[]>([]);
+  const highlightFromCursorRef = useRef<() => void>(() => {});
 
   // File + customizer state. A `#code/…` share link (browser only) wins over
   // the autosaved localStorage project, so opening a shared URL always shows
@@ -261,6 +286,21 @@ export function App() {
 
     const viewer = new Viewer(canvasRef.current, (info) => setDims(info));
     viewerRef.current = viewer;
+
+    // Model → code: clicking a face selects the source statement that produced
+    // it. Spans index into the main file, so switch to it first if needed.
+    const unsubPick = viewer.onPick((span) => {
+      if (!span) return;
+      const view = viewRef.current;
+      if (!view) return;
+      if (activeRef.current !== 0) switchTo(0);
+      const src = filesRef.current[0].content;
+      const from = byteToChar(src, span[0]);
+      const to = byteToChar(src, span[1]);
+      const v = viewRef.current!;
+      v.dispatch({ selection: { anchor: from, head: to }, scrollIntoView: true });
+      v.focus();
+    });
 
     const engine = TAURI
       ? new DesktopEngine((r: RenderResponse) => onResult(r))
@@ -368,6 +408,10 @@ export function App() {
               persist();
               requestRender();
             }
+            // Code → model: highlight the geometry under the cursor as it moves.
+            if (u.selectionSet || u.docChanged) {
+              highlightFromCursorRef.current();
+            }
           }),
         ],
       }),
@@ -452,6 +496,7 @@ export function App() {
     return () => {
       view.destroy();
       unsubCamera();
+      unsubPick();
       for (const u of unlisteners) u();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -591,6 +636,25 @@ export function App() {
         ? toCmDiagnostics(diagRef.current, filesRef.current[0].content)
         : [];
     view.dispatch(setDiagnostics(view.state, diags));
+  }
+
+  /** Code → model: highlight the geometry produced by the statement under the
+   *  editor cursor. Only the main file participates (provenance spans index into
+   *  the main source); on any other tab the highlight is cleared. */
+  function highlightFromCursor() {
+    const viewer = viewerRef.current;
+    const view = viewRef.current;
+    if (!viewer || !view) return;
+    if (activeRef.current !== 0) {
+      viewer.highlightSpan(null);
+      return;
+    }
+    const head = view.state.selection.main.head;
+    const byte = charToByte(filesRef.current[0].content, head);
+    const g = provenanceRef.current.find(
+      (gr) => gr.span != null && byte >= gr.span[0] && byte < gr.span[1],
+    );
+    viewer.highlightSpan(g?.span ?? null);
   }
 
   function switchTo(idx: number) {
@@ -779,6 +843,20 @@ export function App() {
       } else {
         viewerRef.current?.setMesh(r.positions, r.normals);
       }
+      // Provenance channel for editor↔preview linking (picking + highlight).
+      let prov: ProvenanceGroup[] = [];
+      if (r.provenance) {
+        try {
+          prov = JSON.parse(r.provenance) as ProvenanceGroup[];
+        } catch {
+          prov = [];
+        }
+      }
+      provenanceRef.current = prov;
+      viewerRef.current?.setProvenance(r.provenancePositions, r.provenanceNormals, prov);
+      // Re-apply the code→model highlight for the current cursor (setProvenance
+      // cleared the stale overlay).
+      highlightFromCursor();
       // A script that assigned `$vp*` drives the camera: apply it when the
       // returned viewport differs from the camera we sent.
       if (r.viewport && viewerRef.current && !exportingRef.current) {
@@ -1070,6 +1148,7 @@ export function App() {
   saveActiveRef.current = () => void saveActive(false);
   saveAsRef.current = () => void saveActive(true);
   menuExportRef.current = () => void onDownload(exportFmt);
+  highlightFromCursorRef.current = highlightFromCursor;
 
   return (
     <div className="app">
