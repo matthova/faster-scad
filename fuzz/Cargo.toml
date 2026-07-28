@@ -15,12 +15,20 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 quito-syntax = { path = "../crates/quito-syntax" }
+quito-eval = { path = "../crates/quito-eval" }
 quito-geom = { path = "../crates/quito-geom" }
 
 # Fuzz binaries: no test/doc harness, and each is its own target.
 [[bin]]
 name = "parse"
 path = "fuzz_targets/parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "eval"
+path = "fuzz_targets/eval.rs"
 test = false
 doc = false
 bench = false

@@ -425,6 +425,9 @@ pub fn run(
         .and_then(|n| interp.lookup_func(n))
         .is_some_and(|g| Rc::ptr_eq(&g, f));
     loop {
+        // One fuel unit per opcode — bounds compiled function bodies, recursion,
+        // and in-function comprehensions/tail loops under a budget.
+        interp.burn()?;
         match &code[ip] {
             Op::Const(i) => stack.push(chunk.consts[*i as usize].clone()),
             Op::LoadLocal(s) => stack.push(locals[*s as usize].clone()),

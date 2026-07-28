@@ -166,13 +166,13 @@ jobs:
       - name: Build desktop app
         run: cargo build --manifest-path desktop/src-tauri/Cargo.toml
 
-  # Fuzz the code that ingests untrusted public input — the parser and the
-  # mesh/vector importers — which run in the browser worker (a panic crashes it)
-  # and natively in the CLI/desktop. A short libFuzzer smoke run per target on
-  # every PR; long/nightly runs stay local. Committed reproducers under
+  # Fuzz the code that ingests untrusted public input — the parser, the
+  # evaluator (parse-then-eval, under a fuel budget), and the mesh/vector
+  # importers — which run in the browser worker (a panic crashes it) and
+  # natively in the CLI/desktop. A short libFuzzer smoke run per target on every
+  # PR; long/nightly runs stay local. Committed reproducers under
   # fuzz/regressions/ are replayed first so a fixed crash can't silently return.
-  # See fuzz/README.md. The parse-then-eval target is deferred to a follow-up
-  # (it needs an evaluator fuel budget).
+  # See fuzz/README.md.
   fuzz:
     runs-on: ubuntu-latest
     steps:
@@ -209,22 +209,30 @@ jobs:
           # ("sanitizer is incompatible with statically linked libc"). gnu std is
           # present as the runner's host toolchain.
           TARGET=x86_64-unknown-linux-gnu
-          for t in parse import_stl import_3mf import_amf import_off import_obj import_dxf import_svg; do
+          for t in parse eval import_stl import_3mf import_amf import_off import_obj import_dxf import_svg; do
+            asan=""
             case "$t" in
               parse) seeds="corpus/echo examples benches/models" ;;
+              # The evaluator builds Rc<RefCell<Scope>> closures whose captured
+              # env points back at the defining scope — reference cycles that
+              # LeakSanitizer flags even on valid programs. This target hunts
+              # panics/hangs/OOM, not leaks, and the libFuzzer -detect_leaks flag
+              # doesn't stop ASan's atexit leak check, so disable it at the
+              # runtime level here (leak detection stays on for the others).
+              eval)  seeds="corpus/echo examples benches/models"; asan="ASAN_OPTIONS=detect_leaks=0" ;;
               *)     seeds="corpus/geom" ;;
             esac
             echo "::group::fuzz $t"
             # Replay committed reproducers first (deterministic, near-instant).
             if [ -d "fuzz/regressions/$t" ]; then
-              cargo +nightly fuzz run --target "$TARGET" "$t" "fuzz/regressions/$t" -- -runs=0
+              env $asan cargo +nightly fuzz run --target "$TARGET" "$t" "fuzz/regressions/$t" -- -runs=0
             fi
             # Then a short randomized smoke pass. The FIRST corpus dir is where
             # libFuzzer *writes* newly-found inputs, so it must be a scratch dir
             # (fuzz/corpus is gitignored) — the repo seed dirs follow as
             # read-only inputs and must never be the write target.
             mkdir -p "fuzz/corpus/$t"
-            cargo +nightly fuzz run --target "$TARGET" "$t" "fuzz/corpus/$t" $seeds -- \
+            env $asan cargo +nightly fuzz run --target "$TARGET" "$t" "fuzz/corpus/$t" $seeds -- \
               -max_total_time=20 -rss_limit_mb=2048 -timeout=25
             echo "::endgroup::"
           done

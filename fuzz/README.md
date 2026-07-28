@@ -18,21 +18,29 @@ cargo install cargo-fuzz
 
 ## Targets
 
-| target        | entry point                        | input   |
-| ------------- | ---------------------------------- | ------- |
-| `parse`       | `quito_syntax::parse`              | UTF-8   |
-| `import_stl`  | `quito_geom::Mesh::from_stl`       | bytes   |
-| `import_3mf`  | `quito_geom::Mesh::from_3mf`       | bytes   |
-| `import_amf`  | `quito_geom::Mesh::from_amf`       | bytes   |
-| `import_off`  | `quito_geom::Mesh::from_off`       | UTF-8   |
-| `import_obj`  | `quito_geom::Mesh::from_obj`       | UTF-8   |
-| `import_dxf`  | `quito_geom::import_dxf`           | bytes   |
-| `import_svg`  | `quito_geom::import_svg`           | bytes   |
+| target        | entry point                            | input   |
+| ------------- | -------------------------------------- | ------- |
+| `parse`       | `quito_syntax::parse`                  | UTF-8   |
+| `eval`        | `quito_eval::eval_program_with_budget` | UTF-8   |
+| `import_stl`  | `quito_geom::Mesh::from_stl`           | bytes   |
+| `import_3mf`  | `quito_geom::Mesh::from_3mf`           | bytes   |
+| `import_amf`  | `quito_geom::Mesh::from_amf`           | bytes   |
+| `import_off`  | `quito_geom::Mesh::from_off`           | UTF-8   |
+| `import_obj`  | `quito_geom::Mesh::from_obj`           | UTF-8   |
+| `import_dxf`  | `quito_geom::import_dxf`               | bytes   |
+| `import_svg`  | `quito_geom::import_svg`               | bytes   |
 
-The parse-then-**eval** target is intentionally absent: a clean eval fuzzer
-needs a global step/fuel budget in the evaluator (nested `for` loops otherwise
-multiply the per-construct bounds to an effectively unbounded runtime). That
-budget lands in a follow-up PR.
+The `eval` target runs parse-then-eval under a **fuel budget**
+(`eval_program_with_budget`) so adversarial programs always terminate — nested
+`for` loops otherwise multiply the per-construct bounds (`MAX_CALL_DEPTH`,
+`MAX_RANGE_ITERS`) into an effectively unbounded runtime — and on a 256 MiB
+stack matching the CLI/wasm deployments, so a deeply-nested AST doesn't report a
+stack overflow no real deployment would hit. Run it with
+`ASAN_OPTIONS=detect_leaks=0`: the evaluator's `Rc<RefCell<Scope>>` closures form
+reference cycles that LeakSanitizer flags even on valid programs, which is a
+separate concern from the panics/hangs/OOM this target hunts (the libFuzzer
+`-detect_leaks` flag doesn't stop ASan's atexit leak check — only the env var
+does).
 
 ## Running
 
@@ -45,6 +53,7 @@ fuzzer will write thousands of files into it.
 ```sh
 # from the repo root
 cargo +nightly fuzz run parse fuzz/corpus/parse corpus/echo examples benches/models
+cargo +nightly fuzz run eval  fuzz/corpus/eval  corpus/echo examples benches/models
 cargo +nightly fuzz run import_stl fuzz/corpus/import_stl corpus/geom
 ```
 
