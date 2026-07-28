@@ -16,3 +16,8 @@ quito-geom = { workspace = true }
 quito-ir = { workspace = true }
 wasm-bindgen = "0.2"
 console_error_panic_hook = "0.1"
+
+[dev-dependencies]
+# Runs the crate's tests in a real browser via `wasm-pack test`, exercising the
+# boolmesh-on-wasm kernel path that browsers actually execute.
+wasm-bindgen-test = "0.3"
