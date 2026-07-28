@@ -141,6 +141,10 @@ pub struct EvalOutput {
     pub node: Node,
     pub echoes: Vec<String>,
     pub warnings: Vec<String>,
+    /// Number of `assert()`s that actually executed during evaluation. Used by
+    /// the BOSL2 oracle to reject vacuous passes (eval succeeds but ran zero
+    /// assertions, e.g. because a test module was never invoked).
+    pub asserts_run: usize,
 }
 
 struct Interp<'a> {
@@ -151,6 +155,8 @@ struct Interp<'a> {
     specials: Vec<FastMap<String, Value>>,
     echoes: Vec<String>,
     warnings: Vec<String>,
+    /// Count of `assert()`s that executed (see `EvalOutput::asserts_run`).
+    asserts_run: usize,
     root: Option<Node>,
     depth: usize,
     /// For each active module call: the child statements plus the caller's
@@ -227,6 +233,7 @@ pub fn eval_program_with_params(
         specials: vec![globals],
         echoes: Vec::new(),
         warnings: Vec::new(),
+        asserts_run: 0,
         root: None,
         depth: 0,
         children_stack: Vec::new(),
@@ -242,6 +249,7 @@ pub fn eval_program_with_params(
         node,
         echoes: interp.echoes,
         warnings: interp.warnings,
+        asserts_run: interp.asserts_run,
     })
 }
 
@@ -1120,6 +1128,9 @@ impl Interp<'_> {
     /// Assert semantics shared by the module and expression forms; returns
     /// whether the assertion passed (errors on failure).
     fn do_assert(&mut self, args: &[Arg]) -> EResult<()> {
+        // Count every assert that executes (passing or failing) so the BOSL2
+        // oracle can reject vacuous passes.
+        self.asserts_run += 1;
         let cond = self
             .first_positional(args)
             .unwrap_or(Value::Undef)

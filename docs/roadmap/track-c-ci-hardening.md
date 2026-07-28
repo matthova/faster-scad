@@ -15,16 +15,6 @@ independent, small, and parallelizable.
 
 ---
 
-## C1. BOSL2 suite in CI (shared with track A, item A6)
-
-The single worst blind spot: an advertised exit metric that has never run in
-CI. `ci.yml` checks out without `submodules: true`, has no
-`cargo run -p xtask -- bosl2` step, and `run_bosl2` silently reports **0/0
-with exit code 0** when `corpus/BOSL2` is absent (the `else { continue }` on
-unreadable files shrinks the denominator invisibly — README says 15/15, the
-code lists 16 names). Fix per A6: submodule checkout, the xtask step,
-hard-fail on 0-executed, assertion-output checking. *Small.*
-
 ## C2. Web app typechecked and built on PRs
 
 `deploy-pages.yml` runs `tsc`/`vite build` only on push to `main` — a PR can
@@ -117,11 +107,10 @@ be promoted to CI separately if flake allows. *Small-medium.*
 
 ## Suggested execution
 
-Fold **C1** into track A (it's literally A6). Do **C2+C3+C4** as one
-"CI truthfulness" PR alongside the cherry-picks — they're each ~an hour of
-YAML plus one-time fallout fixes. **C5.1** (warm-edit gate) rides with track
-A's xtask work. **C6–C8** are independent and make good gap-filler tasks
-between track A items.
+Do **C2+C3+C4** as one "CI truthfulness" PR alongside the cherry-picks — they're
+each ~an hour of YAML plus one-time fallout fixes. **C5.1** (warm-edit gate)
+rides with track A's xtask work. **C6–C8** are independent and make good
+gap-filler tasks between track A items.
 
 ## Exit criterion
 
