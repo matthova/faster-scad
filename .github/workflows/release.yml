@@ -1,17 +1,23 @@
 name: Release desktop app
 
-# Cut a desktop release MANUALLY from the Actions tab (or `gh workflow run`):
-#   Actions → "Release desktop app" → Run workflow → enter the version tag,
-#   e.g. v0.1.0. The tag must match `version` in
-#   desktop/src-tauri/tauri.conf.json.
+# Cut a desktop release by PUBLISHING a GitHub Release:
+#   Releases → "Draft a new release" → create a tag like `v0.1.0` → Publish.
 #
-# This runs ONLY on manual dispatch — pushing a tag does NOT start a release.
+# The release TAG is the single source of truth for the version: the build
+# stamps `v0.1.0` -> `0.1.0` into tauri.conf.json (see "Stamp version" below),
+# so you never bump the version in the repo to cut a release.
 #
-# It builds + signs the app on each OS, then creates a DRAFT GitHub Release
-# with the installers and the updater manifest (latest.json). Review the draft,
-# then PUBLISH it: the in-app updater reads
+# Publishing fires this workflow, which builds + signs the app on each OS and
+# uploads the installers plus the updater manifest (latest.json) as assets on
+# the release you just published. The in-app updater reads
 #   https://github.com/matthova/faster-scad/releases/latest/download/latest.json
-# which only resolves to a published, non-prerelease release.
+# which resolves to the latest published, non-prerelease release.
+#
+# Because the build attaches assets AFTER you publish, the installers appear a
+# few minutes later once the matrix finishes.
+#
+# A manual `workflow_dispatch` (Actions tab, or `gh workflow run`) is also
+# available for re-running a build against an existing tag/release.
 #
 # Required repository secrets (see docs/RELEASING.md):
 #   TAURI_SIGNING_PRIVATE_KEY           — minisign private key (updater signing)
@@ -19,6 +25,8 @@ name: Release desktop app
 # Optional (OS code-signing / notarization) are documented in docs/RELEASING.md.
 
 on:
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       tag:
@@ -61,6 +69,25 @@ jobs:
           # quito-geom builds the native Manifold C++ kernel; the BOSL2 corpus
           # submodule isn't needed to bundle, so a shallow checkout is fine.
           submodules: false
+
+      # The release tag is the single source of truth for the version. The
+      # updater manifest (latest.json) and the installer version both come from
+      # tauri.conf.json's `version`, so stamp the tag into it here (in the
+      # ephemeral CI checkout only — nothing is committed back). This is why you
+      # never bump the version in the repo to cut a release. Cargo.toml is left
+      # alone: rewriting it would invalidate the cached `--locked` build, and the
+      # crate version doesn't feed the updater.
+      - name: Stamp version from release tag
+        shell: bash
+        run: |
+          TAG="${{ github.event.release.tag_name || inputs.tag }}"
+          VERSION="${TAG#v}"
+          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+].+)?$'; then
+            echo "::error::Release tag '$TAG' is not a valid vX.Y.Z semver tag."
+            exit 1
+          fi
+          node -e "const f='desktop/src-tauri/tauri.conf.json',fs=require('fs'),j=require('./'+f);j.version='${VERSION}';fs.writeFileSync(f,JSON.stringify(j,null,2)+'\n')"
+          echo "Stamped tauri.conf.json version = $VERSION (from tag $TAG)."
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -141,12 +168,16 @@ jobs:
         with:
           # desktop/ holds package.json; tauri finds src-tauri/tauri.conf.json.
           projectPath: desktop
-          tagName: ${{ inputs.tag }}
+          # On `release: published` this is the tag you just published; on manual
+          # dispatch it's the tag input. tauri-action finds the existing release
+          # for this tag and uploads assets to it.
+          tagName: ${{ github.event.release.tag_name || inputs.tag }}
           releaseName: "Quito __VERSION__"
           releaseBody: "See the assets below to download and install Quito."
-          # Draft so a human can review before publishing. `releases/latest`
-          # only resolves once the release is published and not a prerelease.
-          releaseDraft: true
+          # The release already exists (you published it), so build assets are
+          # uploaded to it directly rather than into a new draft. On manual
+          # dispatch against a tag with no release, one is created (published).
+          releaseDraft: false
           prerelease: false
           # Emits latest.json (the updater manifest) alongside the installers.
           includeUpdaterJson: true

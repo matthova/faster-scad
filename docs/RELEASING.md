@@ -25,25 +25,33 @@ Update artifacts per platform:
 
 ## Cutting a release (repeat each version)
 
-1. Bump the version in **all three** files (keep them identical):
-   - `desktop/src-tauri/tauri.conf.json` → `version`
-   - `desktop/package.json` → `version`
-   - `desktop/src-tauri/Cargo.toml` → `version`
-   Then `cargo build --manifest-path desktop/src-tauri/Cargo.toml` to refresh
-   `desktop/src-tauri/Cargo.lock`, and commit.
-2. Run the release workflow **manually** (it does not trigger on tag push):
-   - GitHub → **Actions** → **Release desktop app** → **Run workflow**, and
-     enter the version tag (e.g. `v0.1.0`, must match `tauri.conf.json`), or
-   - from the CLI: `gh workflow run "Release desktop app" -f tag=v0.1.0`
+The release **tag** is the single source of truth for the version — you do
+**not** bump any version fields in the repo to cut a release.
 
-   The workflow creates the tag for you as part of drafting the release.
-3. The **Release desktop app** workflow builds + signs on all three OSes and
-   creates a **draft** GitHub Release with the installers and `latest.json`.
-4. Review the draft release, then **Publish** it. Publishing is what exposes the
-   update to existing users — do it only when you're ready to ship.
+1. **Publish a GitHub Release** with a tag of `v<version>` (e.g. `v0.1.1`):
+   - GitHub → **Releases** → **Draft a new release** → **Choose a tag** →
+     type the new tag (it's created on publish) → **Publish release**, or
+   - from the CLI: `gh release create v0.1.1 --title "v0.1.1" --generate-notes`
 
-> The updater's `version` comparison uses `tauri.conf.json`. The Git tag and the
-> three version fields must all agree, or users won't be offered the update.
+   Publishing fires the **Release desktop app** workflow automatically.
+2. The workflow stamps the tag into `tauri.conf.json`'s `version` (`v0.1.1` →
+   `0.1.1`, in the CI checkout only — nothing is committed back), then builds +
+   signs on all three OSes and **uploads the installers and `latest.json` as
+   assets onto the release you just published**. They appear a few minutes later.
+3. That's it — the release is already published, so existing users are offered
+   the update as soon as the assets finish uploading. (Don't publish until
+   you're ready to ship. To stage instead, mark it a **pre-release**: the
+   updater ignores pre-releases, and you can un-check that later.)
+
+> The version shown in installers and used by the updater's `version` comparison
+> comes entirely from the tag. The `version` fields committed in
+> `tauri.conf.json` / `package.json` / `Cargo.toml` only matter for local
+> `tauri dev` — they don't need to match the release tag. Keep them roughly
+> current if you like, but it's not required to ship.
+
+You can also re-run a build against an existing release via **Actions →
+Release desktop app → Run workflow** (or `gh workflow run "Release desktop app"
+-f tag=v0.1.1`).
 
 ---
 
@@ -73,8 +81,9 @@ These require secrets, paid accounts, or GitHub UI actions an agent can't do.
 
 ### Per release
 
-- [ ] After the workflow finishes, **publish the draft release** (and make sure
-      "Set as a pre-release" is **unchecked**), or the updater won't see it.
+- [ ] **Publish the GitHub Release** (with "Set as a pre-release" **unchecked**)
+      to trigger the build. This exposes the update to existing users once the
+      assets finish uploading, so publish only when ready to ship.
 
 ### Recommended before a public launch — OS code-signing
 
