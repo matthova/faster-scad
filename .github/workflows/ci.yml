@@ -61,6 +61,11 @@ jobs:
       - name: Build wasm engine target
         run: cargo build -p quito-wasm --target wasm32-unknown-unknown
 
+  # Typecheck and build the web playground on every PR. deploy-pages.yml only
+  # runs tsc/vite on push to main, so without this a PR can merge TypeScript
+  # that breaks the live site and the breakage is only found at deploy time.
+  # This also smoke-tests that quito-wasm actually builds with wasm-pack (not
+  # just `cargo check` for the target, which the test job above covers).
   web:
     runs-on: ubuntu-latest
     steps:
@@ -71,6 +76,8 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
+      # Reuse the cache key that deploy-pages.yml warms on push to main, so PR
+      # builds restore the already-compiled wasm target (the slow part).
       - name: Cache cargo
         uses: actions/cache@v4
         with:
