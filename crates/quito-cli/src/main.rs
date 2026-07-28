@@ -220,7 +220,16 @@ fn run() -> Result<()> {
 
     // Render.
     let t0 = Instant::now();
-    let mesh = quito_geom::render(&out.node).context("rendering geometry")?;
+    let mut geom_cache = quito_geom::GeomCache::new();
+    let (mesh, geom_warnings) = quito_geom::render_cached_warns(
+        &out.node,
+        &quito_geom::ManifoldKernel::new(),
+        &mut geom_cache,
+    )
+    .context("rendering geometry")?;
+    for w in &geom_warnings {
+        eprintln!("WARNING: {w}");
+    }
     let elapsed = t0.elapsed();
 
     let manifold_ok = mesh.signed_volume() > 0.0 || mesh.is_empty();

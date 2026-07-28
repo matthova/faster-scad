@@ -39,43 +39,19 @@ different shape.
   there. CLI 2D→DXF/SVG export of a bare projection stays unresolved, a separate
   niche gap.)
 
-The remaining items (A5–A6) are still open.
+- **A5** (`minkowski()` non-convex operands) is **done for 2D, loud for 3D** —
+  2D minkowski is now **exact**: each operand is triangulated (earcut) and the
+  pairwise triangle sums are unioned, so rounding a non-convex outline
+  (`minkowski(){ poly; circle }`) is correct (was the convex hull). 3D non-convex
+  minkowski stays the convex approximation (exact 3D via convex decomposition is
+  ~2 weeks, deferred to M7), but the renderer now emits a warning through a new
+  geometry-warning channel (surfaced in CLI/playground/desktop) instead of
+  silently misleading. Covered by a 2D oracle case, `shape2d` area tests, and a
+  `render_cached_warns` warning test; recorded in COMPAT.md.
 
-**Effort:** ~1 week remaining (A5–A6). **Exit criterion** at the bottom.
+The remaining item (A6) is still open.
 
----
-
-## A5. `minkowski()`: stop being silently wrong for non-convex operands
-
-### The bug
-
-`minkowski_fold`/`minkowski_pair` (`crates/quito-geom/src/lib.rs:403-426`)
-compute the convex hull of pairwise vertex sums — exact only when **both**
-operands are convex. The doc comment admits it ("for non-convex operands it is
-the convex Minkowski approximation"). The 2D path (`shape2d::minkowski_2d`,
-lines 278–297) has the same limitation. The classic use case — rounding a
-non-convex outline (L-bracket, gear) with a sphere/circle — silently returns
-the convex hull: dramatically wrong, no warning.
-
-### Two-stage plan
-
-**Stage 1 (in M6, ~1 day): make it loud.** Detect non-convex operands (compare
-operand volume/area against its own convex hull's within epsilon — both
-quantities are already computable with existing code) and emit a rendering
-warning through the existing console/warning channel: "minkowski: non-convex
-operand; result is the convex approximation". Honesty beats silence; document
-it in COMPAT.md's divergence register with this exact repro.
-
-**Stage 2 (M6 stretch or M7, ~2+ weeks): make it right.** Exact non-convex
-Minkowski via convex decomposition: decompose each operand into convex pieces,
-Minkowski-sum each pair (the existing convex pair code is exactly right for
-this), union all pairwise results (the kernel's job). Needs a convex
-decomposition on both kernels — approximate convex decomposition is acceptable
-if the union is taken afterward with slightly inflated pieces. 2D first
-(ear-clip triangles as the decomposition, trivially available from the
-existing earcut) — that alone fixes the most common case (2D rounding via
-`minkowski() { poly; circle(r); }`), then 3D. Gate with oracle cases either
-way.
+**Effort:** ~1–2 days remaining (A6). **Exit criterion** at the bottom.
 
 ---
 
@@ -135,7 +111,7 @@ is open-ended and can trail.**
 > `cargo run -p xtask -- bosl2` reports **16/16 with assertion-output
 > checking**, both enforced in CI on every PR (0/0, skipped files, or missing
 > corpus = red). The geom harness + corpus are already in place and green in CI
-> (A2); named-arg/axis-angle transforms (A1), offset self-intersection (A3), and
-> projection-in-2D-boolean (A4) are closed. Still open: non-convex minkowski at
-> minimum emitting a user-visible warning (A5), and BOSL2 assertion-output
-> checking (A6). COMPAT.md accurately lists every remaining known divergence.
+> (A2); named-arg/axis-angle transforms (A1), offset self-intersection (A3),
+> projection-in-2D-boolean (A4), and minkowski (A5: 2D exact, 3D warns) are
+> closed. Still open: BOSL2 assertion-output checking (A6). COMPAT.md accurately
+> lists every remaining known divergence.
