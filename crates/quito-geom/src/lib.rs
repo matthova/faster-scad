@@ -260,8 +260,11 @@ fn coalesce_groups(groups: &mut Vec<ColoredMesh>) {
 fn append_mesh(dst: &mut Mesh, src: &Mesh) {
     let base = dst.verts.len() as u32;
     dst.verts.extend_from_slice(&src.verts);
-    dst.tris
-        .extend(src.tris.iter().map(|t| [t[0] + base, t[1] + base, t[2] + base]));
+    dst.tris.extend(
+        src.tris
+            .iter()
+            .map(|t| [t[0] + base, t[1] + base, t[2] + base]),
+    );
 }
 
 /// Flatten colored groups into one triangle soup (for GPU upload) plus a JSON
@@ -1947,7 +1950,11 @@ mod tests {
         ]);
         let mut cache = GeomCache::new();
         let groups = render_groups_cached(&node, &RustManifoldKernel::new(), &mut cache).unwrap();
-        assert!(groups.is_empty(), "expected no groups, got {}", groups.len());
+        assert!(
+            groups.is_empty(),
+            "expected no groups, got {}",
+            groups.len()
+        );
     }
 
     #[test]
@@ -1977,7 +1984,10 @@ mod tests {
         assert_eq!(groups[0].color, DEFAULT_COLOR);
         // A real flat profile came through the 2D path (square − hole ≈ 16 − π).
         let area = flat_area(&groups[0].mesh);
-        assert!((area - (16.0 - std::f64::consts::PI)).abs() < 0.05, "area {area}");
+        assert!(
+            (area - (16.0 - std::f64::consts::PI)).abs() < 0.05,
+            "area {area}"
+        );
     }
 
     #[test]
