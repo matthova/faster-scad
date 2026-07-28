@@ -207,7 +207,10 @@ fn render_to_file(
                     Err(e) => RenderOutcome::Err(format!("writing {}: {e}", output.display())),
                 }
             }
-            None => RenderOutcome::Err(format!("{} export requires a 2D object", ext.to_uppercase())),
+            None => RenderOutcome::Err(format!(
+                "{} export requires a 2D object",
+                ext.to_uppercase()
+            )),
         };
     }
 
@@ -297,14 +300,13 @@ impl Backend {
         // Eval on the big-stack worker, off the async runtime.
         let text_for_worker = text.clone();
         let raw = tokio::task::spawn_blocking(move || {
-            on_big_stack(move || diagnose(&text_for_worker, &base, overlay))
-                .unwrap_or_else(|_| {
-                    vec![RawDiag {
-                        severity: DiagnosticSeverity::ERROR,
-                        message: "internal error while analyzing document".into(),
-                        span: None,
-                    }]
-                })
+            on_big_stack(move || diagnose(&text_for_worker, &base, overlay)).unwrap_or_else(|_| {
+                vec![RawDiag {
+                    severity: DiagnosticSeverity::ERROR,
+                    message: "internal error while analyzing document".into(),
+                    span: None,
+                }]
+            })
         })
         .await
         .unwrap_or_default();
