@@ -35,7 +35,10 @@ The `eval` target runs parse-then-eval under a **fuel budget**
 `for` loops otherwise multiply the per-construct bounds (`MAX_CALL_DEPTH`,
 `MAX_RANGE_ITERS`) into an effectively unbounded runtime — and on a 256 MiB
 stack matching the CLI/wasm deployments, so a deeply-nested AST doesn't report a
-stack overflow no real deployment would hit.
+stack overflow no real deployment would hit. Run it with `-detect_leaks=0`: the
+evaluator's `Rc<RefCell<Scope>>` closures form reference cycles that
+LeakSanitizer flags even on valid programs, which is a separate concern from the
+panics/hangs/OOM this target hunts.
 
 ## Running
 

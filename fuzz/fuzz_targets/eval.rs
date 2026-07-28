@@ -10,6 +10,12 @@
 //!    MiB), so a deeply-nested AST doesn't report a stack overflow that no real
 //!    deployment would hit — libFuzzer's default main-thread stack is far
 //!    smaller than any of them.
+//!
+//! Run with `-detect_leaks=0` (see CI): the evaluator's `Rc<RefCell<Scope>>`
+//! closures form reference cycles (a scope holds a function whose captured env
+//! points back at that scope), which LeakSanitizer reports even on valid input.
+//! Those cycles are freed at process exit and are a separate concern from the
+//! panics/hangs/OOM this target hunts.
 use libfuzzer_sys::fuzz_target;
 
 const STACK: usize = 256 << 20;
