@@ -33,6 +33,7 @@ import {
   onFileChanged,
   saveSource,
   saveSourceAs,
+  saveImageNative,
   watchFiles,
   onOpenPath,
   onMenuAction,
@@ -776,6 +777,29 @@ export function App() {
     requestRenderRef.current();
   }
 
+  /** Capture the viewer as a PNG — native save dialog on desktop, download in
+   *  the browser. */
+  async function onSavePng() {
+    const viewer = viewerRef.current;
+    if (!viewer) return;
+    try {
+      const blob = await viewer.capturePng();
+      if (TAURI) {
+        await saveImageNative(new Uint8Array(await blob.arrayBuffer()));
+      } else {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "quito.png";
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+    } catch (e) {
+      setStatus((s) => ({ ...s, error: `PNG export failed: ${String(e)}` }));
+      setConsoleOpen(true);
+    }
+  }
+
   async function onDownload(format: ExportFmt) {
     if (status.triangleCount === 0) return;
     const fs = filesRef.current;
@@ -900,6 +924,9 @@ export function App() {
             ))}
           </span>
           <button onClick={() => viewerRef.current?.resetView()}>Reset view</button>
+          <button onClick={onSavePng} title="Save the current view as a PNG image">
+            PNG
+          </button>
           <div className="anim" title="Animation ($t sweeps 0→1)">
             <button
               className="anim-play"

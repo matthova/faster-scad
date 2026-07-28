@@ -90,6 +90,11 @@ for errors, yellow for warnings, cleared on success). Run it locally with
   in the playground, the desktop app, and the CLI. `import()` reads meshes
   (STL/OFF/OBJ/3MF/AMF, including OpenSCAD's ZIP64+deflate 3MF) and 2D profiles
   (DXF/SVG).
+- **PNG image export** — a **Save PNG** button captures the viewer in the
+  playground and desktop app, and the CLI renders headlessly (no GPU) with a
+  pure-Rust rasterizer: `quito model.scad -o out.png --imgsize 800,600
+  --camera=…` (OpenSCAD-style `--camera`/`--projection`/`--viewall`/
+  `--autocenter`), colored to match the preview.
 - **Console** — echo / warnings / errors, color-coded.
 - **Examples** — an Examples menu loads curated sample projects (CSG, twisted
   extrusion, text, a 2D gasket for DXF/SVG, a `$t` animation, and a BOSL2 model).

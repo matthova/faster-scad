@@ -587,6 +587,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
+ "png",
  "quito-eval",
  "quito-geom",
  "quito-ir",

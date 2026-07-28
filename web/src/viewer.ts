@@ -35,7 +35,12 @@ export class Viewer {
     canvas: HTMLCanvasElement,
     private onInfo?: (info: MeshInfo | null) => void,
   ) {
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    // preserveDrawingBuffer lets us read the canvas back (Save PNG) any frame.
+    this.renderer = new THREE.WebGLRenderer({
+      canvas,
+      antialias: true,
+      preserveDrawingBuffer: true,
+    });
     this.renderer.setPixelRatio(window.devicePixelRatio);
 
     this.scene = new THREE.Scene();
@@ -210,6 +215,17 @@ export class Viewer {
   resetView() {
     this.preset = "iso";
     if (this.geometry) this.frame(this.geometry);
+  }
+
+  /** Capture the current view as a PNG blob (renders one frame first). */
+  capturePng(): Promise<Blob> {
+    this.renderer.render(this.scene, this.camera);
+    return new Promise((resolve, reject) => {
+      this.renderer.domElement.toBlob((blob) => {
+        if (blob) resolve(blob);
+        else reject(new Error("canvas capture failed"));
+      }, "image/png");
+    });
   }
 }
 
