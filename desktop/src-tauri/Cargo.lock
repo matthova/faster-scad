@@ -164,15 +164,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "boolmesh"
-version = "0.1.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ede2e53d77b54cd1aae2a8641693c4c65b0ecd0d423194ca4ef78278b53313a"
-dependencies = [
- "glam",
-]
-
-[[package]]
 name = "brotli"
 version = "8.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -349,6 +340,15 @@ dependencies = [
  "num-traits",
  "serde",
  "windows-link 0.2.1",
+]
+
+[[package]]
+name = "clipper2-rust"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0fd663fe209e7030c956e3be4c051dcc20cdb73da794f31466762cff12ca11bf"
+dependencies = [
+ "num-traits",
 ]
 
 [[package]]
@@ -1193,12 +1193,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "glam"
-version = "0.30.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19fc433e8437a212d1b6f1e68c7824af3aed907da60afa994e7f542d18d12aa9"
-
-[[package]]
 name = "glib"
 version = "0.18.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2003,6 +1997,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "manifold-rust"
+version = "0.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af15b5eb5bfe953c3536d0f3f2cdfa323e5e23b993f6f7d5b30ef61f5b97b8b2"
+dependencies = [
+ "clipper2-rust",
+ "num-traits",
+]
+
+[[package]]
 name = "markup5ever"
 version = "0.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2665,10 +2669,11 @@ dependencies = [
 name = "quito-geom"
 version = "0.0.0"
 dependencies = [
- "boolmesh",
  "earcutr",
  "geo",
  "manifold-csg",
+ "manifold-rust",
+ "miniz_oxide",
  "quito-ir",
  "thiserror 2.0.19",
 ]

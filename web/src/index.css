@@ -149,6 +149,12 @@ body {
   background: var(--bg, #1a1a1a);
   color: inherit;
 }
+.tab-dirty {
+  color: var(--accent, #f5a623);
+  font-size: 9px;
+  line-height: 1;
+  margin-right: -2px;
+}
 .tab-close {
   border: 0;
   background: transparent;

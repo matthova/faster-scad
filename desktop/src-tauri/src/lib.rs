@@ -20,8 +20,16 @@ const RENDER_STACK: usize = 256 << 20;
 #[derive(Default)]
 struct AppState {
     cache: Arc<Mutex<quito_geom::GeomCache>>,
-    /// Keeps the active file watcher alive (dropping it stops watching).
-    watcher: Mutex<Option<notify::RecommendedWatcher>>,
+    /// Keeps the active file watchers alive (dropping one stops watching that
+    /// file). One entry per watched project file with a disk path.
+    watchers: Mutex<Vec<notify::RecommendedWatcher>>,
+    /// Content last written by the app itself (`save_source`), keyed by
+    /// canonicalized path. The watcher compares against this so a self-save is
+    /// not echoed back as an external edit (reload-on-save would be jarring).
+    last_write: Arc<Mutex<Option<(PathBuf, String)>>>,
+    /// A `.scad` path passed at launch (double-click / open-with) before the
+    /// webview is ready to listen; the frontend drains it via `take_pending_open`.
+    pending_open: Mutex<Option<String>>,
 }
 
 /// A file opened from disk.
@@ -302,7 +310,15 @@ fn engine_version() -> String {
 /// Watch `target`'s directory and call `on_change(content)` whenever the file is
 /// modified/created externally (the "edit in your own editor" workflow). The
 /// returned watcher must be kept alive.
-fn install_watcher<F>(target: &Path, on_change: F) -> notify::Result<notify::RecommendedWatcher>
+///
+/// `last_write` carries the content the app itself last wrote (see
+/// `save_source`); a change whose on-disk content matches it is treated as a
+/// self-save and swallowed, so saving from the app doesn't trigger a reload.
+fn install_watcher<F>(
+    target: &Path,
+    last_write: Arc<Mutex<Option<(PathBuf, String)>>>,
+    on_change: F,
+) -> notify::Result<notify::RecommendedWatcher>
 where
     F: Fn(String) + Send + 'static,
 {
@@ -323,12 +339,60 @@ where
         });
         if hit {
             if let Ok(content) = std::fs::read_to_string(&target) {
+                // Swallow our own writes. FSEvents is coarse and may replay a
+                // write as several events, so we keep the marker (matching any
+                // duplicate self-write) and only drop it once a genuinely
+                // different edit to this file arrives — that's the real external
+                // change we want to deliver.
+                if let Ok(mut lw) = last_write.lock() {
+                    if let Some((p, c)) = lw.as_ref() {
+                        if *p == target {
+                            if *c == content {
+                                return; // self-write (or a duplicate) — ignore
+                            }
+                            *lw = None; // real external edit — forget the marker
+                        }
+                        // A marker for a different file: leave it untouched.
+                    }
+                }
                 on_change(content);
             }
         }
     })?;
     watcher.watch(&parent, RecursiveMode::NonRecursive)?;
     Ok(watcher)
+}
+
+/// Best-effort canonical path that also works for a not-yet-created file
+/// (canonicalize the parent, then rejoin the filename). Kept in sync with the
+/// `target` computation in `install_watcher` so `last_write` markers match.
+fn canonical(path: &str) -> PathBuf {
+    let pb = PathBuf::from(path);
+    std::fs::canonicalize(&pb).unwrap_or_else(|_| {
+        match (pb.parent().and_then(|p| std::fs::canonicalize(p).ok()), pb.file_name()) {
+            (Some(dir), Some(name)) => dir.join(name),
+            _ => pb,
+        }
+    })
+}
+
+/// Install a watcher for `path` that emits `file-changed` on external edits.
+fn spawn_watcher(
+    app: &tauri::AppHandle,
+    last_write: Arc<Mutex<Option<(PathBuf, String)>>>,
+    path: &str,
+) -> Option<notify::RecommendedWatcher> {
+    let app = app.clone();
+    let emit_path = path.to_string();
+    match install_watcher(&PathBuf::from(path), last_write, move |content| {
+        let _ = app.emit("file-changed", FileChanged { path: emit_path.clone(), content });
+    }) {
+        Ok(w) => Some(w),
+        Err(e) => {
+            eprintln!("file watch failed for {path}: {e}");
+            None
+        }
+    }
 }
 
 /// Open a `.scad` file from disk and start watching it for external edits (which
@@ -346,14 +410,48 @@ fn open_file(
     let name =
         pb.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "untitled.scad".into());
 
-    let emit_path = path.clone();
-    match install_watcher(&pb, move |content| {
-        let _ = app.emit("file-changed", FileChanged { path: emit_path.clone(), content });
-    }) {
-        Ok(w) => *state.watcher.lock().unwrap() = Some(w),
-        Err(e) => eprintln!("file watch failed for {path}: {e}"),
+    // Opening a file starts a fresh project, so replace any existing watchers.
+    let mut ws = state.watchers.lock().unwrap();
+    ws.clear();
+    if let Some(w) = spawn_watcher(&app, state.last_write.clone(), &path) {
+        ws.push(w);
     }
     Ok(OpenedFile { path, name, dir, content })
+}
+
+/// Write UTF-8 source text to `path` (⌘S / Save As). Records a self-write marker
+/// first so the file watcher swallows the resulting change instead of reloading.
+#[tauri::command]
+fn save_source(
+    state: tauri::State<'_, AppState>,
+    path: String,
+    content: String,
+) -> Result<(), String> {
+    *state.last_write.lock().unwrap() = Some((canonical(&path), content.clone()));
+    std::fs::write(&path, content).map_err(|e| {
+        *state.last_write.lock().unwrap() = None;
+        format!("write {path}: {e}")
+    })
+}
+
+/// Watch a set of project files (every tab with a disk path) for external edits.
+/// Replaces the current watcher set.
+#[tauri::command]
+fn watch_files(app: tauri::AppHandle, state: tauri::State<'_, AppState>, paths: Vec<String>) {
+    let mut ws = state.watchers.lock().unwrap();
+    ws.clear();
+    for p in &paths {
+        if let Some(w) = spawn_watcher(&app, state.last_write.clone(), p) {
+            ws.push(w);
+        }
+    }
+}
+
+/// Return (and clear) a `.scad` path passed at launch via double-click/open-with,
+/// so the frontend can open it once the webview is ready.
+#[tauri::command]
+fn take_pending_open(state: tauri::State<'_, AppState>) -> Option<String> {
+    state.pending_open.lock().unwrap().take()
 }
 
 /// Run `f` on a worker thread with a large stack and return its result.
@@ -366,21 +464,101 @@ fn run_big_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T
         .expect("render thread panicked")
 }
 
+/// Native menu bar. Custom File/View items carry ids that `on_menu_event` relays
+/// to the frontend as `menu-action`; Edit uses the OS's predefined edit items,
+/// and the leading app submenu supplies the standard macOS application menu.
+fn build_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
+
+    let app_menu = SubmenuBuilder::new(app, "Quito")
+        .about(None)
+        .separator()
+        .services()
+        .separator()
+        .hide()
+        .hide_others()
+        .show_all()
+        .separator()
+        .quit()
+        .build()?;
+
+    let new_item = MenuItemBuilder::with_id("new", "New").accelerator("CmdOrCtrl+N").build(app)?;
+    let open = MenuItemBuilder::with_id("open", "Open…").accelerator("CmdOrCtrl+O").build(app)?;
+    let save = MenuItemBuilder::with_id("save", "Save").accelerator("CmdOrCtrl+S").build(app)?;
+    let save_as =
+        MenuItemBuilder::with_id("save-as", "Save As…").accelerator("CmdOrCtrl+Shift+S").build(app)?;
+    let export = MenuItemBuilder::with_id("export", "Export…").accelerator("CmdOrCtrl+E").build(app)?;
+    let file = SubmenuBuilder::new(app, "File")
+        .item(&new_item)
+        .item(&open)
+        .separator()
+        .item(&save)
+        .item(&save_as)
+        .separator()
+        .item(&export)
+        .build()?;
+
+    let edit = SubmenuBuilder::new(app, "Edit")
+        .undo()
+        .redo()
+        .separator()
+        .cut()
+        .copy()
+        .paste()
+        .select_all()
+        .build()?;
+
+    let reset_view =
+        MenuItemBuilder::with_id("reset-view", "Reset View").accelerator("CmdOrCtrl+0").build(app)?;
+    let view = SubmenuBuilder::new(app, "View").item(&reset_view).build()?;
+
+    MenuBuilder::new(app).items(&[&app_menu, &file, &edit, &view]).build()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .manage(AppState::default())
+        .menu(build_menu)
+        .on_menu_event(|app, event| {
+            let id = event.id().as_ref();
+            if matches!(id, "new" | "open" | "save" | "save-as" | "export" | "reset-view") {
+                let _ = app.emit("menu-action", id.to_string());
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             render,
             save_model,
+            save_source,
+            watch_files,
+            take_pending_open,
             parameters,
             open_file,
             engine_version
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Quito desktop");
+        .build(tauri::generate_context!())
+        .expect("error while building Quito desktop");
+
+    app.run(|_app_handle, _event| {
+        // macOS "open-with" / double-click delivers file URLs via Opened. Buffer
+        // the path (for cold start, before the webview listens) and also emit it
+        // (for a warm app already running).
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        if let tauri::RunEvent::Opened { urls } = _event {
+            use tauri::Manager;
+            for url in urls {
+                let Ok(path) = url.to_file_path() else { continue };
+                if path.extension().and_then(|e| e.to_str()) == Some("scad") {
+                    let p = path.to_string_lossy().into_owned();
+                    *_app_handle.state::<AppState>().pending_open.lock().unwrap() = Some(p.clone());
+                    let _ = _app_handle.emit("open-path", p);
+                    break;
+                }
+            }
+        }
+    });
 }
 
 #[cfg(test)]
@@ -390,11 +568,11 @@ mod tests {
     #[test]
     fn native_render_command_logic() {
         let cache = Arc::new(Mutex::new(quito_geom::GeomCache::new()));
-        let (mesh, _, _) = eval_and_render(&cache, "cube([2,3,4]);", ".", &[], &[], &[], &[]).unwrap();
+        let (mesh, _, _, _) = eval_and_render(&cache, "cube([2,3,4]);", ".", &[], &[], &[], &[]).unwrap();
         assert!((mesh.volume() - 24.0).abs() < 1e-6);
 
         // Overrides apply, like the customizer.
-        let (mesh, echoes, _) = eval_and_render(
+        let (mesh, echoes, _, _) = eval_and_render(
             &cache,
             "w = 2;\necho(w);\ncube([w, 3, 4]);",
             ".",
@@ -408,7 +586,7 @@ mod tests {
         assert_eq!(echoes, vec!["ECHO: 5"]);
 
         // In-memory library file resolves via the combined resolver.
-        let (mesh, _, _) = eval_and_render(
+        let (mesh, _, _, _) = eval_and_render(
             &cache,
             "use <lib.scad>\ncube([side(), side(), side()]);",
             ".",
@@ -431,7 +609,8 @@ mod tests {
         std::fs::write(&f, "cube(1);").unwrap();
 
         let (tx, rx) = channel();
-        let _w = install_watcher(&f, move |c| {
+        let last_write = Arc::new(Mutex::new(None));
+        let _w = install_watcher(&f, last_write, move |c| {
             let _ = tx.send(c);
         })
         .unwrap();
@@ -452,5 +631,63 @@ mod tests {
         }
         std::fs::remove_dir_all(&dir).ok();
         assert!(saw_new, "watcher did not report the external change");
+    }
+
+    #[test]
+    fn watcher_swallows_self_write_but_reports_external() {
+        use std::sync::mpsc::channel;
+        use std::time::Duration;
+        let dir = std::env::temp_dir().join(format!("quito_selfwrite_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("s.scad");
+        std::fs::write(&f, "cube(1);").unwrap();
+
+        let (tx, rx) = channel();
+        let last_write = Arc::new(Mutex::new(None));
+        let _w = install_watcher(&f, last_write.clone(), move |c| {
+            let _ = tx.send(c);
+        })
+        .unwrap();
+        std::thread::sleep(Duration::from_millis(300)); // let the watcher arm
+
+        // Simulate a `save_source`: record the self-write marker, then write it.
+        let canon = std::fs::canonicalize(&f).unwrap();
+        *last_write.lock().unwrap() = Some((canon, "cube(9);".to_string()));
+        std::fs::write(&f, "cube(9);").unwrap();
+
+        // The self-write must NOT be delivered (marker matches on-disk content).
+        let self_seen = {
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            let mut seen = false;
+            while std::time::Instant::now() < deadline {
+                if let Ok(s) = rx.recv_timeout(Duration::from_millis(300)) {
+                    if s.contains("cube(9)") {
+                        seen = true;
+                        break;
+                    }
+                }
+            }
+            seen
+        };
+
+        // A subsequent genuine external edit IS delivered.
+        std::fs::write(&f, "cube(7);").unwrap();
+        let ext_seen = {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            let mut seen = false;
+            while std::time::Instant::now() < deadline {
+                if let Ok(s) = rx.recv_timeout(Duration::from_millis(500)) {
+                    if s.contains("cube(7)") {
+                        seen = true;
+                        break;
+                    }
+                }
+            }
+            seen
+        };
+
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(!self_seen, "watcher wrongly reported the self-write as an external edit");
+        assert!(ext_seen, "watcher did not report the later external change");
     }
 }
