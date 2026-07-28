@@ -9,50 +9,11 @@ users into an engine that still silently mis-rotates `rotate(45,[1,1,0])`
 (track A, item A1) converts adopters into detractors — trust first, comfort
 second. Sequenced as M7, it inherits a geometry engine users can rely on.
 
-**Effort:** ~3 weeks.
+**Effort:** ~2 weeks remaining.
 
----
-
-## B1. Desktop: save source files back to disk (hard blocker)
-
-### Current state
-
-The Tauri desktop app is **read-only for source files**. Verified in
-`desktop/src-tauri/src/lib.rs`: `invoke_handler` registers only `render`,
-`save_model`, `parameters`, `open_file`, `engine_version` — no command writes
-`.scad` source (the only `fs::write` calls are model export inside
-`save_model`, plus tests). `web/src/desktopEngine.ts` uses only the dialog
-plugin plus those invokes; there is no `writeTextFile` anywhere. There is no
-native menu, no ⌘S handler, no Save As, no recent-files list, and no `.scad`
-file association in `tauri.conf.json`. Edits made in the in-app editor live
-only in localStorage. The file watcher (`install_watcher`) watches only the
-single opened main file — external edits to library tabs are not picked up.
-
-For a desktop CAD tool this is disqualifying: you can open a project file,
-edit it in-app, and your edits never reach disk.
-
-### Work items
-
-1. **`save_source` Tauri command** — write UTF-8 text to a path, restricted to
-   paths the user opened or chose via dialog (Tauri's scope model). Wire into
-   `desktopEngine.ts`.
-2. **Save / Save As flow in the UI** — ⌘S saves the active tab if it has a
-   disk path, otherwise prompts (Save As dialog, default `.scad` extension).
-   Dirty-state indicator on tabs (dot on unsaved changes) — the editor already
-   tracks content per tab, so this is state bookkeeping, not architecture.
-3. **Watcher reentrancy** — saving from the app will trigger the external-edit
-   watcher; suppress the reload for self-initiated writes (compare mtime/hash
-   or set a "just wrote" flag) or the user gets a jarring reload-on-save.
-4. **Native menu bar** — File (New/Open/Save/Save As/Recent/Export…),
-   Edit, View. Tauri menus are declarative; the main work is routing menu
-   events to the existing React actions.
-5. **Watch all project files**, not just the main one — the watcher should
-   cover every tab with a disk path.
-6. **`.scad` file association + open-with** (`fileAssociations` in
-   `tauri.conf.json`) so double-clicking a file opens Quito — cheap, high
-   perceived polish.
-
-**Effort: medium (~1 week for 1–5; file association is a config line + icon).**
+> **Done:** B1 (desktop Save source — `save_source`/`watch_files` commands, ⌘S /
+> Save As, native menu, dirty-tab indicator, watcher reentrancy, `.scad` file
+> association) shipped and is removed from this doc.
 
 ---
 
@@ -187,8 +148,8 @@ workflows expect it.
 
 ## Exit criterion
 
-> A user opens a multi-file OpenSCAD project in Quito desktop, edits with
-> inline error squiggles, **saves with ⌘S**, sees `color()`/`#`/`%` rendered
-> correctly in the preview, and exports both an STL and a PNG thumbnail —
+> A user opens a multi-file OpenSCAD project in Quito desktop (saving with ⌘S
+> already works — B1), edits with inline error squiggles, sees `color()`/`#`/`%`
+> rendered correctly in the preview, and exports both an STL and a PNG thumbnail —
 > without touching OpenSCAD. COMPAT.md divergence #5 is closed; the README's
 > "parse errors surfaced inline" claim is true.

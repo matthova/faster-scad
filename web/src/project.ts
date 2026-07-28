@@ -6,6 +6,9 @@ import type { ParamValue } from "./customizer";
 export interface File {
   name: string;
   content: string;
+  /** Absolute disk path (desktop only); set once a file is opened or saved to
+   *  disk. Browser files never have one, so it never enters share links. */
+  path?: string;
 }
 
 export interface Project {

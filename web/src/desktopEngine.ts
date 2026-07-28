@@ -116,6 +116,55 @@ export async function openScadFile(): Promise<OpenedFile | null> {
   return invoke<OpenedFile>("open_file", { path });
 }
 
+/** Load a `.scad` file by known path (open-with / double-click). */
+export async function openScadPath(path: string): Promise<OpenedFile> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<OpenedFile>("open_file", { path });
+}
+
+/** A `.scad` path passed at launch (double-click), or null. Drain once on mount. */
+export async function takePendingOpen(): Promise<string | null> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return (await invoke<string | null>("take_pending_open")) ?? null;
+}
+
+/** Write source text to a known disk path (⌘S on an already-saved tab). */
+export async function saveSource(path: string, content: string): Promise<void> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("save_source", { path, content });
+}
+
+/** Show a Save dialog (default `.scad`) and write; returns the chosen path or null. */
+export async function saveSourceAs(content: string, defaultName = "untitled.scad"): Promise<string | null> {
+  const { save } = await import("@tauri-apps/plugin-dialog");
+  const { invoke } = await import("@tauri-apps/api/core");
+  const path = await save({
+    defaultPath: defaultName,
+    filters: [{ name: "OpenSCAD", extensions: ["scad"] }],
+  });
+  if (!path) return null; // cancelled
+  await invoke("save_source", { path, content });
+  return path;
+}
+
+/** Watch every project file with a disk path for external edits. */
+export async function watchFiles(paths: string[]): Promise<void> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("watch_files", { paths });
+}
+
+/** Subscribe to `open-path` (warm open-with). Returns an unlisten fn. */
+export async function onOpenPath(cb: (path: string) => void): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<string>("open-path", (e) => cb(e.payload));
+}
+
+/** Subscribe to native menu actions. Returns an unlisten fn. */
+export async function onMenuAction(cb: (action: string) => void): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<string>("menu-action", (e) => cb(e.payload));
+}
+
 /** Subscribe to external edits of the opened file. Returns an unlisten fn. */
 export async function onFileChanged(
   cb: (payload: { path: string; content: string }) => void,

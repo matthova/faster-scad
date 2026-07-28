@@ -19,7 +19,14 @@ import {
   DesktopEngine,
   saveModelNative,
   openScadFile,
+  openScadPath,
+  takePendingOpen,
   onFileChanged,
+  saveSource,
+  saveSourceAs,
+  watchFiles,
+  onOpenPath,
+  onMenuAction,
 } from "./desktopEngine";
 
 const TAURI = isTauri();
@@ -73,6 +80,12 @@ function fmtDim(v: number): string {
   return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, "");
 }
 
+/** Last path segment (handles both `/` and `\` separators). */
+function basename(path: string): string {
+  const seg = path.split(/[/\\]/).pop();
+  return seg && seg.length ? seg : path;
+}
+
 // Formats offered per model dimensionality — 2D profiles export to vector
 // formats, 3D solids to mesh formats.
 const FORMATS_3D: ExportFmt[] = ["stl", "off", "obj", "3mf", "amf"];
@@ -111,6 +124,12 @@ export function App() {
   const paramsJsonRef = useRef("");
   const requestRenderRef = useRef<() => void>(() => {});
   const renderNowRef = useRef<() => void>(() => {}); // immediate render (animation frames bypass the debounce)
+  // Save (desktop): baseline of each file's last-saved content, keyed by name,
+  // so a tab can show an unsaved-changes dot. Set on open/save; not persisted.
+  const savedRef = useRef<Record<string, string>>({});
+  const saveActiveRef = useRef<() => void>(() => {});
+  const saveAsRef = useRef<() => void>(() => {});
+  const menuExportRef = useRef<() => void>(() => {}); // File ▸ Export (latest closure)
   // Animation playback: a share link may carry $t/fps/steps/play-state so the
   // recipient opens on the same frame and speed.
   const sharedAnim = sharedRef.current?.anim;
@@ -206,7 +225,27 @@ export function App() {
         doc: filesRef.current[activeRef.current].content,
         extensions: [
           basicSetup,
-          keymap.of([indentWithTab]),
+          keymap.of([
+            // ⌘S / ⌘⇧S save the active tab to disk (desktop). preventDefault
+            // stops the browser's own save dialog even in the web build.
+            {
+              key: "Mod-s",
+              preventDefault: true,
+              run: () => {
+                saveActiveRef.current();
+                return true;
+              },
+            },
+            {
+              key: "Mod-Shift-s",
+              preventDefault: true,
+              run: () => {
+                saveAsRef.current();
+                return true;
+              },
+            },
+            indentWithTab,
+          ]),
           openscad(),
           EditorView.theme({
             "&": { height: "100%", fontSize: "13px" },
@@ -235,17 +274,70 @@ export function App() {
     // now so a plain reload (or losing the hash) keeps the shared work.
     if (sharedRef.current) persist();
 
-    // Live-reload the main file when it's edited in an external editor (desktop).
-    let unlisten: (() => void) | undefined;
+    // Desktop wiring: external-edit reload, native menu, and open-with.
+    const unlisteners: (() => void)[] = [];
     if (TAURI) {
-      onFileChanged(({ content }) => setMainFile(filesRef.current[0].name, content))
-        .then((u) => (unlisten = u))
+      // Seed saved baselines for any restored files that already have a disk path,
+      // and (re)arm watchers for them so external edits reload after a relaunch.
+      const paths = filesRef.current.map((f) => f.path).filter((p): p is string => !!p);
+      for (const f of filesRef.current) if (f.path) savedRef.current[f.name] = f.content;
+      if (paths.length) void watchFiles(paths);
+
+      // Live-reload a file edited in an external editor. Route by path to the
+      // right tab; self-saves are already suppressed on the Rust side.
+      onFileChanged(({ path, content }) => applyExternalEdit(path, content))
+        .then((u) => unlisteners.push(u))
+        .catch(() => {});
+
+      // Native menu items relay their action id here.
+      onMenuAction((action) => {
+        switch (action) {
+          case "new":
+            newProject();
+            break;
+          case "open":
+            void openNative();
+            break;
+          case "save":
+            saveActiveRef.current();
+            break;
+          case "save-as":
+            saveAsRef.current();
+            break;
+          case "export":
+            menuExportRef.current();
+            break;
+          case "reset-view":
+            viewerRef.current?.resetView();
+            break;
+        }
+      })
+        .then((u) => unlisteners.push(u))
+        .catch(() => {});
+
+      // Open-with: a warm event, plus a path buffered from a cold launch.
+      const openByPath = async (p: string) => {
+        try {
+          const f = await openScadPath(p);
+          setMainFile(f.name, f.content, f.dir, f.path);
+          void watchFiles([f.path]);
+        } catch {
+          /* unreadable / unavailable */
+        }
+      };
+      onOpenPath((p) => void openByPath(p))
+        .then((u) => unlisteners.push(u))
+        .catch(() => {});
+      takePendingOpen()
+        .then((p) => {
+          if (p) void openByPath(p);
+        })
         .catch(() => {});
     }
 
     return () => {
       view.destroy();
-      unlisten?.();
+      for (const u of unlisteners) u();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -279,14 +371,41 @@ export function App() {
   }
 
   /** Replace the rendered (first) file's content — from a native open or an
-   *  external-edit reload — updating the editor if that tab is active. */
-  function setMainFile(name: string, content: string, dir?: string) {
+   *  external-edit reload — updating the editor if that tab is active. When a
+   *  disk `path` is given the tab remembers it (so ⌘S writes there) and the
+   *  content becomes the new saved baseline (no unsaved-changes dot). */
+  function setMainFile(name: string, content: string, dir?: string, path?: string) {
     const next = filesRef.current.slice();
-    next[0] = { name, content };
+    next[0] = { name, content, path: path ?? next[0].path };
     filesRef.current = next;
     setFiles(next);
+    if (path) savedRef.current[name] = content;
     if (dir && engineRef.current instanceof DesktopEngine) engineRef.current.dir = dir;
     if (activeRef.current === 0 && viewRef.current) {
+      const view = viewRef.current;
+      suppressRef.current = true;
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: content } });
+      suppressRef.current = false;
+    }
+    persist();
+    requestRenderRef.current();
+  }
+
+  /** Apply an external-editor change to whichever tab owns `path` (self-saves
+   *  are already filtered out on the Rust side). Unknown paths fall back to the
+   *  main tab, preserving the pre-multi-file behavior. */
+  function applyExternalEdit(path: string, content: string) {
+    const idx = filesRef.current.findIndex((f) => f.path === path);
+    if (idx <= 0) {
+      setMainFile(filesRef.current[0].name, content, undefined, filesRef.current[0].path);
+      return;
+    }
+    const next = filesRef.current.slice();
+    next[idx] = { ...next[idx], content };
+    filesRef.current = next;
+    setFiles(next);
+    savedRef.current[next[idx].name] = content; // disk is the new baseline
+    if (activeRef.current === idx && viewRef.current) {
       const view = viewRef.current;
       suppressRef.current = true;
       view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: content } });
@@ -299,9 +418,50 @@ export function App() {
   async function openNative() {
     try {
       const f = await openScadFile();
-      if (f) setMainFile(f.name, f.content, f.dir);
+      if (f) {
+        setMainFile(f.name, f.content, f.dir, f.path);
+        void watchFiles([f.path]);
+      }
     } catch {
       /* dialog cancelled / unavailable */
+    }
+  }
+
+  /** Persist a disk path onto a tab and update its saved baseline + editor name. */
+  function recordSaved(idx: number, path: string, content: string) {
+    const next = filesRef.current.slice();
+    const name = basename(path);
+    next[idx] = { ...next[idx], name, content, path };
+    filesRef.current = next;
+    setFiles(next);
+    savedRef.current[name] = content;
+    persist();
+  }
+
+  /** Save the active tab to disk (⌘S / File ▸ Save). Prompts (Save As) when the
+   *  tab has no disk path yet. Desktop only — the browser autosaves to storage. */
+  async function saveActive(forceDialog = false) {
+    if (!TAURI) return;
+    const idx = activeRef.current;
+    const f = filesRef.current[idx];
+    const content = viewRef.current?.state.doc.toString() ?? f.content;
+    try {
+      if (f.path && !forceDialog) {
+        await saveSource(f.path, content);
+        recordSaved(idx, f.path, content);
+      } else {
+        const path = await saveSourceAs(content, f.name);
+        if (!path) return; // cancelled
+        recordSaved(idx, path, content);
+        // Main file's directory drives include/use resolution on the native engine.
+        if (idx === 0 && engineRef.current instanceof DesktopEngine) {
+          engineRef.current.dir = path.slice(0, path.length - basename(path).length) || ".";
+        }
+        void watchFiles(filesRef.current.map((x) => x.path).filter((p): p is string => !!p));
+      }
+    } catch (e) {
+      setStatus((s) => ({ ...s, ok: false, error: `save failed: ${String(e)}`, message: "save failed" }));
+      setConsoleOpen(true);
     }
   }
 
@@ -569,6 +729,12 @@ export function App() {
     downloadBlob(data, `quito.${format}`);
   }
 
+  // Keep the imperative refs (editor keymap, native menu) pointing at the latest
+  // closures so they never see stale state.
+  saveActiveRef.current = () => void saveActive(false);
+  saveAsRef.current = () => void saveActive(true);
+  menuExportRef.current = () => void onDownload(exportFmt);
+
   return (
     <div className="app">
       <header className="topbar">
@@ -596,6 +762,11 @@ export function App() {
             ))}
           </select>
           {TAURI && <button onClick={openNative}>Open…</button>}
+          {TAURI && (
+            <button onClick={() => saveActiveRef.current()} title="Save the active file (⌘S)">
+              Save
+            </button>
+          )}
           {!TAURI && (
             <button onClick={onShare} title="Copy a shareable link to this project">
               {shareMsg || "Share"}
@@ -681,7 +852,9 @@ export function App() {
       <div className="workspace">
         <div className="editor-col">
           <div className="tabs">
-            {files.map((f, i) => (
+            {files.map((f, i) => {
+              const dirty = TAURI && !!f.path && f.content !== savedRef.current[f.name];
+              return (
               <div
                 key={i}
                 className={`tab ${i === active ? "active" : ""}`}
@@ -689,6 +862,11 @@ export function App() {
                 onDoubleClick={() => renameFile(i)}
                 title={i === 0 ? "main (rendered)" : "double-click to rename"}
               >
+                {dirty && (
+                  <span className="tab-dirty" title="Unsaved changes" aria-label="Unsaved changes">
+                    ●
+                  </span>
+                )}
                 <span>{f.name}</span>
                 {i > 0 && (
                   <button
@@ -703,7 +881,8 @@ export function App() {
                   </button>
                 )}
               </div>
-            ))}
+              );
+            })}
             <button className="tab-add" onClick={addFile} title="Add file">
               +
             </button>
