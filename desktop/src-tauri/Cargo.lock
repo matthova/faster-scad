@@ -2689,6 +2689,7 @@ name = "quito-syntax"
 version = "0.0.0"
 dependencies = [
  "logos",
+ "serde_json",
  "thiserror 2.0.19",
 ]
 

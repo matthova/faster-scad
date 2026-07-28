@@ -385,6 +385,66 @@ fn unescape(s: &str) -> String {
     out
 }
 
+// ---- OpenSCAD parameter-set (`.json`) files -------------------------------
+
+/// Coerce one raw parameter-set value. Set values are JSON strings; a text
+/// param keeps its raw string, otherwise it parses as number/bool/vector with a
+/// raw-text fallback.
+fn parse_set_value(raw: &str, expected_text: bool) -> ParamValue {
+    if expected_text {
+        return ParamValue::Text(raw.to_string());
+    }
+    parse_value(raw).unwrap_or_else(|| ParamValue::Text(raw.to_string()))
+}
+
+/// The named parameter sets in an OpenSCAD `.json` parameter-set file. Empty if
+/// the JSON is malformed or has no sets.
+pub fn parameter_set_names(json: &str) -> Vec<String> {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
+        return Vec::new();
+    };
+    v.get("parameterSets")
+        .and_then(|s| s.as_object())
+        .map(|o| o.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
+/// Resolve one named parameter set to `(name, value)` overrides, coercing each
+/// value to the type declared by `schema` (text params keep their raw string).
+/// Errors if the file is malformed or the set is missing.
+pub fn parameter_set_overrides(
+    json: &str,
+    set_name: &str,
+    schema: &Customizer,
+) -> Result<Vec<(String, ParamValue)>, String> {
+    let v: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| format!("invalid parameter-set JSON: {e}"))?;
+    let sets = v
+        .get("parameterSets")
+        .and_then(|s| s.as_object())
+        .ok_or_else(|| "no \"parameterSets\" object in file".to_string())?;
+    let set = sets
+        .get(set_name)
+        .and_then(|s| s.as_object())
+        .ok_or_else(|| format!("parameter set '{set_name}' not found"))?;
+    let mut out = Vec::new();
+    for (name, val) in set {
+        // OpenSCAD stores every value as a JSON string.
+        let raw = match val {
+            serde_json::Value::String(s) => s.clone(),
+            other => other.to_string(),
+        };
+        let expected_text = schema
+            .params
+            .iter()
+            .find(|p| &p.name == name)
+            .map(|p| matches!(p.value, ParamValue::Text(_)))
+            .unwrap_or(false);
+        out.push((name.clone(), parse_set_value(&raw, expected_text)));
+    }
+    Ok(out)
+}
+
 /// Parse a `[...]` control annotation given the parameter's value (used to
 /// decide whether dropdown options are numeric or textual).
 fn parse_control(annot: &str, value: &ParamValue) -> Control {
@@ -454,6 +514,33 @@ mod tests {
 
     fn extract_names(src: &str) -> Vec<String> {
         extract(src).params.into_iter().map(|p| p.name).collect()
+    }
+
+    #[test]
+    fn parameter_sets_coerce_by_schema_type() {
+        let schema = extract("w = 1;\non = false;\nlbl = \"x\";\nv = [0,0,0];\n");
+        let json = r#"{"fileFormatVersion":"1","parameterSets":{
+            "Big":{"w":"20","on":"true","lbl":"hello","v":"[1,2,3]"}}}"#;
+        assert_eq!(parameter_set_names(json), vec!["Big".to_string()]);
+        let mut ov = parameter_set_overrides(json, "Big", &schema).unwrap();
+        ov.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            ov,
+            vec![
+                ("lbl".to_string(), ParamValue::Text("hello".into())),
+                ("on".to_string(), ParamValue::Bool(true)),
+                ("v".to_string(), ParamValue::Vector(vec![1.0, 2.0, 3.0])),
+                ("w".to_string(), ParamValue::Number(20.0)),
+            ]
+        );
+        // A text param whose value looks numeric stays text (coerced by schema).
+        let json2 = r#"{"parameterSets":{"S":{"lbl":"42"}}}"#;
+        assert_eq!(
+            parameter_set_overrides(json2, "S", &schema).unwrap(),
+            vec![("lbl".to_string(), ParamValue::Text("42".into()))]
+        );
+        // Missing set errors.
+        assert!(parameter_set_overrides(json, "Nope", &schema).is_err());
     }
 
     #[test]

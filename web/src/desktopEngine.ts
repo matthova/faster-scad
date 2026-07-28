@@ -27,6 +27,7 @@ interface NativeResult {
   previewPositions: number[];
   previewNormals: number[];
   groups: string;
+  viewport: string;
 }
 
 export class DesktopEngine {
@@ -79,6 +80,7 @@ export class DesktopEngine {
           previewPositions: new Float32Array(res.previewPositions),
           previewNormals: new Float32Array(res.previewNormals),
           groups: res.groups,
+          viewport: res.viewport,
         });
       })
       .catch((e) => {
@@ -103,6 +105,7 @@ export class DesktopEngine {
           previewPositions: new Float32Array(0),
           previewNormals: new Float32Array(0),
           groups: "",
+          viewport: "",
         });
       });
   }

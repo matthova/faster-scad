@@ -1,5 +1,6 @@
 // The customizer panel: renders a control per parameter, grouped, and reports
 // changes as override values. Untouched params show their source default.
+import { useRef, useState } from "react";
 import type { Param, ParamValue } from "./customizer";
 
 interface Props {
@@ -8,9 +9,29 @@ interface Props {
   overrides: Record<string, ParamValue>;
   onChange: (name: string, value: ParamValue) => void;
   onReset: () => void;
+  /** Saved parameter-set names (presets). */
+  presets: string[];
+  onApplyPreset: (name: string) => void;
+  onSavePreset: () => void;
+  onDeletePreset: (name: string) => void;
+  onImportPresets: (file: File) => void;
+  onExportPresets: () => void;
 }
 
-export function CustomizerPanel({ params, overrides, onChange, onReset }: Props) {
+export function CustomizerPanel({
+  params,
+  overrides,
+  onChange,
+  onReset,
+  presets,
+  onApplyPreset,
+  onSavePreset,
+  onDeletePreset,
+  onImportPresets,
+  onExportPresets,
+}: Props) {
+  const [selected, setSelected] = useState("");
+  const fileInput = useRef<HTMLInputElement>(null);
   if (params.length === 0) return null;
 
   // Group params in first-seen order.
@@ -33,6 +54,54 @@ export function CustomizerPanel({ params, overrides, onChange, onReset }: Props)
         <button onClick={onReset} disabled={!dirty} title="Reset to source defaults">
           Reset
         </button>
+      </div>
+      <div className="params-presets">
+        <select
+          aria-label="Parameter set"
+          value={selected}
+          onChange={(e) => {
+            const name = e.target.value;
+            setSelected(name);
+            if (name) onApplyPreset(name);
+          }}
+        >
+          <option value="">Preset…</option>
+          {presets.map((n) => (
+            <option key={n} value={n}>
+              {n}
+            </option>
+          ))}
+        </select>
+        <button onClick={onSavePreset} title="Save current values as a named set">
+          Save
+        </button>
+        <button
+          onClick={() => {
+            if (selected) onDeletePreset(selected);
+            setSelected("");
+          }}
+          disabled={!selected}
+          title="Delete the selected set"
+        >
+          Delete
+        </button>
+        <button onClick={() => fileInput.current?.click()} title="Import an OpenSCAD .json set file">
+          Import
+        </button>
+        <button onClick={onExportPresets} disabled={presets.length === 0} title="Export sets as .json">
+          Export
+        </button>
+        <input
+          ref={fileInput}
+          type="file"
+          accept=".json,application/json"
+          style={{ display: "none" }}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) onImportPresets(f);
+            e.target.value = ""; // allow re-importing the same file
+          }}
+        />
       </div>
       <div className="params-body">
         {groups.map((g) => (

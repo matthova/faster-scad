@@ -15,6 +15,8 @@ export interface Project {
   files: File[];
   overrides: Record<string, ParamValue>;
   active: number;
+  /** Saved customizer parameter sets (named presets of override values). */
+  paramSets?: Record<string, Record<string, ParamValue>>;
 }
 
 const KEY = "quito.project.v1";
@@ -40,6 +42,7 @@ export function loadProject(): Project | null {
       files: p.files,
       overrides: p.overrides && typeof p.overrides === "object" ? p.overrides : {},
       active: Number.isInteger(p.active) ? Math.min(Math.max(0, p.active), p.files.length - 1) : 0,
+      paramSets: p.paramSets && typeof p.paramSets === "object" ? p.paramSets : {},
     };
   } catch {
     return null;

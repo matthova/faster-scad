@@ -81,6 +81,12 @@ for errors, yellow for warnings, cleared on success). Run it locally with
   `/* [Group] */` starts a group (`[Hidden]` drops params); a `//` comment on the
   line above a variable becomes its label. The same overrides are available on
   the CLI: `quito model.scad -D width=20 -o out.stl`.
+- **Parameter sets** — save/apply named presets in the UI and import/export
+  OpenSCAD's `.json` parameter-set files; on the CLI, `quito model.scad -p
+  sets.json -P Big -o out.stl`.
+- **Animation** — `$t` playback in the UI, plus frame export: an **Export frames**
+  button (zip of PNGs) and the CLI `quito model.scad -o out.png --animate 60`.
+  Scripts can read and drive the camera via `$vpr`/`$vpt`/`$vpd`/`$vpf`.
 - **Multi-file projects** — a tab bar for several files; the first is rendered
   and the rest are libraries. `include`/`use` resolve between files in-browser,
   and unknown paths are fetched lazily (bundled `/lib/`, or a CDN by prefix —

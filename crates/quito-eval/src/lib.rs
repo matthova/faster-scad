@@ -232,6 +232,25 @@ pub struct EvalOutput {
     /// the BOSL2 oracle to reject vacuous passes (eval succeeds but ran zero
     /// assertions, e.g. because a test module was never invoked).
     pub asserts_run: usize,
+    /// Final top-level values of the `$vp*` viewport variables (a script may
+    /// assign them to drive the camera). `None` when the value isn't a usable
+    /// number/vector.
+    pub viewport: Viewport,
+}
+
+/// The `$vpr`/`$vpt`/`$vpd`/`$vpf` viewport variables after evaluation.
+#[derive(Debug, Default, Clone, serde::Serialize)]
+pub struct Viewport {
+    pub vpr: Option<[f64; 3]>,
+    pub vpt: Option<[f64; 3]>,
+    pub vpd: Option<f64>,
+    pub vpf: Option<f64>,
+}
+
+/// Serialize the viewport variables to JSON (`{"vpr":[…],"vpt":[…],"vpd":…,
+/// "vpf":…}`, `null` for unset) for the frontend camera channel.
+pub fn viewport_json(v: &Viewport) -> String {
+    serde_json::to_string(v).unwrap_or_else(|_| "{}".to_string())
 }
 
 struct Interp<'a> {
@@ -349,6 +368,26 @@ fn eval_program_impl(
     globals.insert("$fs".to_string(), Value::Number(2.0));
     globals.insert("$t".to_string(), Value::Number(0.0));
     globals.insert("$preview".to_string(), Value::Bool(true));
+    // Viewport variables (the frontend overrides these with the live camera;
+    // these defaults let scripts read them off-viewport, e.g. in the CLI).
+    globals.insert(
+        "$vpr".to_string(),
+        value::vector(vec![
+            Value::Number(55.0),
+            Value::Number(0.0),
+            Value::Number(25.0),
+        ]),
+    );
+    globals.insert(
+        "$vpt".to_string(),
+        value::vector(vec![
+            Value::Number(0.0),
+            Value::Number(0.0),
+            Value::Number(0.0),
+        ]),
+    );
+    globals.insert("$vpd".to_string(), Value::Number(140.0));
+    globals.insert("$vpf".to_string(), Value::Number(45.0));
     // A `$`-named override (e.g. `$t` for animation, `$fn`) seeds the global
     // special-variable frame rather than a top-level assignment.
     for (name, value) in overrides {
@@ -377,11 +416,20 @@ fn eval_program_impl(
 
     let nodes = interp.eval_stmts(prog)?;
     let node = interp.root.take().unwrap_or_else(|| Node::group(nodes));
+    // The final top-level `$vp*` values (a script may have assigned them).
+    let g = &interp.specials[0];
+    let viewport = Viewport {
+        vpr: g.get("$vpr").and_then(Value::as_vec3),
+        vpt: g.get("$vpt").and_then(Value::as_vec3),
+        vpd: g.get("$vpd").and_then(Value::as_number),
+        vpf: g.get("$vpf").and_then(Value::as_number),
+    };
     Ok(EvalOutput {
         node,
         echoes: interp.echoes,
         warnings: interp.warnings,
         asserts_run: interp.asserts_run,
+        viewport,
     })
 }
 
@@ -1156,6 +1204,16 @@ impl Interp<'_> {
         let m = self.bind_named(&["text", "size", "font"], args)?;
         let text = m.get("text").map(Value::to_str).unwrap_or_default();
         let size = m.get("size").and_then(Value::as_number).unwrap_or(10.0);
+        // Only the bundled Liberation Sans Regular is available; warn (don't
+        // silently substitute) when a different `font=` is requested.
+        if let Some(Value::Str(font)) = m.get("font") {
+            let family = font.split(':').next().unwrap_or("").trim();
+            if !family.is_empty() && !family.eq_ignore_ascii_case("liberation sans") {
+                self.warn(format!(
+                    "text(): font {font:?} not available; using the bundled Liberation Sans"
+                ));
+            }
+        }
         let sopt = |k: &str, d: &str| m.get(k).map(Value::to_str).unwrap_or_else(|| d.to_string());
         let halign = sopt("halign", "left");
         let valign = sopt("valign", "baseline");
@@ -3241,6 +3299,38 @@ mod tests {
         assert!((x1 - x0 - 9.21).abs() < 0.1, "width {}", x1 - x0);
         assert!((y1 - y0 - 9.55).abs() < 0.1, "height {}", y1 - y0);
         assert!(y0.abs() < 0.01, "baseline should be y=0, got {y0}");
+    }
+
+    #[test]
+    fn viewport_vars_report_final_values() {
+        // A script assigning $vp* is observable on the output.
+        let out = eval_program(&parse("$vpd = 99; $vpr = [1,2,3]; cube(1);").unwrap()).unwrap();
+        assert_eq!(out.viewport.vpd, Some(99.0));
+        assert_eq!(out.viewport.vpr, Some([1.0, 2.0, 3.0]));
+        // Defaults when the script doesn't touch them.
+        let out = eval_program(&parse("cube(1);").unwrap()).unwrap();
+        assert_eq!(out.viewport.vpd, Some(140.0));
+        assert_eq!(out.viewport.vpt, Some([0.0, 0.0, 0.0]));
+    }
+
+    #[test]
+    fn text_font_warns_when_unavailable() {
+        // A non-bundled font warns (spanned) but still renders.
+        let src = "text(\"A\", font=\"Arial\");";
+        let out = eval_program(&parse(src).unwrap()).unwrap();
+        assert!(matches!(out.node, Node::Polygon { .. }));
+        let w = out
+            .warnings
+            .iter()
+            .find(|w| w.message.contains("font"))
+            .expect("font warning");
+        let span = w.span.clone().expect("warning should carry a span");
+        assert_eq!(&src[span], src);
+        // The bundled family (any case / with a style suffix) does not warn.
+        let out =
+            eval_program(&parse("text(\"A\", font=\"Liberation Sans:style=Regular\");").unwrap())
+                .unwrap();
+        assert!(out.warnings.is_empty(), "{:?}", out.warnings);
     }
 
     #[test]

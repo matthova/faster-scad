@@ -44,6 +44,62 @@ export function toLiteral(v: ParamValue): string {
   return "[" + v.map((n) => String(n)).join(",") + "]"; // vector of numbers
 }
 
+/** Coerce a raw OpenSCAD parameter-set string to a `ParamValue`, using the
+ *  schema param's type (text keeps its raw string; else number/bool/vector). */
+export function coerceSetValue(raw: string, type: ParamType | undefined): ParamValue {
+  if (type === "string") return raw;
+  if (type === "bool") return raw === "true";
+  if (type === "vector") {
+    const inner = raw.trim().replace(/^\[|\]$/g, "");
+    return inner
+      .split(",")
+      .map((s) => Number(s.trim()))
+      .filter((n) => !Number.isNaN(n));
+  }
+  if (type === "number") {
+    const n = Number(raw);
+    return Number.isNaN(n) ? raw : n;
+  }
+  // Unknown param: best-effort (number → bool → keep string).
+  if (raw === "true" || raw === "false") return raw === "true";
+  const n = Number(raw);
+  return raw.trim() !== "" && !Number.isNaN(n) ? n : raw;
+}
+
+/** Serialize named parameter sets to OpenSCAD's `.json` format (every value is a
+ *  string; text is stored raw). */
+export function toParamSetsJson(sets: Record<string, Record<string, ParamValue>>): string {
+  const raw = (v: ParamValue): string =>
+    typeof v === "string" ? v : typeof v === "boolean" ? String(v) : toLiteral(v);
+  const parameterSets: Record<string, Record<string, string>> = {};
+  for (const [name, vals] of Object.entries(sets)) {
+    parameterSets[name] = Object.fromEntries(
+      Object.entries(vals).map(([k, v]) => [k, raw(v)]),
+    );
+  }
+  return JSON.stringify({ fileFormatVersion: "1", parameterSets }, null, 2);
+}
+
+/** Parse an OpenSCAD `.json` parameter-set file into named override maps,
+ *  coercing each value by the current schema's types. */
+export function fromParamSetsJson(
+  json: string,
+  schema: Param[],
+): Record<string, Record<string, ParamValue>> {
+  const typeOf = new Map(schema.map((p) => [p.name, p.type]));
+  const obj = JSON.parse(json);
+  const psets = (obj?.parameterSets ?? {}) as Record<string, Record<string, string>>;
+  const out: Record<string, Record<string, ParamValue>> = {};
+  for (const [setName, vals] of Object.entries(psets)) {
+    const m: Record<string, ParamValue> = {};
+    for (const [k, v] of Object.entries(vals)) {
+      m[k] = coerceSetValue(String(v), typeOf.get(k));
+    }
+    out[setName] = m;
+  }
+  return out;
+}
+
 /** True when two schemas describe the same controls (name+type+control shape),
  *  so the current override values can be carried across a re-parse. */
 export function sameShape(a: Param[], b: Param[]): boolean {
