@@ -254,9 +254,18 @@ npm run build         # bundle installers → src-tauri/target/release/bundle/�
 | `quito-geom` | fragment formula, tessellation, `Kernel` trait, Manifold backend, mesh/2D I/O |
 | `quito-cli` | the `quito` binary |
 | `quito-wasm` | wasm-bindgen engine surface (`render(source)` → mesh + diagnostics) |
+| `quito-lsp` | LSP language server (`quito-lsp`): diagnostics, hover, completion, render command |
 
 The `web/` playground is live at <https://matthova.github.io/faster-scad/>, and
 the `desktop/` Tauri shell ships alongside it — both drive the same Rust core.
+
+### Editor / IDE integration
+
+Prefer working in a code editor over the web GUI? Three front-ends drive the same
+engine: the `quito` CLI with a file watcher, the `quito-lsp` language server
+(diagnostics/hover/completion in any LSP editor), and a VS Code extension
+(`editors/vscode`) with a live 3D preview. See
+[`docs/ide-integration.md`](docs/ide-integration.md).
 
 ## Roadmap
 
