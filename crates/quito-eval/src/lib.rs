@@ -245,6 +245,13 @@ struct Interp<'a> {
     asserts_run: usize,
     root: Option<Node>,
     depth: usize,
+    /// Remaining evaluation steps; `u64::MAX` means unlimited (the default).
+    /// Charged per expression, per VM opcode, and per `for`-loop iteration so a
+    /// budget bounds *total* work — the per-construct limits (`MAX_CALL_DEPTH`,
+    /// `MAX_RANGE_ITERS`) don't, since nested loops multiply into an effectively
+    /// unbounded runtime. Opt-in via [`eval_program_with_budget`]; also the hook
+    /// for the playground's render cancellation.
+    fuel: u64,
     /// True while executing statements whose spans index into the *main* source
     /// (the main program + modules defined in it); false inside `use`d/`include`d
     /// files. Gates diagnostic span attribution.
@@ -294,6 +301,23 @@ pub fn eval_program_with(
     eval_program_with_params(prog, resolver, base_dir, &[])
 }
 
+/// Like [`eval_program_with`], but bounded by a step *budget*: evaluation is
+/// charged one unit of fuel per expression, per VM opcode, and per `for`-loop
+/// iteration, and fails with an "evaluation budget exhausted" error once the
+/// budget runs out. This is the only way to guarantee termination on adversarial
+/// input (nested loops otherwise multiply the per-construct limits into an
+/// effectively unbounded runtime), and is the hook the playground uses to make a
+/// runaway render cancellable. `budget == u64::MAX` is equivalent to the
+/// unbudgeted entry points.
+pub fn eval_program_with_budget(
+    prog: &Program,
+    resolver: &dyn FileResolver,
+    base_dir: &str,
+    budget: u64,
+) -> EResult<EvalOutput> {
+    eval_program_impl(prog, resolver, base_dir, &[], budget)
+}
+
 /// Like [`eval_program_with`], but with customizer / `-D`-style parameter
 /// overrides: each `(name, value)` replaces the main file's top-level
 /// assignment of `name` (the override wins, matching OpenSCAD's `-D`).
@@ -302,6 +326,16 @@ pub fn eval_program_with_params(
     resolver: &dyn FileResolver,
     base_dir: &str,
     overrides: &[(String, Value)],
+) -> EResult<EvalOutput> {
+    eval_program_impl(prog, resolver, base_dir, overrides, u64::MAX)
+}
+
+fn eval_program_impl(
+    prog: &Program,
+    resolver: &dyn FileResolver,
+    base_dir: &str,
+    overrides: &[(String, Value)],
+    fuel: u64,
 ) -> EResult<EvalOutput> {
     let mut base = Scope::default();
     base.vars
@@ -330,6 +364,7 @@ pub fn eval_program_with_params(
         asserts_run: 0,
         root: None,
         depth: 0,
+        fuel,
         in_main: true,
         cur_span: None,
         children_stack: Vec::new(),
@@ -350,6 +385,20 @@ pub fn eval_program_with_params(
 }
 
 impl Interp<'_> {
+    /// Charge one unit of evaluation fuel; error once the budget is exhausted.
+    /// A no-op when running unbudgeted (`fuel == u64::MAX`, the default), so the
+    /// normal path pays only a single predictable branch.
+    #[inline]
+    fn burn(&mut self) -> EResult<()> {
+        if self.fuel != u64::MAX {
+            match self.fuel.checked_sub(1) {
+                Some(f) => self.fuel = f,
+                None => return err("evaluation budget exhausted"),
+            }
+        }
+        Ok(())
+    }
+
     // ---- scope helpers -------------------------------------------------
 
     fn push_scope(&mut self) {
@@ -688,6 +737,10 @@ impl Interp<'_> {
         let iter = self.eval_expr(expr)?;
         let values = iter_values(&iter)?;
         for v in values {
+            // Charge per iteration: an empty loop body evaluates no expressions,
+            // so without this a nested `for` (product of two large ranges) would
+            // spin unbounded even under a fuel budget.
+            self.burn()?;
             self.push_scope();
             self.set_var(name, v);
             let r = self.eval_for_rec(&bindings[1..], body, out);
@@ -1415,6 +1468,9 @@ impl Interp<'_> {
     // ---- expressions ---------------------------------------------------
 
     fn eval_expr(&mut self, expr: &Expr) -> EResult<Value> {
+        // One fuel unit per expression node evaluated — bounds comprehension
+        // element evaluation, recursion through expressions, and huge folds.
+        self.burn()?;
         match expr {
             Expr::Number(n) => Ok(Value::Number(*n)),
             Expr::Bool(b) => Ok(Value::Bool(*b)),
@@ -2661,6 +2717,29 @@ mod tests {
 
     fn eval(src: &str) -> EvalOutput {
         eval_program(&parse(src).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn budget_bounds_runaway_evaluation() {
+        // Nested loops multiply to 10^12 iterations — the per-construct
+        // MAX_RANGE_ITERS limit does not stop this; a fuel budget must.
+        let prog = parse("for(i=[0:999999]) for(j=[0:999999]) cube(1);").unwrap();
+        let err = eval_program_with_budget(&prog, &NullResolver, ".", 100_000).unwrap_err();
+        assert!(
+            err.message.contains("budget exhausted"),
+            "expected a budget-exhausted error, got: {:?}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn budget_generous_matches_unbudgeted() {
+        // A realistic small program completes well within a modest budget and
+        // produces exactly the unbudgeted result (fuel is otherwise invisible).
+        let src = "for(i=[0:9]) translate([i,0,0]) cube(1); echo([for(i=[0:100]) i*i]);";
+        let prog = parse(src).unwrap();
+        let budgeted = eval_program_with_budget(&prog, &NullResolver, ".", 10_000_000).unwrap();
+        assert_eq!(budgeted.echoes, eval_program(&prog).unwrap().echoes);
     }
 
     #[test]

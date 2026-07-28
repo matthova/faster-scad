@@ -166,13 +166,13 @@ jobs:
       - name: Build desktop app
         run: cargo build --manifest-path desktop/src-tauri/Cargo.toml
 
-  # Fuzz the code that ingests untrusted public input — the parser and the
-  # mesh/vector importers — which run in the browser worker (a panic crashes it)
-  # and natively in the CLI/desktop. A short libFuzzer smoke run per target on
-  # every PR; long/nightly runs stay local. Committed reproducers under
+  # Fuzz the code that ingests untrusted public input — the parser, the
+  # evaluator (parse-then-eval, under a fuel budget), and the mesh/vector
+  # importers — which run in the browser worker (a panic crashes it) and
+  # natively in the CLI/desktop. A short libFuzzer smoke run per target on every
+  # PR; long/nightly runs stay local. Committed reproducers under
   # fuzz/regressions/ are replayed first so a fixed crash can't silently return.
-  # See fuzz/README.md. The parse-then-eval target is deferred to a follow-up
-  # (it needs an evaluator fuel budget).
+  # See fuzz/README.md.
   fuzz:
     runs-on: ubuntu-latest
     steps:
@@ -209,10 +209,10 @@ jobs:
           # ("sanitizer is incompatible with statically linked libc"). gnu std is
           # present as the runner's host toolchain.
           TARGET=x86_64-unknown-linux-gnu
-          for t in parse import_stl import_3mf import_amf import_off import_obj import_dxf import_svg; do
+          for t in parse eval import_stl import_3mf import_amf import_off import_obj import_dxf import_svg; do
             case "$t" in
-              parse) seeds="corpus/echo examples benches/models" ;;
-              *)     seeds="corpus/geom" ;;
+              parse|eval) seeds="corpus/echo examples benches/models" ;;
+              *)          seeds="corpus/geom" ;;
             esac
             echo "::group::fuzz $t"
             # Replay committed reproducers first (deterministic, near-instant).
