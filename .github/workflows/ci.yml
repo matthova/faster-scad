@@ -63,6 +63,17 @@ jobs:
       - name: Geometry oracle
         run: cargo run -p xtask -- geom
 
+      # Warm-edit gate (the M4 promise): render each benches/models/*.scad cold
+      # then warm in-process (native kernel, GeomCache reused) and hard-fail if
+      # any warm re-render exceeds a generous threshold. This guards the cache's
+      # structural-hash / invalidation logic — a silent regression makes the
+      # warm render recompute geometry, so warm approaches cold and the gate
+      # trips. No OpenSCAD or release binary needed. An empty corpus is a hard
+      # failure (no vacuous pass). Runs in debug, reusing the build above; warm
+      # is cache-lookups + one mesh clone, sub-millisecond even unoptimized.
+      - name: Warm-edit gate
+        run: cargo run -p xtask -- warm-gate
+
       # The wasm engine must keep compiling for the browser target.
       - name: Build wasm engine target
         run: cargo build -p quito-wasm --target wasm32-unknown-unknown

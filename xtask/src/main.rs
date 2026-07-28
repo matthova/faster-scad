@@ -41,9 +41,14 @@ fn main() {
             }
         }
         "bench" => run_bench(&root),
+        "warm-gate" => {
+            if !run_warm_gate(&root) {
+                std::process::exit(1);
+            }
+        }
         other => {
             eprintln!("unknown command: {other}");
-            eprintln!("usage: xtask [bless-echo|echo|bless-geom|geom|bosl2|bench]");
+            eprintln!("usage: xtask [bless-echo|echo|bless-geom|geom|bosl2|bench|warm-gate]");
             std::process::exit(2);
         }
     }
@@ -221,6 +226,137 @@ fn run_bench(root: &Path) {
     println!("\n(× = OpenSCAD time / quito time; higher is quito being faster.)");
 
     warm_edit_bench(root, &models);
+}
+
+/// Warm-edit performance gate (the M4 promise) — CI-safe: no OpenSCAD binary
+/// and no prebuilt release `quito` needed, unlike `bench`. Renders each
+/// `benches/models/*.scad` cold (fresh cache) then warm (same cache, a fresh
+/// but structurally identical re-eval → all cache hits) in-process with the
+/// native kernel, and asserts the warm re-render stays under a generous
+/// threshold.
+///
+/// This is the guard for `GeomCache`'s structural-hash / invalidation logic,
+/// which fails silently: if caching regresses, the warm render recomputes
+/// geometry so warm ≈ cold, and a heavy model blows the threshold. An empty or
+/// unreadable model corpus is a hard failure — a broken glob must not report a
+/// vacuous pass in CI (same principle as the bosl2/geom oracles).
+fn run_warm_gate(root: &Path) -> bool {
+    // Generous vs the <100 ms M4 target: shared CI runners are noisy even
+    // best-of-N, but a blown cache (warm ≈ cold on the heavy models) lands far
+    // above this, so the headroom doesn't cost sensitivity.
+    const WARM_GATE_MS: f64 = 20.0;
+    const WARM_RUNS: usize = 5;
+
+    let dir = root.join("benches/models");
+    let mut models: Vec<PathBuf> = match fs::read_dir(&dir) {
+        Ok(rd) => rd
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("scad"))
+            .collect(),
+        Err(e) => {
+            eprintln!("warm-gate: cannot read {}: {e}", dir.display());
+            return false;
+        }
+    };
+    models.sort();
+    if models.is_empty() {
+        eprintln!(
+            "warm-gate: no .scad models in {} — refusing to pass vacuously",
+            dir.display()
+        );
+        return false;
+    }
+
+    println!(
+        "Warm-edit gate — in-process, native kernel, best of {WARM_RUNS} runs (ms). \
+         Threshold: warm < {WARM_GATE_MS:.0} ms\n"
+    );
+    println!("{:<14} {:>10} {:>10} {:>8}", "model", "cold", "warm", "");
+    println!("{}", "-".repeat(44));
+
+    let kernel = quito_geom::ManifoldKernel::new();
+    let mut all_ok = true;
+    for path in &models {
+        let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("?");
+        let base_dir = path
+            .parent()
+            .map(|d| d.to_string_lossy().into_owned())
+            .unwrap_or_default();
+
+        let src = match fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("warm-gate: {name}: read failed: {e}");
+                all_ok = false;
+                continue;
+            }
+        };
+        let prog = match quito_syntax::parse(&src) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("warm-gate: {name}: parse failed: {e}");
+                all_ok = false;
+                continue;
+            }
+        };
+        let eval = || quito_eval::eval_program_with(&prog, &DiskResolver, &base_dir);
+        let out = match eval() {
+            Ok(o) => o,
+            Err(e) => {
+                eprintln!("warm-gate: {name}: eval failed: {}", e.0);
+                all_ok = false;
+                continue;
+            }
+        };
+
+        let mut cache = quito_geom::GeomCache::new();
+        let t0 = Instant::now();
+        let _ = quito_geom::render_cached(&out.node, &kernel, &mut cache);
+        let cold = t0.elapsed().as_secs_f64() * 1000.0;
+
+        // Best-of-N warm: re-eval a fresh (structurally identical) tree each
+        // iteration so the timing includes the cache lookup rather than reusing
+        // a Mesh handle we happened to keep alive.
+        let mut warm = f64::INFINITY;
+        let mut render_failed = false;
+        for _ in 0..WARM_RUNS {
+            let out2 = match eval() {
+                Ok(o) => o,
+                Err(e) => {
+                    eprintln!("warm-gate: {name}: re-eval failed: {}", e.0);
+                    render_failed = true;
+                    break;
+                }
+            };
+            let t1 = Instant::now();
+            let _ = quito_geom::render_cached(&out2.node, &kernel, &mut cache);
+            warm = warm.min(t1.elapsed().as_secs_f64() * 1000.0);
+        }
+        if render_failed {
+            all_ok = false;
+            continue;
+        }
+
+        let ok = warm < WARM_GATE_MS;
+        all_ok &= ok;
+        println!(
+            "{:<14} {:>10.1} {:>10.2} {:>8}",
+            name,
+            cold,
+            warm,
+            if ok { "ok" } else { "FAIL" }
+        );
+    }
+
+    if all_ok {
+        println!("\nwarm-gate: PASS — every model warm-re-renders under {WARM_GATE_MS:.0} ms.");
+    } else {
+        eprintln!(
+            "\nwarm-gate: FAIL — a model regressed (warm ≥ {WARM_GATE_MS:.0} ms) or failed to \
+             render. A warm time near its cold time means the GeomCache stopped hitting."
+        );
+    }
+    all_ok
 }
 
 /// Warm-edit bench (M4 exit): in-process, native kernel, render each model with
