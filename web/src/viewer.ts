@@ -217,6 +217,67 @@ export class Viewer {
     if (this.geometry) this.frame(this.geometry);
   }
 
+  /** The current camera as OpenSCAD `$vp*` values. `vpt`/`vpd`/`vpf` are exact;
+   *  `vpr` is a best-effort Euler (roll = 0) matching the gimbal convention used
+   *  by `setCamera` and the CLI rasterizer. */
+  getCamera(): { vpr: [number, number, number]; vpt: [number, number, number]; vpd: number; vpf: number } {
+    const t = this.controls.target;
+    const dir = this.camera.position.clone().sub(t).normalize(); // target → eye
+    const vpd = this.camera.position.distanceTo(t);
+    const deg = (r: number) => (r * 180) / Math.PI;
+    const clamp = (x: number) => Math.max(-1, Math.min(1, x));
+    const rx = Math.asin(clamp(-dir.y));
+    const ry = Math.atan2(dir.x, dir.z);
+    return {
+      vpr: [deg(rx), deg(ry), 0],
+      vpt: [t.x, t.y, t.z],
+      vpd,
+      vpf: this.camera.fov,
+    };
+  }
+
+  /** Move the camera to OpenSCAD `$vp*` values (gimbal: `eye = target + dist ·
+   *  Rz·Ry·Rx · +Z`), matching the CLI rasterizer's convention. */
+  setCamera(v: {
+    vpr?: [number, number, number] | null;
+    vpt?: [number, number, number] | null;
+    vpd?: number | null;
+    vpf?: number | null;
+  }) {
+    const cur = this.getCamera();
+    const vpr = v.vpr ?? cur.vpr;
+    const vpt = v.vpt ?? cur.vpt;
+    const vpd = v.vpd ?? cur.vpd;
+    const vpf = v.vpf ?? cur.vpf;
+    const rad = (d: number) => (d * Math.PI) / 180;
+    const X = new THREE.Vector3(1, 0, 0);
+    const Y = new THREE.Vector3(0, 1, 0);
+    const Z = new THREE.Vector3(0, 0, 1);
+    const rot = (base: THREE.Vector3) =>
+      base
+        .clone()
+        .applyAxisAngle(X, rad(vpr[0]))
+        .applyAxisAngle(Y, rad(vpr[1]))
+        .applyAxisAngle(Z, rad(vpr[2]));
+    const target = new THREE.Vector3(vpt[0], vpt[1], vpt[2]);
+    const eye = target.clone().add(rot(new THREE.Vector3(0, 0, 1)).multiplyScalar(vpd));
+    this.camera.position.copy(eye);
+    this.camera.up.copy(rot(new THREE.Vector3(0, 1, 0)).normalize());
+    this.controls.target.copy(target);
+    if (this.camera.fov !== vpf) {
+      this.camera.fov = vpf;
+      this.camera.updateProjectionMatrix();
+    }
+    this.controls.update();
+  }
+
+  /** Register a camera-change callback (OrbitControls `change`). Returns an
+   *  unsubscribe fn. */
+  onCameraChange(cb: () => void): () => void {
+    this.controls.addEventListener("change", cb);
+    return () => this.controls.removeEventListener("change", cb);
+  }
+
   /** Capture the current view as a PNG blob (renders one frame first). */
   capturePng(): Promise<Blob> {
     this.renderer.render(this.scene, this.camera);

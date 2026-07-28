@@ -76,6 +76,8 @@ struct RenderResult {
     preview_positions: Vec<f32>,
     preview_normals: Vec<f32>,
     groups: String,
+    /// `$vp*` viewport variables as JSON (only when the source references `$vp`).
+    viewport: String,
 }
 
 /// An engine error plus the structured diagnostic (with source span, if any) the
@@ -261,6 +263,11 @@ fn render(
                     } else {
                         Default::default()
                     };
+                let viewport = if source.contains("$vp") {
+                    quito_eval::viewport_json(&out.viewport)
+                } else {
+                    String::new()
+                };
                 RenderResult {
                     ok: true,
                     error: String::new(),
@@ -284,6 +291,7 @@ fn render(
                     preview_positions,
                     preview_normals,
                     groups,
+                    viewport,
                 }
             }
             Err(e) => RenderResult {

@@ -54,6 +54,8 @@ pub struct RenderResult {
     preview_positions: Vec<f32>,
     preview_normals: Vec<f32>,
     groups: String,
+    /// `$vp*` viewport variables as JSON (only when the source references `$vp`).
+    viewport: String,
     triangle_count: u32,
     vertex_count: u32,
     volume: f64,
@@ -125,6 +127,12 @@ impl RenderResult {
         self.groups.clone()
     }
 
+    /// `$vp*` viewport variables as JSON, or empty when the source has no `$vp`.
+    #[wasm_bindgen(getter)]
+    pub fn viewport(&self) -> String {
+        self.viewport.clone()
+    }
+
     #[wasm_bindgen(getter)]
     pub fn triangle_count(&self) -> u32 {
         self.triangle_count
@@ -164,6 +172,7 @@ impl RenderResult {
             preview_positions: Vec::new(),
             preview_normals: Vec::new(),
             groups: String::new(),
+            viewport: String::new(),
             triangle_count: 0,
             vertex_count: 0,
             volume: 0.0,
@@ -385,6 +394,13 @@ pub fn render_with_files(
         (Vec::new(), Vec::new(), String::new())
     };
 
+    // Viewport channel only for models that reference `$vp` (drives the camera).
+    let viewport = if source.contains("$vp") {
+        quito_eval::viewport_json(&eval.viewport)
+    } else {
+        String::new()
+    };
+
     RenderResult {
         triangle_count: mesh.tris.len() as u32,
         vertex_count: mesh.verts.len() as u32,
@@ -400,6 +416,7 @@ pub fn render_with_files(
         preview_positions,
         preview_normals,
         groups,
+        viewport,
     }
 }
 

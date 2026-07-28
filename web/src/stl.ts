@@ -192,6 +192,11 @@ function crc32(data: Uint8Array): number {
   return (c ^ 0xffffffff) >>> 0;
 }
 
+/** Bundle named files into a store-only ZIP (e.g. animation frames). */
+export function zipFiles(files: { name: string; data: Uint8Array }[]): Uint8Array {
+  return storeZip(files);
+}
+
 /** Minimal store-only (uncompressed) ZIP writer — matches the Rust one. */
 function storeZip(files: { name: string; data: Uint8Array }[]): Uint8Array {
   const enc = new TextEncoder();

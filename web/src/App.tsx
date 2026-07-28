@@ -16,9 +16,17 @@ import {
   build3MFColored,
   buildAMF,
   downloadBlob,
+  zipFiles,
 } from "./stl";
 import { CustomizerPanel } from "./CustomizerPanel";
-import { parseSchema, toLiteral, type Param, type ParamValue } from "./customizer";
+import {
+  parseSchema,
+  toLiteral,
+  toParamSetsJson,
+  fromParamSetsJson,
+  type Param,
+  type ParamValue,
+} from "./customizer";
 import { loadProject, saveProject, clearProject, type File } from "./project";
 import { EXAMPLES } from "./examples";
 import { decodeSharedProject, shareUrl } from "./share";
@@ -180,9 +188,15 @@ export function App() {
   const activeRef = useRef(saved?.active ?? 0);
   const suppressRef = useRef(false);
   const overridesRef = useRef<Record<string, ParamValue>>(saved?.overrides ?? {});
+  const paramSetsRef = useRef<Record<string, Record<string, ParamValue>>>(saved?.paramSets ?? {});
   const paramsJsonRef = useRef("");
   const requestRenderRef = useRef<() => void>(() => {});
   const renderNowRef = useRef<() => void>(() => {}); // immediate render (animation frames bypass the debounce)
+  // During frame export: resolved by onResult when the current frame's render lands.
+  const frameWaiterRef = useRef<(() => void) | null>(null);
+  const exportingRef = useRef(false);
+  // Suppress the orbit→re-render loop while we're applying a script-set camera.
+  const applyingCameraRef = useRef(false);
   // Save (desktop): baseline of each file's last-saved content, keyed by name,
   // so a tab can show an unsaved-changes dot. Set on open/save; not persisted.
   const savedRef = useRef<Record<string, string>>({});
@@ -221,6 +235,9 @@ export function App() {
   const [steps, setSteps] = useState(sharedAnim?.steps ?? 20);
   const [schema, setSchema] = useState<Param[]>([]);
   const [overrides, setOverrides] = useState<Record<string, ParamValue>>(overridesRef.current);
+  const [paramSets, setParamSets] = useState<Record<string, Record<string, ParamValue>>>(
+    paramSetsRef.current,
+  );
   const [shareMsg, setShareMsg] = useState("");
   // Diagnostic counts for the main file (error/warning), for the tab badge.
   const [diagCounts, setDiagCounts] = useState<{ errors: number; warnings: number }>({
@@ -233,6 +250,7 @@ export function App() {
       files: filesRef.current,
       overrides: overridesRef.current,
       active: activeRef.current,
+      paramSets: paramSetsRef.current,
     });
   }
 
@@ -255,6 +273,18 @@ export function App() {
       if (timeRef.current !== 0) {
         names.push("$t");
         values.push(String(timeRef.current));
+      }
+      // Feed the live camera to scripts that read `$vp*` (also lets the engine
+      // report back script-set values, which we apply in onResult).
+      if (fs[0].content.includes("$vp") && viewerRef.current) {
+        const c = viewerRef.current.getCamera();
+        names.push("$vpr", "$vpt", "$vpd", "$vpf");
+        values.push(
+          `[${c.vpr.join(",")}]`,
+          `[${c.vpt.join(",")}]`,
+          String(c.vpd),
+          String(c.vpf),
+        );
       }
       const libs = fs.slice(1);
       if (TAURI) {
@@ -286,6 +316,14 @@ export function App() {
     renderNowRef.current = () => {
       renderNow();
     };
+
+    // When the model reads `$vp*`, re-render (debounced) as the camera moves so
+    // the geometry tracks the viewport. Suppressed while applying a script-set
+    // camera to avoid a feedback loop.
+    const unsubCamera = viewer.onCameraChange(() => {
+      if (applyingCameraRef.current || exportingRef.current) return;
+      if (filesRef.current[0].content.includes("$vp")) requestRenderRef.current();
+    });
 
     const view = new EditorView({
       state: EditorState.create({
@@ -404,6 +442,7 @@ export function App() {
 
     return () => {
       view.destroy();
+      unsubCamera();
       for (const u of unlisteners) u();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -673,6 +712,9 @@ export function App() {
   function onResult(r: RenderResponse) {
     if (r.version) setVersion(r.version);
 
+    // Unblock a frame-export step waiting on this render (mesh is applied below).
+    const frameWaiter = frameWaiterRef.current;
+
     // Inline diagnostics: parse the structured channel, remember it (for the
     // tab badge), and squiggle it in the editor when the main tab is showing.
     let diags: EngineDiag[] = [];
@@ -719,6 +761,11 @@ export function App() {
       } else {
         viewerRef.current?.setMesh(r.positions, r.normals);
       }
+      // A script that assigned `$vp*` drives the camera: apply it when the
+      // returned viewport differs from the camera we sent.
+      if (r.viewport && viewerRef.current && !exportingRef.current) {
+        applyScriptCamera(r.viewport);
+      }
       // Offer vector formats for 2D models, mesh formats for 3D; keep the
       // selected format valid when the model's dimensionality changes.
       setIs2D(r.is2D);
@@ -753,6 +800,11 @@ export function App() {
       }));
       setConsoleOpen(true);
     }
+
+    if (frameWaiter) {
+      frameWaiterRef.current = null;
+      frameWaiter();
+    }
   }
 
   const consoleLines: { kind: "error" | "warn" | "echo"; text: string }[] = [];
@@ -777,6 +829,91 @@ export function App() {
     requestRenderRef.current();
   }
 
+  // ---- customizer parameter sets (presets) ----
+  function commitParamSets(next: Record<string, Record<string, ParamValue>>) {
+    paramSetsRef.current = next;
+    setParamSets(next);
+    persist();
+  }
+
+  /** Apply a saved set: its values become the current overrides (only params in
+   *  the active schema survive). */
+  function applyPreset(name: string) {
+    const set = paramSetsRef.current[name];
+    if (!set) return;
+    const next: Record<string, ParamValue> = {};
+    for (const p of schema) if (p.name in set) next[p.name] = set[p.name];
+    overridesRef.current = next;
+    setOverrides(next);
+    persist();
+    requestRenderRef.current();
+  }
+
+  /** Snapshot the current effective values (overrides + untouched defaults) as a
+   *  named set. */
+  function savePreset() {
+    const name = window.prompt("Save parameter set as:");
+    if (!name) return;
+    const snapshot: Record<string, ParamValue> = {};
+    for (const p of schema) snapshot[p.name] = overridesRef.current[p.name] ?? p.value;
+    commitParamSets({ ...paramSetsRef.current, [name]: snapshot });
+  }
+
+  function deletePreset(name: string) {
+    const next = { ...paramSetsRef.current };
+    delete next[name];
+    commitParamSets(next);
+  }
+
+  function exportPresets() {
+    const json = toParamSetsJson(paramSetsRef.current);
+    downloadBlob(new TextEncoder().encode(json), "params.json");
+  }
+
+  async function importPresets(file: globalThis.File) {
+    try {
+      const text = await file.text();
+      const sets = fromParamSetsJson(text, schema);
+      commitParamSets({ ...paramSetsRef.current, ...sets });
+    } catch (e) {
+      setStatus((s) => ({ ...s, error: `import failed: ${String(e)}` }));
+      setConsoleOpen(true);
+    }
+  }
+
+  /** Apply a script-assigned camera (`$vp*` from the render result) to the
+   *  viewer, but only where it differs from the camera we sent. */
+  function applyScriptCamera(json: string) {
+    const viewer = viewerRef.current;
+    if (!viewer) return;
+    let vp: {
+      vpr?: [number, number, number] | null;
+      vpt?: [number, number, number] | null;
+      vpd?: number | null;
+      vpf?: number | null;
+    };
+    try {
+      vp = JSON.parse(json);
+    } catch {
+      return;
+    }
+    const cur = viewer.getCamera();
+    const nearN = (a: number | null | undefined, b: number) => a == null || Math.abs(a - b) < 1e-3;
+    const nearV = (a: [number, number, number] | null | undefined, b: [number, number, number]) =>
+      !a || a.every((x, i) => Math.abs(x - b[i]) < 1e-3);
+    const changed =
+      !nearV(vp.vpr, cur.vpr) ||
+      !nearV(vp.vpt, cur.vpt) ||
+      !nearN(vp.vpd, cur.vpd) ||
+      !nearN(vp.vpf, cur.vpf);
+    if (!changed) return;
+    applyingCameraRef.current = true;
+    viewer.setCamera(vp);
+    requestAnimationFrame(() => {
+      applyingCameraRef.current = false;
+    });
+  }
+
   /** Capture the viewer as a PNG — native save dialog on desktop, download in
    *  the browser. */
   async function onSavePng() {
@@ -797,6 +934,47 @@ export function App() {
     } catch (e) {
       setStatus((s) => ({ ...s, error: `PNG export failed: ${String(e)}` }));
       setConsoleOpen(true);
+    }
+  }
+
+  /** Render `steps` animation frames ($t = i/steps) and download a zip of PNGs.
+   *  Each frame is rendered and awaited before capture. */
+  async function onExportFrames() {
+    const viewer = viewerRef.current;
+    if (!viewer || exportingRef.current) return;
+    exportingRef.current = true;
+    setPlaying(false);
+    const n = Math.max(1, Math.round(steps));
+    const savedT = timeRef.current;
+    const savedStep = stepRef.current;
+    const pad = Math.max(5, String(n - 1).length);
+    const frames: { name: string; data: Uint8Array }[] = [];
+    try {
+      for (let i = 0; i < n; i++) {
+        timeRef.current = i / n;
+        setTime(i / n);
+        await new Promise<void>((resolve) => {
+          frameWaiterRef.current = resolve;
+          renderNowRef.current();
+        });
+        await new Promise((r) => requestAnimationFrame(() => r(null)));
+        const blob = await viewer.capturePng();
+        frames.push({
+          name: `frame${String(i).padStart(pad, "0")}.png`,
+          data: new Uint8Array(await blob.arrayBuffer()),
+        });
+      }
+      downloadBlob(zipFiles(frames), "frames.zip");
+    } catch (e) {
+      setStatus((s) => ({ ...s, error: `frame export failed: ${String(e)}` }));
+      setConsoleOpen(true);
+    } finally {
+      frameWaiterRef.current = null;
+      exportingRef.current = false;
+      timeRef.current = savedT;
+      stepRef.current = savedStep;
+      setTime(savedT);
+      renderNowRef.current();
     }
   }
 
@@ -972,6 +1150,13 @@ export function App() {
                 }
               />
             </label>
+            <button
+              onClick={onExportFrames}
+              disabled={status.triangleCount === 0}
+              title="Render every frame and download a zip of PNGs"
+            >
+              Frames
+            </button>
           </div>
           <div className="export">
             <button onClick={() => onDownload(exportFmt)} disabled={status.triangleCount === 0}>
@@ -1059,6 +1244,12 @@ export function App() {
           overrides={overrides}
           onChange={setOverride}
           onReset={resetOverrides}
+          presets={Object.keys(paramSets)}
+          onApplyPreset={applyPreset}
+          onSavePreset={savePreset}
+          onDeletePreset={deletePreset}
+          onImportPresets={importPresets}
+          onExportPresets={exportPresets}
         />
       </div>
 

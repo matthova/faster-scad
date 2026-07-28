@@ -41,6 +41,8 @@ export interface RenderResponse {
   previewPositions: Float32Array;
   previewNormals: Float32Array;
   groups: string;
+  /** `$vp*` viewport variables as JSON, or "" when the source has no `$vp`. */
+  viewport: string;
 }
 
 const ready = init();
@@ -87,6 +89,7 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
       previewPositions: new Float32Array(0),
       previewNormals: new Float32Array(0),
       groups: "",
+      viewport: "",
     } satisfies RenderResponse);
     return;
   }
@@ -115,6 +118,7 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
     previewPositions,
     previewNormals,
     groups: res.groups,
+    viewport: res.viewport,
   };
   res.free();
   (self as unknown as Worker).postMessage(msg, [
