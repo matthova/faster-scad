@@ -118,3 +118,39 @@ jobs:
       - name: Typecheck and build site
         working-directory: web
         run: npm run build
+
+  # Compile the Tauri desktop app on every PR. desktop/src-tauri is a
+  # standalone cargo workspace outside the main one, so no other job builds it —
+  # engine-surface refactors can break the desktop app silently (this already
+  # required a manual Cargo.lock sync commit, 0906018). Full bundling isn't
+  # needed; a clean compile is the regression gate. Runs on macOS: it matches
+  # the real target platform and ships cmake (the native Manifold C++ kernel
+  # quito-geom depends on) and the webkit stack, so there's no apt setup.
+  desktop:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo (desktop)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/src-tauri/target
+          key: cargo-desktop-${{ runner.os }}-${{ hashFiles('desktop/src-tauri/Cargo.lock') }}
+
+      # tauri::generate_context! embeds the frontend named by tauri.conf.json's
+      # frontendDist (../../web/dist). The real bundle is already gated by the
+      # web job and deploy-pages; here a placeholder satisfies the macro so the
+      # Rust side compiles without the (slow) wasm-pack + vite build.
+      - name: Stub frontend dist
+        run: |
+          mkdir -p web/dist
+          printf '<!doctype html><title>quito</title>' > web/dist/index.html
+
+      - name: Build desktop app
+        run: cargo build --manifest-path desktop/src-tauri/Cargo.toml
