@@ -53,7 +53,8 @@ import {
   onOpenPath,
   onMenuAction,
 } from "./desktopEngine";
-import { checkForUpdates } from "./checkForUpdates";
+import { useUpdater } from "./checkForUpdates";
+import { UpdateBanner } from "./UpdateBanner";
 
 const TAURI = isTauri();
 
@@ -233,6 +234,12 @@ export function App() {
   const saveActiveRef = useRef<() => void>(() => {});
   const saveAsRef = useRef<() => void>(() => {});
   const menuExportRef = useRef<() => void>(() => {}); // File ▸ Export (latest closure)
+  // Desktop auto-update: the hook drives the in-app <UpdateBanner>; the ref lets
+  // the one-shot desktop-wiring effect below reach the latest `check` closure
+  // (same pattern as saveActiveRef/menuExportRef).
+  const updater = useUpdater();
+  const checkUpdatesRef = useRef(updater.check);
+  checkUpdatesRef.current = updater.check;
   // Latest engine diagnostics (for the main file) — squiggled in the editor when
   // the main tab is active, and badged on the tab otherwise.
   const diagRef = useRef<EngineDiag[]>([]);
@@ -467,7 +474,7 @@ export function App() {
             viewerRef.current?.resetView();
             break;
           case "check-updates":
-            void checkForUpdates(true);
+            void checkUpdatesRef.current(true);
             break;
         }
       })
@@ -493,9 +500,9 @@ export function App() {
         })
         .catch(() => {});
 
-      // Silent update check on launch: prompts only if an update is available,
-      // stays quiet on "up to date" and on errors (offline, etc.).
-      void checkForUpdates(false);
+      // Silent update check on launch: shows the banner only if an update is
+      // available, stays quiet on "up to date" and on errors (offline, etc.).
+      void checkUpdatesRef.current(false);
     }
 
     return () => {
@@ -1321,6 +1328,14 @@ export function App() {
           </div>
         </div>
       </header>
+
+      {TAURI && (
+        <UpdateBanner
+          state={updater.state}
+          onInstall={() => void updater.startInstall()}
+          onDismiss={updater.dismiss}
+        />
+      )}
 
       <div className="workspace">
         <div className="editor-col">
