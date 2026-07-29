@@ -468,3 +468,112 @@ body {
   margin-left: auto;
   color: var(--muted);
 }
+
+/* In-app auto-update banner (desktop only) — a slim bar below the topbar. */
+.update-banner {
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  padding: 8px 14px;
+  font-size: 13px;
+}
+.update-banner.error {
+  border-left-color: var(--err);
+}
+.update-banner-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.update-banner-msg {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.update-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.update-banner-actions button {
+  background: #23272f;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 11px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.update-banner-actions button:hover {
+  border-color: var(--accent);
+}
+.update-banner-actions .update-primary {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.update-banner-actions .update-link {
+  background: none;
+  border: none;
+  color: var(--muted);
+  padding: 5px 4px;
+  text-decoration: underline;
+}
+.update-banner-actions .update-link:hover {
+  color: var(--text);
+}
+.update-banner-actions .update-dismiss {
+  padding: 5px 9px;
+  color: var(--muted);
+}
+
+/* Download progress: a fixed-width track plus a percentage readout. */
+.update-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.update-progress-bar {
+  width: 180px;
+  height: 8px;
+  appearance: none;
+  -webkit-appearance: none;
+  border: none;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--border);
+}
+.update-progress-bar::-webkit-progress-bar {
+  background: var(--border);
+  border-radius: 4px;
+}
+.update-progress-bar::-webkit-progress-value {
+  background: var(--accent);
+  border-radius: 4px;
+}
+.update-progress-bar::-moz-progress-bar {
+  background: var(--accent);
+  border-radius: 4px;
+}
+.update-progress-pct {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 34px;
+}
+
+.update-notes {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  max-height: 160px;
+  overflow: auto;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
