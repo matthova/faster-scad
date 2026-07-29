@@ -1,0 +1,82 @@
+{
+  "name": "quito-engine",
+  "version": "0.0.0",
+  "description": "Fast OpenSCAD-compatible geometry engine (Quito) compiled to WebAssembly — parse .scad source and render solid 3D meshes in the browser or Node.",
+  "type": "module",
+  "license": "Apache-2.0 OR MIT",
+  "author": "Matt Hova",
+  "homepage": "https://matthova.github.io/faster-scad",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/matthova/faster-scad.git",
+    "directory": "packages/npm"
+  },
+  "bugs": {
+    "url": "https://github.com/matthova/faster-scad/issues"
+  },
+  "keywords": [
+    "openscad",
+    "scad",
+    "cad",
+    "wasm",
+    "webassembly",
+    "geometry",
+    "csg",
+    "3d",
+    "mesh",
+    "quito"
+  ],
+  "types": "./dist/browser.d.ts",
+  "exports": {
+    ".": {
+      "browser": {
+        "types": "./dist/browser.d.ts",
+        "default": "./dist/browser.js"
+      },
+      "node": {
+        "types": "./dist/node.d.ts",
+        "import": "./dist/node.js",
+        "require": "./pkg/node/quito.js"
+      },
+      "default": {
+        "types": "./dist/browser.d.ts",
+        "default": "./dist/browser.js"
+      }
+    },
+    "./web": {
+      "types": "./pkg/web/quito.d.ts",
+      "default": "./pkg/web/quito.js"
+    },
+    "./node": {
+      "types": "./pkg/node/quito.d.ts",
+      "default": "./pkg/node/quito.js"
+    },
+    "./quito_bg.wasm": "./pkg/web/quito_bg.wasm",
+    "./package.json": "./package.json"
+  },
+  "sideEffects": [
+    "./pkg/*/quito.js",
+    "./dist/*.js"
+  ],
+  "files": [
+    "dist",
+    "pkg/web",
+    "pkg/node",
+    "examples",
+    "README.md",
+    "LICENSE-APACHE",
+    "LICENSE-MIT"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "npm run build:wasm && npm run build:facade",
+    "build:wasm": "wasm-pack build ../../crates/quito-wasm --release --target web --out-dir \"$PWD/pkg/web\" --out-name quito && wasm-pack build ../../crates/quito-wasm --release --target nodejs --out-dir \"$PWD/pkg/node\" --out-name quito && rm -f pkg/web/.gitignore pkg/node/.gitignore",
+    "build:facade": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.3"
+  }
+}

@@ -1,0 +1,154 @@
+name: Publish engine to npm
+
+# Publishes the `quito-engine` npm package (the wasm build of crates/quito-wasm)
+# whenever a GitHub Release is PUBLISHED — the same vX.Y.Z tag that cuts the
+# desktop release (release.yml). The tag is the single source of truth for the
+# version; nothing is bumped in the repo.
+#
+# Auth is npm Trusted Publishing (OIDC) — there is NO NPM_TOKEN. On a public
+# repo, provenance (a sigstore attestation shown on the npm page) is emitted
+# automatically. See packages/npm/README.md and docs/RELEASING.md.
+#
+# ONE-TIME BOOTSTRAP: the trusted publisher can't be registered until the package
+# exists, so the first version must be published manually once:
+#   cd packages/npm && npm run build && npm publish --access public
+# then on npmjs.com: quito-engine > Settings > Trusted Publisher > GitHub Actions
+#   Organization or user = matthova, Repository = faster-scad,
+#   Workflow filename = publish-npm.yml.
+#
+# A manual workflow_dispatch (with a tag input) re-runs a publish for an existing
+# tag/release; it builds that TAG's commit, not the branch HEAD.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build & publish, e.g. v0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write # upload the packed .tgz as a release asset
+  id-token: write # OIDC for Trusted Publishing + provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Build the TAGGED commit on both triggers. On workflow_dispatch the
+          # default ref is the branch you dispatched from, so pin it explicitly —
+          # otherwise provenance would attest a build that isn't the tag.
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+          submodules: false
+
+      - name: Resolve version + dist-tag from the release tag
+        id: ver
+        shell: bash
+        run: |
+          TAG="${{ github.event.release.tag_name || inputs.tag }}"
+          V="${TAG#v}"
+          if ! echo "$V" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+].+)?$'; then
+            echo "::error::Release tag '$TAG' is not a valid vX.Y.Z semver tag."
+            exit 1
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          # A prerelease tag (0.2.0-rc.1) publishes under `next` so it never
+          # clobbers the `latest` dist-tag that plain `npm install` resolves.
+          # Matched with `case`, not `grep -q '-'`: a lone `-` is not reliably
+          # parsed as a pattern, which silently sends prereleases to `latest`.
+          case "$V" in
+            *-*) echo "npmtag=next" >> "$GITHUB_OUTPUT" ;;
+            *)   echo "npmtag=latest" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Install Rust (wasm target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-wasm-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Install wasm-pack
+        run: |
+          curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      # Trusted Publishing needs a recent npm.
+      - name: Update npm
+        run: npm install -g npm@latest
+
+      # Stamp the tag into the workspace version so the wasm build's version()
+      # reports the real build (it inherits [workspace.package] version, which is
+      # "0.0.0" in-repo). Ephemeral checkout only — nothing is committed back.
+      # NOTE: this leaves Cargo.lock (pinned at 0.0.0) stale, which is fine only
+      # because the build below does NOT pass --locked. Do not add --locked here
+      # without also regenerating the lockfile after stamping.
+      - name: Stamp workspace version from tag
+        shell: bash
+        run: |
+          V="${{ steps.ver.outputs.version }}"
+          sed -i "0,/^version = \"0.0.0\"$/s//version = \"$V\"/" Cargo.toml
+          echo "Cargo.toml [workspace.package] version:"
+          grep -n '^version = ' Cargo.toml | head -n1
+
+      - name: Build wasm targets (web + node) and the TS facade
+        working-directory: packages/npm
+        shell: bash
+        run: |
+          wasm-pack build ../../crates/quito-wasm --release --target web \
+            --out-dir "$PWD/pkg/web" --out-name quito
+          wasm-pack build ../../crates/quito-wasm --release --target nodejs \
+            --out-dir "$PWD/pkg/node" --out-name quito
+          # wasm-pack writes a `.gitignore` containing `*` into each out-dir;
+          # npm honors it and would silently drop the wasm from the tarball.
+          rm -f pkg/web/.gitignore pkg/node/.gitignore
+          npm install
+          npm run build:facade
+
+      - name: Set package version from tag
+        working-directory: packages/npm
+        run: npm version "${{ steps.ver.outputs.version }}" --no-git-tag-version --allow-same-version
+
+      - name: Publish to npm (idempotent)
+        working-directory: packages/npm
+        run: |
+          if npm view "quito-engine@${{ steps.ver.outputs.version }}" version >/dev/null 2>&1; then
+            echo "quito-engine@${{ steps.ver.outputs.version }} already on the registry — skipping publish."
+          else
+            npm publish --tag "${{ steps.ver.outputs.npmtag }}"
+          fi
+
+      - name: Smoke-check provenance
+        working-directory: packages/npm
+        continue-on-error: true
+        run: npm audit signatures || true
+
+      - name: Attach packed tarball to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd packages/npm
+          TGZ=$(npm pack 2>/dev/null | tail -n1)
+          # Stable-named alias so a static link (releases/latest/download/...) always
+          # resolves to the newest engine tarball, matching the desktop convention.
+          cp "$TGZ" quito-engine.tgz
+          gh release upload "${{ github.event.release.tag_name || inputs.tag }}" \
+            "$TGZ" quito-engine.tgz --clobber --repo "$GITHUB_REPOSITORY"
