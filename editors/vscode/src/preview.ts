@@ -11,12 +11,14 @@ export interface PreviewGroup {
 /** A source byte-span `[start, end]` into the previewed document. */
 export type Span = [number, number];
 
-/** A provenance group: a vertex range into the provenance soup + the source span
- *  that produced it (`null` when unattributable). */
+/** A provenance group: a vertex range into the provenance soup + the stack of
+ *  enclosing source spans that produced it (outermost first, innermost last;
+ *  empty when unattributable). A click selects the deepest (last) span; the
+ *  cursor→model highlight matches any span in the stack by containment. */
 export interface ProvenanceGroup {
   start: number;
   count: number;
-  span: Span | null;
+  spans: Span[];
 }
 
 /** The `quito/preview` notification payload pushed by the language server. */

@@ -31,11 +31,13 @@ export interface PreviewGroup {
 export type Span = [number, number];
 
 /** A provenance group: a vertex range (offsets into the provenance soup) tagged
- *  with the source span that produced it (`null` when unattributable). */
+ *  with the stack of enclosing source spans that produced it (outermost first,
+ *  innermost last; empty when unattributable). A click selects the deepest (last)
+ *  span; the cursor→model highlight matches any span in the stack by containment. */
 export interface ProvenanceGroup {
   start: number;
   count: number;
-  span: Span | null;
+  spans: Span[];
 }
 
 /** Overlay material for the code→model highlight: a bright wash drawn on top of
@@ -44,7 +46,7 @@ export interface ProvenanceGroup {
 const HIGHLIGHT_MATERIAL = new THREE.MeshBasicMaterial({
   color: 0x4fc3f7,
   transparent: true,
-  opacity: 0.45,
+  opacity: 0.225,
   depthTest: false,
   depthWrite: false,
   side: THREE.DoubleSide,
@@ -328,9 +330,15 @@ export class Viewer {
     this.pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
     this.raycaster.setFromCamera(this.pointer, this.camera);
     const hit = this.raycaster.intersectObject(this.pickMesh, false)[0];
-    if (hit?.faceIndex == null) return;
+    if (hit?.faceIndex == null) {
+      // Clicked empty space: report a null pick so the app can deselect.
+      this.onPickCb(null);
+      return;
+    }
     const g = this.groupForFace(hit.faceIndex);
-    this.onPickCb(g?.span ?? null);
+    // Select the deepest (innermost) statement span for the clicked geometry.
+    const deepest = g && g.spans.length ? g.spans[g.spans.length - 1] : null;
+    this.onPickCb(deepest);
   }
 
   /** The provenance group owning triangle `faceIndex` (soup vertex ranges are in
@@ -342,8 +350,10 @@ export class Viewer {
   }
 
   /** Highlight the geometry produced by the statement at `span` (an overlay wash
-   *  drawn on top), or clear the highlight when `span` is `null`. All groups
-   *  sharing the span are highlighted (e.g. a `for` loop's instances). */
+   *  drawn on top), or clear the highlight when `span` is `null`. Every group
+   *  whose span stack *contains* `span` is highlighted, so a span at any nesting
+   *  level lights its whole subtree (e.g. a module call lights all its geometry,
+   *  a `for` loop's instances, or every instance of a reused helper module). */
   highlightSpan(span: Span | null) {
     if (this.highlightMesh) {
       this.scene.remove(this.highlightMesh);
@@ -351,9 +361,9 @@ export class Viewer {
       this.highlightMesh = null;
     }
     if (!span || this.provPositions.length === 0) return;
-    // Collect the vertex ranges of every group with this exact span.
-    const ranges = this.provGroups.filter(
-      (g) => g.span && g.span[0] === span[0] && g.span[1] === span[1],
+    // Collect the vertex ranges of every group whose stack contains this span.
+    const ranges = this.provGroups.filter((g) =>
+      g.spans.some((s) => s[0] === span[0] && s[1] === span[1]),
     );
     if (ranges.length === 0) return;
     let total = 0;

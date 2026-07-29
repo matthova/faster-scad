@@ -81,12 +81,14 @@ interface PreviewGroup {
 /** A source byte-span `[start, end]` into the previewed document. */
 type Span = [number, number];
 
-/** A provenance group: a vertex range into the provenance soup + the source span
- *  that produced it (`null` when unattributable). */
+/** A provenance group: a vertex range into the provenance soup + the stack of
+ *  enclosing source spans that produced it (outermost first, innermost last;
+ *  empty when unattributable). A click selects the deepest (last) span; the
+ *  cursor→model highlight matches any span in the stack by containment. */
 interface ProvenanceGroup {
   start: number;
   count: number;
-  span: Span | null;
+  spans: Span[];
 }
 
 // ---- provenance picking / highlighting (mirrors web/src/viewer.ts) ------------
@@ -160,16 +162,21 @@ function pickAt(clientX: number, clientY: number): void {
   raycaster.setFromCamera(pointer, camera);
   const hit = raycaster.intersectObject(pickMesh, false)[0];
   if (hit?.faceIndex == null) {
+    // Clicked empty space: deselect (null pick).
+    vscode.postMessage({ type: "pick", span: null });
     return;
   }
   const g = groupForFace(hit.faceIndex);
-  if (g?.span) {
-    vscode.postMessage({ type: "pick", span: g.span });
+  // Select the deepest (innermost) statement span for the clicked geometry.
+  if (g && g.spans.length) {
+    vscode.postMessage({ type: "pick", span: g.spans[g.spans.length - 1] });
   }
 }
 
 /** Highlight the geometry produced by the statement at `span` (an overlay wash
- *  on top), or clear it when `span` is `null`. */
+ *  on top), or clear it when `span` is `null`. Every group whose span stack
+ *  *contains* `span` is highlighted, so a span at any nesting level lights its
+ *  whole subtree (a module call, a `for` loop's instances, a reused helper). */
 function highlightSpan(span: Span | null): void {
   if (highlightMesh) {
     scene.remove(highlightMesh);
@@ -179,8 +186,8 @@ function highlightSpan(span: Span | null): void {
   if (!span || provPositions.length === 0) {
     return;
   }
-  const ranges = provGroups.filter(
-    (g) => g.span && g.span[0] === span[0] && g.span[1] === span[1]
+  const ranges = provGroups.filter((g) =>
+    g.spans.some((s) => s[0] === span[0] && s[1] === span[1])
   );
   if (ranges.length === 0) {
     return;
@@ -224,6 +231,14 @@ renderer.domElement.addEventListener("pointerup", (e) => {
     return; // a drag, not a click
   }
   pickAt(e.clientX, e.clientY);
+});
+
+// Escape deselects the highlighted item (parity with clicking empty space).
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    highlightSpan(null);
+    vscode.postMessage({ type: "pick", span: null });
+  }
 });
 
 function resize(): void {

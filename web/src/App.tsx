@@ -14,6 +14,7 @@ import {
   type PreviewGroup,
   type ProvenanceGroup,
   type ThemeMode,
+  type Span,
 } from "./viewer";
 import { Engine, export2dBrowser } from "./engine";
 import type { RenderResponse } from "./engineWorker";
@@ -224,6 +225,10 @@ export function App() {
   // viewer owns the pick geometry; this resolves the cursor → span, code→model).
   const provenanceRef = useRef<ProvenanceGroup[]>([]);
   const highlightFromCursorRef = useRef<() => void>(() => {});
+  // A click on empty preview space (or Escape) dismisses the highlight; it stays
+  // cleared until the next cursor move / item click so a re-render (which re-runs
+  // the cursor→model highlight) doesn't resurrect it.
+  const highlightDismissedRef = useRef(false);
   // Editor↔preview highlighting toggle. Mirrored to a ref so the once-wired pick
   // handler (in useEffect) reads the live value, not a stale closure.
   const linkHighlightRef = useRef(loadPrefs().linkHighlight);
@@ -323,7 +328,14 @@ export function App() {
     // Model → code: clicking a face selects the source statement that produced
     // it. Spans index into the main file, so switch to it first if needed.
     const unsubPick = viewer.onPick((span) => {
-      if (!span || !linkHighlightRef.current) return;
+      if (!linkHighlightRef.current) return;
+      // Clicking empty space deselects: dismiss the highlight and leave the
+      // editor cursor where it is.
+      if (!span) {
+        highlightDismissedRef.current = true;
+        viewer.highlightSpan(null);
+        return;
+      }
       const view = viewRef.current;
       if (!view) return;
       if (activeRef.current !== 0) switchTo(0);
@@ -333,6 +345,11 @@ export function App() {
       const v = viewRef.current!;
       v.dispatch({ selection: { anchor: from, head: to }, scrollIntoView: true });
       v.focus();
+      // Re-enable and highlight the clicked item. An explicit call covers the
+      // case where the selection didn't change (re-clicking the same item after a
+      // dismiss), which wouldn't fire the selection listener.
+      highlightDismissedRef.current = false;
+      highlightFromCursorRef.current();
     });
 
     const engine = TAURI
@@ -441,6 +458,8 @@ export function App() {
               requestRender();
             }
             // Code → model: highlight the geometry under the cursor as it moves.
+            // A genuine cursor move re-enables highlighting after a dismiss.
+            if (u.selectionSet) highlightDismissedRef.current = false;
             if (u.selectionSet || u.docChanged) {
               highlightFromCursorRef.current();
             }
@@ -525,10 +544,20 @@ export function App() {
       void checkUpdatesRef.current(false);
     }
 
+    // Escape deselects the highlighted item (like clicking empty preview space).
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && linkHighlightRef.current) {
+        highlightDismissedRef.current = true;
+        viewerRef.current?.highlightSpan(null);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+
     return () => {
       view.destroy();
       unsubCamera();
       unsubPick();
+      window.removeEventListener("keydown", onKeyDown);
       for (const u of unlisteners) u();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -699,16 +728,29 @@ export function App() {
     const viewer = viewerRef.current;
     const view = viewRef.current;
     if (!viewer || !view) return;
-    if (!linkHighlightRef.current || activeRef.current !== 0) {
+    if (!linkHighlightRef.current || activeRef.current !== 0 || highlightDismissedRef.current) {
       viewer.highlightSpan(null);
       return;
     }
-    const head = view.state.selection.main.head;
-    const byte = charToByte(filesRef.current[0].content, head);
-    const g = provenanceRef.current.find(
-      (gr) => gr.span != null && byte >= gr.span[0] && byte < gr.span[1],
-    );
-    viewer.highlightSpan(g?.span ?? null);
+    // Use the selection's start (not its head): a model→code click selects the
+    // whole clicked statement `[from,to)`, and the head lands on the *exclusive*
+    // end `to`, which no half-open span contains — so a click would resolve to a
+    // parent or nothing. The start byte sits inside the clicked statement, so the
+    // click lights exactly that item, matching the code→model direction.
+    const pos = view.state.selection.main.from;
+    const byte = charToByte(filesRef.current[0].content, pos);
+    // Among every span (at any nesting level) that contains that byte, pick the
+    // narrowest — the tightest enclosing statement. highlightSpan then lights all
+    // geometry whose stack contains it (that statement's whole subtree).
+    let best: Span | null = null;
+    for (const g of provenanceRef.current) {
+      for (const s of g.spans) {
+        if (byte >= s[0] && byte < s[1] && (!best || s[1] - s[0] < best[1] - best[0])) {
+          best = s;
+        }
+      }
+    }
+    viewer.highlightSpan(best);
   }
 
   /** Toggle editor↔preview highlighting (both directions) and remember the

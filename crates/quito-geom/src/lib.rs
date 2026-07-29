@@ -169,13 +169,17 @@ pub struct ColoredMesh {
     pub mode: DisplayMode,
 }
 
-/// A geometry group tagged with the source byte-span that produced it, for
-/// editor↔preview linking. `span` is `None` for geometry with no attributable
-/// main-source span (e.g. from an `include`d/`use`d file) — still emitted so the
-/// soup is complete, but not pickable.
+/// A geometry group tagged with the **stack** of enclosing source byte-spans that
+/// produced it (outermost statement first, innermost last), for hierarchical
+/// editor↔preview linking. Each entry is a `[start,end)` byte range into the main
+/// source. The stack is **empty** for geometry with no attributable main-source
+/// span (e.g. from an `include`d/`use`d file) — still emitted so the soup is
+/// complete, but not pickable. The last (deepest) entry is what a click selects;
+/// the whole stack is what the cursor→preview highlight matches against by
+/// containment (so a cursor on any enclosing call lights that whole subtree).
 pub struct TaggedMesh {
     pub mesh: Mesh,
-    pub span: Option<std::ops::Range<usize>>,
+    pub spans: Vec<std::ops::Range<usize>>,
 }
 
 /// Default preview color for uncolored geometry (the viewer's gold).
@@ -323,16 +327,18 @@ pub fn render_provenance(node: &Node) -> Result<Vec<TaggedMesh>, GeomError> {
     render_provenance_cached(node, &RustManifoldKernel::new(), &mut cache)
 }
 
-/// Render the tree into per-statement provenance groups: each `ModuleCall`'s
-/// geometry (the [`Node::Provenance`] wrappers the evaluator inserts) becomes one
-/// [`TaggedMesh`] carrying that statement's source span. **Outermost-wins**: the
-/// first provenance wrapper seen on the way down owns everything beneath it, so a
-/// `translate(...) cube(...)` (or a user module call) is one group spanning the
-/// whole statement / call site. Booleans/hull/minkowski/extrude/resize/import are
-/// opaque leaves fused into one mesh taking the enclosing span — mirroring the
-/// color path. Unlike colors, groups are **not** coalesced (each statement stays
-/// its own group). Shares the cache with [`render_cached`], so the opaque leaf
-/// meshes are reused (never recomputed just because they carry a span).
+/// Render the tree into fine-grained provenance groups for **hierarchical**
+/// editor↔preview linking. Each leaf region becomes one [`TaggedMesh`] carrying
+/// the full **stack** of enclosing [`Node::Provenance`] spans the evaluator
+/// inserted (outermost statement first, innermost last) — e.g. a statue sub-shape
+/// under `difference(){ parthenon(); … }` carries `[difference, parthenon(),
+/// athena_parthenos(), …, cylinder]`. This lets the frontend select the deepest
+/// span on a click and highlight any enclosing level by containment on a cursor
+/// move. 3D difference/intersection recurse into the base operand so nested spans
+/// survive (see [`partition_provenance`]); hull/minkowski/extrude/resize/import
+/// and 2D booleans remain opaque leaves taking the current stack. Groups are
+/// **not** coalesced (each leaf stays its own group). Shares the cache with
+/// [`render_cached`], so leaf meshes are reused (never recomputed for a span).
 pub fn render_provenance_cached(
     node: &Node,
     kernel: &dyn Kernel,
@@ -348,15 +354,17 @@ pub fn render_provenance_cached(
         warnings: &mut warnings,
     };
     let mut out = Vec::new();
-    partition_provenance(node, None, &mut ctx, &mut out)?;
+    let mut stack = Vec::new();
+    partition_provenance(node, &mut stack, &mut ctx, &mut out)?;
     Ok(out)
 }
 
 /// Flatten provenance groups into one triangle soup plus a JSON array of
 /// per-group ranges — the provenance channel shipped across the wasm/Tauri
 /// boundary. `start`/`count` are **vertex** offsets into the soup (three.js
-/// `addGroup` units, same as [`preview_channel`]); `span` is `[start,end]` byte
-/// offsets into the main source, or `null` when unattributable.
+/// `addGroup` units, same as [`preview_channel`]); `spans` is the outermost→
+/// innermost stack of `[start,end]` byte offsets into the main source (an empty
+/// array when unattributable). The last entry is the deepest statement.
 pub fn provenance_channel(groups: &[TaggedMesh]) -> (Vec<f32>, Vec<f32>, String) {
     let mut positions: Vec<f32> = Vec::new();
     let mut normals: Vec<f32> = Vec::new();
@@ -370,94 +378,175 @@ pub fn provenance_channel(groups: &[TaggedMesh]) -> (Vec<f32>, Vec<f32>, String)
         if i > 0 {
             json.push(',');
         }
-        match &g.span {
-            Some(s) => json.push_str(&format!(
-                "{{\"start\":{start},\"count\":{count},\"span\":[{},{}]}}",
-                s.start, s.end
-            )),
-            None => json.push_str(&format!(
-                "{{\"start\":{start},\"count\":{count},\"span\":null}}"
-            )),
-        }
+        let spans = g
+            .spans
+            .iter()
+            .map(|s| format!("[{},{}]", s.start, s.end))
+            .collect::<Vec<_>>()
+            .join(",");
+        json.push_str(&format!(
+            "{{\"start\":{start},\"count\":{count},\"spans\":[{spans}]}}"
+        ));
     }
     json.push(']');
     (positions, normals, json)
 }
 
-/// Walk the tree, emitting one [`TaggedMesh`] per statement (see
-/// [`render_provenance_cached`]). `span` is the enclosing (outermost) provenance
-/// span, if any. Transparent through provenance/color/group/union and affine
-/// transforms (which mutate produced sub-meshes exactly as [`partition_groups`]
-/// does); everything else is an opaque leaf fused into one mesh.
+/// Walk the tree, emitting one [`TaggedMesh`] per leaf region (see
+/// [`render_provenance_cached`]). `stack` is the outermost→innermost list of
+/// enclosing provenance spans seen so far; each [`Node::Provenance`] pushes its
+/// span (all levels are captured — no outermost-wins collapse), and a leaf clones
+/// the current stack. Transparent through color/group/union and affine transforms
+/// (which mutate produced sub-meshes exactly as [`partition_groups`] does). 3D
+/// difference/intersection recurse into the base operand so nested spans survive,
+/// subtracting/clipping the fused tools per region — mirroring `partition_groups`.
+/// Everything else (hull/minkowski/resize/extrudes/projection/primitives/import
+/// and 2D booleans) is an opaque leaf fused into one mesh taking the current stack.
 fn partition_provenance(
     node: &Node,
-    span: Option<&std::ops::Range<usize>>,
+    stack: &mut Vec<std::ops::Range<usize>>,
     ctx: &mut Ctx,
     out: &mut Vec<TaggedMesh>,
 ) -> Result<(), GeomError> {
     match node {
         Node::Empty => {}
-        // The outermost provenance wins: adopt this span only if none is set yet.
+        // Every provenance level is captured: push this span, recurse, pop. The
+        // deepest span (last) is what a click selects; the whole stack is what the
+        // cursor→preview highlight matches against by containment.
         Node::Provenance { span: s, child } => {
-            partition_provenance(child, span.or(Some(s)), ctx, out)?
+            stack.push(s.clone());
+            let r = partition_provenance(child, stack, ctx, out);
+            stack.pop();
+            r?;
         }
         // Display attributes are transparent to provenance (picking spans a
         // statement regardless of its color/`#`/`%`). `%` background geometry is
         // rendered here (it's shown, translucent, in the preview) so it stays
         // pickable — unlike the fused/exported mesh, which excludes it.
         Node::Color { child, .. } | Node::Highlight(child) | Node::Background(child) => {
-            partition_provenance(child, span, ctx, out)?
+            partition_provenance(child, stack, ctx, out)?
         }
         // Transparent containers: recurse so each child keeps its own group.
         Node::Group(children) | Node::Union(children) => {
             for c in children {
-                partition_provenance(c, span, ctx, out)?;
+                partition_provenance(c, stack, ctx, out)?;
             }
         }
         // Affine transforms distribute over sub-meshes: recurse, then transform
         // each produced mesh (reusing the fused path's vertex mutators).
         Node::Translate { v, child } => {
             let start = out.len();
-            partition_provenance(child, span, ctx, out)?;
+            partition_provenance(child, stack, ctx, out)?;
             out[start..]
                 .iter_mut()
                 .for_each(|t| translate(&mut t.mesh, *v));
         }
         Node::Rotate { deg, child } => {
             let start = out.len();
-            partition_provenance(child, span, ctx, out)?;
+            partition_provenance(child, stack, ctx, out)?;
             out[start..]
                 .iter_mut()
                 .for_each(|t| rotate(&mut t.mesh, *deg));
         }
         Node::Scale { v, child } => {
             let start = out.len();
-            partition_provenance(child, span, ctx, out)?;
+            partition_provenance(child, stack, ctx, out)?;
             out[start..].iter_mut().for_each(|t| scale(&mut t.mesh, *v));
         }
         Node::Mirror { v, child } => {
             let start = out.len();
-            partition_provenance(child, span, ctx, out)?;
+            partition_provenance(child, stack, ctx, out)?;
             out[start..]
                 .iter_mut()
                 .for_each(|t| mirror(&mut t.mesh, *v));
         }
         Node::MultMatrix { m, child } => {
             let start = out.len();
-            partition_provenance(child, span, ctx, out)?;
+            partition_provenance(child, stack, ctx, out)?;
             out[start..]
                 .iter_mut()
                 .for_each(|t| mult_matrix(&mut t.mesh, m));
         }
-        // Everything else (booleans, hull, minkowski, resize, extrudes,
-        // projection, primitives, import, and 2D booleans) is opaque: one fused
-        // mesh taking the enclosing span.
+        // A 3D difference recurses into the base operand so each base region keeps
+        // its own span stack, then subtracts the fused tools from each region.
+        // `∪(regionᵢ − tool) == (∪regionᵢ) − tool`, so the per-region union equals
+        // the true fused difference. Sawn faces come from the base region and
+        // inherit the cut statement's stack (the tool has no surviving geometry to
+        // pick). 2D differences fall through to the opaque arm (clipped in-plane by
+        // `render_node`).
+        Node::Difference(children) if !is_2d(node) => {
+            if let Some((base, tools)) = children.split_first() {
+                let mut regions = Vec::new();
+                partition_provenance(base, stack, ctx, &mut regions)?;
+                // Fuse the tools, dropping empties (e.g. a disabled cutaway whose
+                // operand is `Empty`) so a no-op difference does zero extra kernel
+                // work and passes the base regions straight through.
+                let tools: Vec<Mesh> = render_all(tools, ctx)?
+                    .into_iter()
+                    .filter(|m| !m.is_empty())
+                    .collect();
+                if tools.is_empty() {
+                    out.append(&mut regions);
+                } else {
+                    let tool = ctx.kernel.union(tools)?;
+                    let tool_bb = tool.bbox();
+                    for region in regions {
+                        // Only regions overlapping the tool's AABB can be cut;
+                        // pass the rest through untouched (bounds the per-region
+                        // boolean cost for a localized cutaway).
+                        if !bbox_overlaps(region.mesh.bbox(), tool_bb) {
+                            out.push(region);
+                            continue;
+                        }
+                        let mesh = ctx.kernel.difference(region.mesh, vec![tool.clone()])?;
+                        if !mesh.is_empty() {
+                            out.push(TaggedMesh {
+                                mesh,
+                                spans: region.spans,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        // A 3D intersection recurses into the first operand so each region keeps
+        // its stack, then clips each by the fused intersection of the rest.
+        // `∪(regionᵢ ∩ rest) == operand[0] ∩ rest`, attributed by the base.
+        Node::Intersection(children) if !is_2d(node) => {
+            if let Some((base, rest)) = children.split_first() {
+                let mut regions = Vec::new();
+                partition_provenance(base, stack, ctx, &mut regions)?;
+                if rest.is_empty() {
+                    // `intersection()` of a single operand is that operand.
+                    out.append(&mut regions);
+                } else {
+                    let clip = ctx.kernel.intersection(render_all(rest, ctx)?)?;
+                    let clip_bb = clip.bbox();
+                    for region in regions {
+                        // A region outside the clip's AABB survives nothing.
+                        if !bbox_overlaps(region.mesh.bbox(), clip_bb) {
+                            continue;
+                        }
+                        let mesh = ctx.kernel.intersection(vec![region.mesh, clip.clone()])?;
+                        if !mesh.is_empty() {
+                            out.push(TaggedMesh {
+                                mesh,
+                                spans: region.spans,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        // Everything else (hull, minkowski, resize, extrudes, projection,
+        // primitives, import, and 2D booleans) is opaque: one fused mesh taking
+        // the current stack.
         _ => {
             let mesh = render_node(node, ctx)?;
             if !mesh.tris.is_empty() {
                 out.push(TaggedMesh {
                     mesh,
-                    span: span.cloned(),
+                    spans: stack.clone(),
                 });
             }
         }
@@ -883,6 +972,19 @@ fn render_uncached(node: &Node, ctx: &mut Ctx) -> Result<Mesh, GeomError> {
 
 fn render_all(children: &[Node], ctx: &mut Ctx) -> Result<Vec<Mesh>, GeomError> {
     children.iter().map(|c| render_node(c, ctx)).collect()
+}
+
+/// Do two optional axis-aligned bounding boxes overlap? A `None` box (an empty
+/// mesh) never overlaps. Used to skip a per-region boolean when a difference tool
+/// / intersection clip cannot possibly touch a region (a conservative test: AABBs
+/// may overlap when the meshes don't, which only costs an extra no-op boolean).
+fn bbox_overlaps(a: Option<([f64; 3], [f64; 3])>, b: Option<([f64; 3], [f64; 3])>) -> bool {
+    match (a, b) {
+        (Some((alo, ahi)), Some((blo, bhi))) => {
+            (0..3).all(|i| alo[i] <= bhi[i] && blo[i] <= ahi[i])
+        }
+        _ => false,
+    }
 }
 
 /// Structural hash of every node in the tree, keyed by node address. Computed
@@ -2199,15 +2301,18 @@ mod tests {
     }
 
     #[test]
-    fn provenance_difference_is_one_group_with_the_difference_span() {
-        // `difference(){ cube(20); translate([5,5,5]) sphere(8); }` — a boolean is
-        // opaque, so the whole result is ONE group spanning the difference stmt.
+    fn provenance_difference_recurses_base_keeping_span_stack() {
+        // `difference(){ cube(20); translate([5,5,5]) sphere(8); }` — the 3D
+        // difference recurses into the base (the cube) so its span survives; the
+        // result is ONE group whose stack is [difference, cube] (outer→inner), with
+        // the true fused-difference geometry (the sphere took a bite).
         let diff_span = 0..60;
+        let cube_span = 12..20;
         let node = prov(
             diff_span.clone(),
             Node::Difference(vec![
                 prov(
-                    12..20,
+                    cube_span.clone(),
                     Node::Cube {
                         size: [20.0, 20.0, 20.0],
                         center: false,
@@ -2226,17 +2331,16 @@ mod tests {
         let groups =
             render_provenance_cached(&node, &RustManifoldKernel::new(), &mut cache).unwrap();
         assert_eq!(groups.len(), 1);
-        assert_eq!(groups[0].span, Some(diff_span));
-        // Geometry is the true fused difference: less than the whole 20³ cube
-        // (the sphere took a bite) but still a positive solid.
+        assert_eq!(groups[0].spans, vec![diff_span, cube_span]);
         let vol = groups[0].mesh.volume();
         assert!(vol > 0.0 && vol < 8000.0, "difference volume {vol}");
     }
 
     #[test]
-    fn provenance_two_objects_are_two_groups_with_their_spans() {
-        // Two top-level statements → two groups, each with its own span, and the
-        // second's mesh translated.
+    fn provenance_two_objects_are_two_groups_with_their_span_stacks() {
+        // Two top-level statements → two groups, each with its own stack. The
+        // second nests an inner call, so its stack is [outer, inner] and its mesh
+        // is translated.
         let node = Node::Group(vec![
             prov(0..8, unit_cube()),
             prov(
@@ -2251,8 +2355,8 @@ mod tests {
         let groups =
             render_provenance_cached(&node, &RustManifoldKernel::new(), &mut cache).unwrap();
         assert_eq!(groups.len(), 2);
-        assert_eq!(groups[0].span, Some(0..8));
-        assert_eq!(groups[1].span, Some(10..40));
+        assert_eq!(groups[0].spans, vec![0..8]);
+        assert_eq!(groups[1].spans, vec![10..40, 30..38]);
         // The second group was translated +5 in x.
         let min_x = groups[1]
             .mesh
@@ -2261,6 +2365,106 @@ mod tests {
             .map(|v| v[0])
             .fold(f64::MAX, f64::min);
         assert!(min_x >= 5.0 - 1e-6, "second group not translated: {min_x}");
+    }
+
+    #[test]
+    fn provenance_difference_with_empty_tool_preserves_nested_span_stacks() {
+        // The CUTAWAY=off case: `difference(){ union(a, b); <empty> }`. With no
+        // surviving tool, the base regions pass straight through, each keeping its
+        // full stack [difference, region] — no collapse to the difference span.
+        let node = prov(
+            100..200,
+            Node::Difference(vec![
+                Node::Union(vec![
+                    prov(0..5, unit_cube()),
+                    prov(
+                        10..15,
+                        Node::Translate {
+                            v: [3.0, 0.0, 0.0],
+                            child: Box::new(unit_cube()),
+                        },
+                    ),
+                ]),
+                Node::Empty,
+            ]),
+        );
+        let mut cache = GeomCache::new();
+        let groups =
+            render_provenance_cached(&node, &RustManifoldKernel::new(), &mut cache).unwrap();
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].spans, vec![100..200, 0..5]);
+        assert_eq!(groups[1].spans, vec![100..200, 10..15]);
+    }
+
+    #[test]
+    fn provenance_difference_subtracts_each_region_and_bbox_passes_through() {
+        // A multi-region base minus a real tool: each region keeps its stack, the
+        // tool is subtracted only from the region it overlaps, and a region outside
+        // the tool's AABB is passed through untouched (the bbox optimization).
+        // red 4-cube at x∈[0,4] (bitten by a unit tool at the origin) → vol 63;
+        // blue 4-cube far away at x∈[20,24] (bbox miss) → vol 64.
+        let big = |x: f64, span: std::ops::Range<usize>| {
+            prov(
+                span,
+                Node::Translate {
+                    v: [x, 0.0, 0.0],
+                    child: Box::new(Node::Cube {
+                        size: [4.0, 4.0, 4.0],
+                        center: false,
+                    }),
+                },
+            )
+        };
+        let node = prov(
+            100..200,
+            Node::Difference(vec![
+                Node::Union(vec![big(0.0, 0..5), big(20.0, 10..15)]),
+                unit_cube(), // tool at the origin, inside the first cube only
+            ]),
+        );
+        let mut cache = GeomCache::new();
+        let mut groups =
+            render_provenance_cached(&node, &RustManifoldKernel::new(), &mut cache).unwrap();
+        assert_eq!(groups.len(), 2);
+        // Order by innermost span so the assertions are position-independent.
+        groups.sort_by_key(|g| g.spans.last().unwrap().start);
+        assert_eq!(groups[0].spans, vec![100..200, 0..5]);
+        assert!((groups[0].mesh.volume() - 63.0).abs() < 1e-6);
+        assert_eq!(groups[1].spans, vec![100..200, 10..15]);
+        assert!((groups[1].mesh.volume() - 64.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn provenance_intersection_keeps_base_span_stacks() {
+        // `intersection(){ union(a, b); clip }` — the first operand is partitioned
+        // into regions, each clipped by the fused rest, keeping its stack. A region
+        // outside the clip survives nothing.
+        let clip = Node::Cube {
+            size: [3.0, 3.0, 3.0],
+            center: false,
+        };
+        let node = prov(
+            100..200,
+            Node::Intersection(vec![
+                Node::Union(vec![
+                    prov(0..5, unit_cube()), // at origin, overlaps the 3-cube clip
+                    prov(
+                        10..15,
+                        Node::Translate {
+                            v: [20.0, 0.0, 0.0], // far away, clipped to nothing
+                            child: Box::new(unit_cube()),
+                        },
+                    ),
+                ]),
+                clip,
+            ]),
+        );
+        let mut cache = GeomCache::new();
+        let groups =
+            render_provenance_cached(&node, &RustManifoldKernel::new(), &mut cache).unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].spans, vec![100..200, 0..5]);
+        assert!((groups[0].mesh.volume() - 1.0).abs() < 1e-6);
     }
 
     #[test]
@@ -2309,12 +2513,12 @@ mod tests {
         // Provenance partition still yields two distinct groups.
         let groups = render_provenance_cached(&node, &kernel, &mut cache).unwrap();
         assert_eq!(groups.len(), 2);
-        assert_eq!(groups[0].span, Some(0..8));
-        assert_eq!(groups[1].span, Some(10..18));
+        assert_eq!(groups[0].spans, vec![0..8]);
+        assert_eq!(groups[1].spans, vec![10..18]);
     }
 
     #[test]
-    fn provenance_channel_serializes_ranges_and_spans() {
+    fn provenance_channel_serializes_ranges_and_span_stacks() {
         let node = Node::Group(vec![
             prov(0..8, unit_cube()),
             prov(
@@ -2332,22 +2536,26 @@ mod tests {
         // Each unit cube is 12 triangles = 36 vertices; two groups = 72 vertices.
         assert_eq!(positions.len(), 72 * 3);
         assert_eq!(normals.len(), 72 * 3);
-        assert!(json.contains("\"span\":[0,8]"), "{json}");
-        assert!(json.contains("\"span\":[10,18]"), "{json}");
+        // First group: single-level stack. Second: nested [outer, inner].
+        assert!(json.contains("\"spans\":[[0,8]]"), "{json}");
+        assert!(json.contains("\"spans\":[[10,18],[11,17]]"), "{json}");
         assert!(json.contains("\"start\":36,\"count\":36"), "{json}");
     }
 
     #[test]
-    fn provenance_group_from_include_has_null_span() {
+    fn provenance_group_from_include_has_empty_span_stack() {
         // Geometry with no enclosing provenance (e.g. spliced from an `include`d
-        // file) is still emitted, but with a null span (not pickable).
+        // file) is still emitted, but with an empty span stack (not pickable);
+        // serialized as `"spans":[]`.
         let node = Node::Group(vec![unit_cube(), prov(5..13, unit_cube())]);
         let mut cache = GeomCache::new();
         let groups =
             render_provenance_cached(&node, &RustManifoldKernel::new(), &mut cache).unwrap();
         assert_eq!(groups.len(), 2);
-        assert_eq!(groups[0].span, None);
-        assert_eq!(groups[1].span, Some(5..13));
+        assert!(groups[0].spans.is_empty());
+        assert_eq!(groups[1].spans, vec![5..13]);
+        let (_, _, json) = provenance_channel(&groups);
+        assert!(json.contains("\"spans\":[]"), "{json}");
     }
 
     // ---- 2D provenance (picking/highlighting parity with 3D) ----------------
@@ -2374,7 +2582,7 @@ mod tests {
         let groups =
             render_provenance_cached(&node, &RustManifoldKernel::new(), &mut cache).unwrap();
         assert_eq!(groups.len(), 1);
-        assert_eq!(groups[0].span, Some(outer));
+        assert_eq!(groups[0].spans, vec![outer, 13..22]);
         // Flat 2D mesh: every vertex sits on the z=0 plane.
         assert!(
             groups[0].mesh.verts.iter().all(|v| v[2].abs() < 1e-9),
@@ -2392,9 +2600,11 @@ mod tests {
 
     #[test]
     fn provenance_2d_difference_is_one_fused_group() {
-        // `difference(){ square(10); circle(4); }` — a 2D boolean is opaque, so the
-        // whole result is ONE group with the difference span (guards against a
-        // future contour-native path fragmenting it per-operand).
+        // `difference(){ square(10); circle(4); }` — a 2D boolean stays opaque (the
+        // 3D per-region recursion is guarded by `!is_2d`), so the whole result is
+        // ONE group whose stack is just the outer difference span; the inner operand
+        // spans are not visited (guards against a future contour-native path
+        // fragmenting it per-operand).
         let frags = FragmentSpec {
             fn_: 32.0,
             fa: 12.0,
@@ -2418,7 +2628,7 @@ mod tests {
         let groups =
             render_provenance_cached(&node, &RustManifoldKernel::new(), &mut cache).unwrap();
         assert_eq!(groups.len(), 1);
-        assert_eq!(groups[0].span, Some(diff_span));
+        assert_eq!(groups[0].spans, vec![diff_span]);
         // A real flat profile came through the 2D path: the 100-unit square with a
         // ~16π bite taken out (the hole is a 32-gon, so a hair under π·16).
         let area = flat_area(&groups[0].mesh);
@@ -2452,7 +2662,7 @@ mod tests {
             render_provenance_cached(&node, &RustManifoldKernel::new(), &mut cache).unwrap();
         assert_eq!(groups.len(), 3);
         assert!(
-            groups.iter().all(|g| g.span == Some(loop_span.clone())),
+            groups.iter().all(|g| g.spans == vec![loop_span.clone()]),
             "all loop instances should share the loop span"
         );
     }

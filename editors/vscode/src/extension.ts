@@ -235,10 +235,13 @@ export function activate(context: vscode.ExtensionContext): void {
           }
           previewProvenance = [];
         },
-        // Model → code: a clicked face selects its source statement.
+        // Model → code: a clicked face selects its source statement; a null pick
+        // (clicked empty space, or Escape) deselects the highlighted item.
         onPick: (span) => {
           if (span) {
             void revealSpan(span);
+          } else {
+            PreviewPanel.current?.highlight(null);
           }
         },
       });
@@ -264,11 +267,24 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
       const text = e.textEditor.document.getText();
-      const byte = charToByte(text, e.textEditor.document.offsetAt(e.selections[0].active));
-      const g = previewProvenance.find(
-        (gr) => gr.span != null && byte >= gr.span[0] && byte < gr.span[1]
-      );
-      PreviewPanel.current.highlight(g?.span ?? null);
+      // Use the selection's start (not its active/head): a model→code click
+      // selects the whole clicked statement `[from,to)` and the head lands on the
+      // *exclusive* end, which no half-open span contains — so a click would
+      // resolve to a parent or nothing. The start byte sits inside the clicked
+      // statement, so the click lights exactly that item (code→model parity).
+      const byte = charToByte(text, e.textEditor.document.offsetAt(e.selections[0].start));
+      // Among every span (at any nesting level) that contains that byte, pick the
+      // narrowest — the tightest enclosing statement. highlight() then lights all
+      // geometry whose stack contains it (that statement's whole subtree).
+      let best: Span | null = null;
+      for (const gr of previewProvenance) {
+        for (const s of gr.spans) {
+          if (byte >= s[0] && byte < s[1] && (!best || s[1] - s[0] < best[1] - best[0])) {
+            best = s;
+          }
+        }
+      }
+      PreviewPanel.current.highlight(best);
     }),
     // Live-vs-save-only toggled: re-register the current preview with the flag.
     vscode.workspace.onDidChangeConfiguration((e) => {

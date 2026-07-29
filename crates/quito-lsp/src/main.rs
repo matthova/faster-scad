@@ -332,9 +332,10 @@ struct PreviewGroups {
     groups: serde_json::Value,
 }
 
-/// The provenance channel: a per-statement triangle soup plus a JSON array of
-/// `{start, count, span}` ranges for editor↔preview linking. Present for 3D
-/// models with geometry.
+/// The provenance channel: a per-leaf triangle soup plus a JSON array of
+/// `{start, count, spans}` ranges for hierarchical editor↔preview linking
+/// (`spans` is the outermost→innermost stack of source byte-ranges). Present for
+/// 3D models with geometry.
 struct ProvenanceChannel {
     positions: Vec<f32>,
     normals: Vec<f32>,
