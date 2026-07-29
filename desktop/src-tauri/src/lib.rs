@@ -827,7 +827,10 @@ mod tests {
             };
             let (positions, _normals, json) = quito_geom::provenance_channel(&groups);
             assert!(!positions.is_empty(), "{src} produced no provenance soup");
-            assert!(json.contains("\"span\":["), "{src} provenance json: {json}");
+            assert!(
+                json.contains("\"spans\":[["),
+                "{src} provenance json: {json}"
+            );
         }
     }
 

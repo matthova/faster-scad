@@ -55,10 +55,10 @@ pub struct RenderResult {
     preview_normals: Vec<f32>,
     groups: String,
     /// Provenance channel for editor↔preview linking (2D and 3D alike): a
-    /// concatenated per-statement triangle soup plus a JSON array of per-group
-    /// `{start,count,span}` ranges. `span` is `[start,end]` byte offsets into the
-    /// source, or `null` when unattributable. Empty only for models with no
-    /// geometry.
+    /// concatenated per-leaf triangle soup plus a JSON array of per-group
+    /// `{start,count,spans}` ranges. `spans` is the outermost→innermost stack of
+    /// `[start,end]` byte offsets into the source (an empty array when
+    /// unattributable). Empty only for models with no geometry.
     provenance_positions: Vec<f32>,
     provenance_normals: Vec<f32>,
     provenance: String,
@@ -147,8 +147,8 @@ impl RenderResult {
         self.provenance_normals.clone()
     }
 
-    /// Per-group provenance ranges/spans as JSON (`[{start,count,span}]`); empty
-    /// when the model has no pickable geometry.
+    /// Per-group provenance ranges/span-stacks as JSON (`[{start,count,spans}]`);
+    /// empty when the model has no pickable geometry.
     #[wasm_bindgen(getter)]
     pub fn provenance(&self) -> String {
         self.provenance.clone()
@@ -521,7 +521,7 @@ mod tests {
         assert!(r.ok());
         assert!(!r.provenance_positions().is_empty());
         let p = r.provenance();
-        assert!(p.contains("\"span\":["), "{p}");
+        assert!(p.contains("\"spans\":[["), "{p}");
     }
 
     #[cfg_attr(not(target_arch = "wasm32"), test)]
@@ -534,7 +534,7 @@ mod tests {
         assert!(r.is_2d());
         assert!(!r.provenance_positions().is_empty());
         let p = r.provenance();
-        assert!(p.contains("\"span\":["), "{p}");
+        assert!(p.contains("\"spans\":[["), "{p}");
     }
 
     #[cfg_attr(not(target_arch = "wasm32"), test)]
