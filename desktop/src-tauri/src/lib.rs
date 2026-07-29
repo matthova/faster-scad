@@ -58,6 +58,11 @@ struct RenderResult {
     error: String,
     echo: String,
     warnings: String,
+    /// Recoverable geometry errors: newline-joined messages for CSG ops that
+    /// failed and were replaced by a fallback mesh (degraded render). Non-empty
+    /// means a mesh is present but geometrically wrong somewhere; the UI should
+    /// alert the user. Distinct from `error` (a hard failure with no mesh).
+    geom_errors: String,
     positions: Vec<f32>,
     normals: Vec<f32>,
     triangle_count: u32,
@@ -214,7 +219,15 @@ fn eval_and_render(
     values: &[String],
     file_names: &[String],
     file_contents: &[String],
-) -> Result<(quito_geom::Mesh, quito_eval::EvalOutput, bool, Vec<String>), EngineError> {
+) -> Result<
+    (
+        quito_geom::Mesh,
+        quito_eval::EvalOutput,
+        bool,
+        quito_geom::RenderDiagnostics,
+    ),
+    EngineError,
+> {
     let program = quito_syntax::parse(source).map_err(|e| {
         let message = format!("parse error: {}", e.message);
         EngineError {
@@ -238,9 +251,9 @@ fn eval_and_render(
         })?;
     let is_2d = quito_geom::is_2d(&out.node);
     let kernel = quito_geom::ManifoldKernel::new();
-    let (mesh, geom_warnings) = {
+    let (mesh, diag) = {
         let mut cache = cache.lock().unwrap();
-        quito_geom::render_cached_warns(&out.node, &kernel, &mut cache).map_err(|e| {
+        quito_geom::render_cached_diag(&out.node, &kernel, &mut cache).map_err(|e| {
             let message = format!("geometry error: {e}");
             EngineError {
                 diagnostic: quito_eval::eval_error_diagnostic(&quito_eval::EvalError::new(
@@ -250,7 +263,7 @@ fn eval_and_render(
             }
         })?
     };
-    Ok((mesh, out, is_2d, geom_warnings))
+    Ok((mesh, out, is_2d, diag))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -277,7 +290,7 @@ fn render(
             &file_names,
             &file_contents,
         ) {
-            Ok((mesh, out, is_2d, geom_warnings)) => {
+            Ok((mesh, out, is_2d, diag)) => {
                 let (positions, normals) = mesh.to_triangle_soup_f32();
                 let diagnostics = quito_eval::diagnostics_json(None, &out.warnings);
                 // Preview color channel — only when the model uses color/`#`/`%`.
@@ -320,9 +333,10 @@ fn render(
                         .warnings
                         .iter()
                         .map(|w| w.message.clone())
-                        .chain(geom_warnings)
+                        .chain(diag.warnings)
                         .collect::<Vec<_>>()
                         .join("\n"),
+                    geom_errors: diag.errors.join("\n"),
                     triangle_count: mesh.tris.len() as u32,
                     vertex_count: mesh.verts.len() as u32,
                     volume: mesh.volume(),

@@ -203,6 +203,9 @@ interface Status {
   echo: string;
   warnings: string;
   error: string;
+  /** Recoverable geometry errors (degraded render): a mesh is shown but a CSG op
+   *  failed and was replaced by a fallback. Empty when geometry is exact. */
+  geomErrors: string;
 }
 
 export function App() {
@@ -284,6 +287,7 @@ export function App() {
     echo: "",
     warnings: "",
     error: "",
+    geomErrors: "",
   });
   const [version, setVersion] = useState("");
   const [consoleOpen, setConsoleOpen] = useState(false);
@@ -984,14 +988,20 @@ export function App() {
       );
       setStatus({
         ok: true,
-        message: `${r.triangleCount.toLocaleString()} triangles`,
+        message: r.geomErrors
+          ? `${r.triangleCount.toLocaleString()} triangles · geometry errors`
+          : `${r.triangleCount.toLocaleString()} triangles`,
         triangleCount: r.triangleCount,
         volume: r.volume,
         ms: r.ms,
         echo: r.echo,
         warnings: r.warnings,
         error: "",
+        geomErrors: r.geomErrors,
       });
+      // A degraded render still shows a mesh, but the user should know it's
+      // wrong somewhere — pop the console so the error is visible.
+      if (r.geomErrors) setConsoleOpen(true);
     } else {
       setStatus((s) => ({
         ...s,
@@ -1001,6 +1011,7 @@ export function App() {
         echo: r.echo,
         warnings: r.warnings,
         error: r.error,
+        geomErrors: r.geomErrors,
       }));
       setConsoleOpen(true);
     }
@@ -1013,6 +1024,10 @@ export function App() {
 
   const consoleLines: { kind: "error" | "warn" | "echo"; text: string }[] = [];
   if (status.error) consoleLines.push({ kind: "error", text: status.error });
+  // Recoverable geometry errors: shown red like a hard error, but the model is
+  // still rendered (degraded) alongside them.
+  for (const e of status.geomErrors.split("\n").filter(Boolean))
+    consoleLines.push({ kind: "error", text: `GEOMETRY ERROR: ${e}` });
   for (const w of status.warnings.split("\n").filter(Boolean))
     consoleLines.push({ kind: "warn", text: `WARNING: ${w}` });
   for (const e of status.echo.split("\n").filter(Boolean))

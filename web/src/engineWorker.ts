@@ -18,6 +18,11 @@ export interface RenderResponse {
   seq: number;
   ok: boolean;
   error: string;
+  /** Recoverable geometry errors (degraded render): newline-joined messages for
+   *  CSG ops that failed and were replaced by a fallback mesh (e.g. non-manifold
+   *  operands). Non-empty means a mesh is shown but is geometrically wrong
+   *  somewhere; distinct from `error` (a hard failure with no mesh). */
+  geomErrors: string;
   echo: string;
   warnings: string;
   positions: Float32Array;
@@ -79,6 +84,7 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
       seq,
       ok: false,
       error,
+      geomErrors: "",
       echo: "",
       warnings: "",
       positions: new Float32Array(0),
@@ -113,6 +119,7 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
     seq,
     ok: res.ok,
     error: res.error,
+    geomErrors: res.geom_errors,
     echo: res.echo,
     warnings: res.warnings,
     positions,

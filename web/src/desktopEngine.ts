@@ -13,6 +13,9 @@ export function isTauri(): boolean {
 interface NativeResult {
   ok: boolean;
   error: string;
+  // Recoverable geometry errors (degraded render); "" when geometry is exact.
+  // Optional so an older shell that predates the channel still deserializes.
+  geomErrors?: string;
   echo: string;
   warnings: string;
   positions: number[];
@@ -70,6 +73,7 @@ export class DesktopEngine {
           seq,
           ok: res.ok,
           error: res.error,
+          geomErrors: res.geomErrors ?? "",
           echo: res.echo,
           warnings: res.warnings,
           positions: new Float32Array(res.positions),
@@ -98,6 +102,7 @@ export class DesktopEngine {
           seq,
           ok: false,
           error: `engine error: ${String(e)}`,
+          geomErrors: "",
           echo: "",
           warnings: "",
           positions: new Float32Array(0),

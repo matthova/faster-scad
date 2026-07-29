@@ -34,14 +34,54 @@ pub enum GeomError {
     NonManifold(String),
 }
 
+/// Non-fatal diagnostics from a render that still produced a mesh.
+///
+/// A render has three outcomes now: a hard failure (`Err(GeomError)`, no mesh);
+/// a clean success; or a **degraded** success — the mesh is present but one or
+/// more CSG ops failed (typically non-manifold operands) and were replaced by a
+/// visible fallback so the whole model isn't blanked. The `errors` list carries
+/// those degradations for a UI to flag; `warnings` carries softer notes (e.g. a
+/// non-convex `minkowski` approximation). Both are deduped.
+#[derive(Default, Debug, Clone)]
+pub struct RenderDiagnostics {
+    /// Soft warnings; the geometry is still exact.
+    pub warnings: Vec<String>,
+    /// Recoverable geometry errors: a CSG op failed and the result is an
+    /// approximate fallback. Non-empty means the preview is geometrically wrong
+    /// somewhere and the user should be alerted, even though a mesh exists.
+    pub errors: Vec<String>,
+}
+
+impl RenderDiagnostics {
+    /// Every message (warnings then errors) as one flat list, for callers that
+    /// don't distinguish the two.
+    fn flattened(mut self) -> Vec<String> {
+        self.warnings.append(&mut self.errors);
+        self.warnings
+    }
+}
+
+/// A cached subtree render: its mesh plus the diagnostics its subtree produced.
+/// Caching the diagnostics (not just the mesh) is what keeps a degradation
+/// *sticky* across warm edits — a re-render that hits the cache for a degraded
+/// subtree still re-reports the failure, so the UI's alert doesn't vanish when
+/// the user edits an unrelated part of the model.
+#[derive(Clone, Default)]
+struct CachedNode {
+    mesh: Mesh,
+    warnings: Vec<String>,
+    errors: Vec<String>,
+}
+
 /// A content-addressed geometry cache (M4): maps a structural hash of a CSG
-/// subtree to its rendered mesh. Reused across renders, it makes warm edits
-/// incremental — only subtrees whose structure changed are re-rendered, the
-/// rest are cheap `Mesh` clones; within a single render it also deduplicates
-/// identical subtrees (common-subexpression elimination).
+/// subtree to its rendered mesh (and the diagnostics its subtree produced).
+/// Reused across renders, it makes warm edits incremental — only subtrees whose
+/// structure changed are re-rendered, the rest are cheap clones; within a single
+/// render it also deduplicates identical subtrees (common-subexpression
+/// elimination).
 #[derive(Default)]
 pub struct GeomCache {
-    meshes: HashMap<u64, Mesh>,
+    nodes: HashMap<u64, CachedNode>,
 }
 
 impl GeomCache {
@@ -50,14 +90,14 @@ impl GeomCache {
     }
     /// Number of cached subtrees.
     pub fn len(&self) -> usize {
-        self.meshes.len()
+        self.nodes.len()
     }
     pub fn is_empty(&self) -> bool {
-        self.meshes.is_empty()
+        self.nodes.is_empty()
     }
     /// Drop all cached meshes.
     pub fn clear(&mut self) {
-        self.meshes.clear();
+        self.nodes.clear();
     }
 }
 
@@ -70,6 +110,10 @@ struct Ctx<'a> {
     /// Non-fatal geometry warnings collected during the render (e.g. non-convex
     /// `minkowski`). Deduped by the caller.
     warnings: &'a mut Vec<String>,
+    /// Recoverable CSG failures collected during the render: a boolean/hull op
+    /// failed (usually non-manifold operands) and was replaced by a fallback
+    /// mesh so the render still yields geometry. Deduped by the caller.
+    errors: &'a mut Vec<String>,
 }
 
 /// Render a CSG tree to a mesh using the default kernel for the target:
@@ -120,34 +164,71 @@ pub fn render_cached(
 
 /// Like [`render_cached`], but also returns non-fatal geometry warnings (e.g.
 /// non-convex `minkowski`, which renders as the convex approximation), deduped.
+/// Warnings and recoverable errors are flattened into one list; use
+/// [`render_cached_diag`] to keep them separate (e.g. to alert a UI).
 pub fn render_cached_warns(
     node: &Node,
     kernel: &dyn Kernel,
     cache: &mut GeomCache,
 ) -> Result<(Mesh, Vec<String>), GeomError> {
+    let (mesh, diag) = render_cached_diag(node, kernel, cache)?;
+    Ok((mesh, diag.flattened()))
+}
+
+/// Like [`render_cached_warns`], but keeps soft warnings and recoverable
+/// geometry errors as separate lists (see [`RenderDiagnostics`]). A non-empty
+/// `errors` list means the render degraded: a CSG op failed and the mesh is an
+/// approximate fallback, so the caller should surface that to the user even
+/// though geometry is present.
+pub fn render_cached_diag(
+    node: &Node,
+    kernel: &dyn Kernel,
+    cache: &mut GeomCache,
+) -> Result<(Mesh, RenderDiagnostics), GeomError> {
     let mut hashes = HashMap::new();
     hash_all(node, &mut hashes);
     let mut warnings = Vec::new();
+    let mut errors = Vec::new();
     let mut ctx = Ctx {
         kernel,
         cache,
         hashes: &hashes,
         warnings: &mut warnings,
+        errors: &mut errors,
     };
     let mesh = render_node(node, &mut ctx)?;
     warnings.sort();
     warnings.dedup();
-    Ok((mesh, warnings))
+    errors.sort();
+    errors.dedup();
+    Ok((mesh, RenderDiagnostics { warnings, errors }))
 }
 
-/// Memoized render of one node: cache hit → clone; miss → render + store.
+/// Memoized render of one node: cache hit → clone (and replay the subtree's
+/// diagnostics); miss → render, capturing the diagnostics this subtree added, and
+/// store them with the mesh so a later warm hit re-reports them.
 fn render_node(node: &Node, ctx: &mut Ctx) -> Result<Mesh, GeomError> {
     let key = ctx.hashes[&(node as *const Node)];
-    if let Some(m) = ctx.cache.meshes.get(&key) {
-        return Ok(m.clone());
+    if let Some(entry) = ctx.cache.nodes.get(&key) {
+        ctx.warnings.extend(entry.warnings.iter().cloned());
+        ctx.errors.extend(entry.errors.iter().cloned());
+        return Ok(entry.mesh.clone());
     }
+    // Everything appended to ctx.warnings/errors while rendering this node is the
+    // diagnostics of its subtree; snapshot the lengths to isolate that delta.
+    let warn_start = ctx.warnings.len();
+    let err_start = ctx.errors.len();
     let mesh = render_uncached(node, ctx)?;
-    ctx.cache.meshes.insert(key, mesh.clone());
+    let warnings = ctx.warnings[warn_start..].to_vec();
+    let errors = ctx.errors[err_start..].to_vec();
+    ctx.cache.nodes.insert(
+        key,
+        CachedNode {
+            mesh: mesh.clone(),
+            warnings,
+            errors,
+        },
+    );
     Ok(mesh)
 }
 
@@ -223,11 +304,15 @@ pub fn render_groups_cached(
     let mut hashes = HashMap::new();
     hash_all(node, &mut hashes);
     let mut warnings = Vec::new();
+    // The preview/color channel doesn't surface diagnostics (the fused render
+    // above already did); degradations are recorded here but discarded.
+    let mut errors = Vec::new();
     let mut ctx = Ctx {
         kernel,
         cache,
         hashes: &hashes,
         warnings: &mut warnings,
+        errors: &mut errors,
     };
     let mut out = Vec::new();
     partition_groups(node, DEFAULT_COLOR, DisplayMode::Solid, &mut ctx, &mut out)?;
@@ -347,11 +432,15 @@ pub fn render_provenance_cached(
     let mut hashes = HashMap::new();
     hash_all(node, &mut hashes);
     let mut warnings = Vec::new();
+    // The provenance channel doesn't surface diagnostics (the fused render does);
+    // degradations are recorded here but discarded.
+    let mut errors = Vec::new();
     let mut ctx = Ctx {
         kernel,
         cache,
         hashes: &hashes,
         warnings: &mut warnings,
+        errors: &mut errors,
     };
     let mut out = Vec::new();
     let mut stack = Vec::new();
@@ -816,6 +905,45 @@ fn render2d_lowered(node: &Node, ctx: &mut Ctx) -> Result<Vec<Contour>, GeomErro
     Ok(shape2d::render2d(&lower_projections(node, ctx)?))
 }
 
+/// Run a CSG boolean and, on kernel failure, degrade instead of aborting: record
+/// the error on `ctx` and return a raw concatenation of the operands so the
+/// preview still shows *something*. This keeps a single non-manifold subtree from
+/// blanking the entire model. `label` names the op for the error message.
+///
+/// The fallback is only built on the (rare) failure path. The kernel consumes
+/// the operands, so on error we re-render the children — cheap, since they're
+/// cache hits — and merge them. Difference is special: its fallback is the base
+/// alone (the tools are meant to be *subtracted*, so drawing them as solids
+/// would mislead), so it passes `base_only = true` and the base as the first
+/// child.
+fn boolean_or_fallback(
+    children: &[Node],
+    ctx: &mut Ctx,
+    label: &str,
+    base_only: bool,
+    run: impl FnOnce(&dyn Kernel, Vec<Mesh>) -> Result<Mesh, GeomError>,
+) -> Result<Mesh, GeomError> {
+    let meshes = render_all(children, ctx)?;
+    match run(ctx.kernel, meshes) {
+        Ok(m) => Ok(m),
+        Err(e) => {
+            ctx.errors.push(format!(
+                "{label}: {e} — showing un-combined geometry (the boolean was skipped)"
+            ));
+            // Re-render the operands (cache hits) for the fallback.
+            let operands = render_all(children, ctx)?;
+            let mut acc = Mesh::new();
+            for (i, m) in operands.iter().enumerate() {
+                if base_only && i > 0 {
+                    break;
+                }
+                append_mesh(&mut acc, m);
+            }
+            Ok(acc)
+        }
+    }
+}
+
 fn render_uncached(node: &Node, ctx: &mut Ctx) -> Result<Mesh, GeomError> {
     // 2D CSG (boolean/hull/minkowski/group of 2D shapes) is clipped in the 2D
     // plane and returned as a flat mesh — the 3D kernel can't handle the
@@ -889,21 +1017,17 @@ fn render_uncached(node: &Node, ctx: &mut Ctx) -> Result<Mesh, GeomError> {
         }
 
         Node::Group(children) => {
-            let meshes = render_all(children, ctx)?;
-            ctx.kernel.union(meshes)
+            boolean_or_fallback(children, ctx, "union", false, |k, m| k.union(m))
         }
         Node::Union(children) => {
-            let meshes = render_all(children, ctx)?;
-            ctx.kernel.union(meshes)
+            boolean_or_fallback(children, ctx, "union", false, |k, m| k.union(m))
         }
         Node::Intersection(children) => {
-            let meshes = render_all(children, ctx)?;
-            ctx.kernel.intersection(meshes)
+            boolean_or_fallback(children, ctx, "intersection", false, |k, m| {
+                k.intersection(m)
+            })
         }
-        Node::Hull(children) => {
-            let meshes = render_all(children, ctx)?;
-            ctx.kernel.hull(meshes)
-        }
+        Node::Hull(children) => boolean_or_fallback(children, ctx, "hull", false, |k, m| k.hull(m)),
         Node::Minkowski(children) => {
             let meshes = render_all(children, ctx)?;
             // 3D minkowski is exact only for convex operands (hull of vertex
@@ -920,12 +1044,15 @@ fn render_uncached(node: &Node, ctx: &mut Ctx) -> Result<Mesh, GeomError> {
             Ok(minkowski_fold(meshes))
         }
         Node::Difference(children) => {
-            let mut meshes = render_all(children, ctx)?;
-            if meshes.is_empty() {
+            if children.is_empty() {
                 Ok(Mesh::new())
             } else {
-                let base = meshes.remove(0);
-                ctx.kernel.difference(base, meshes)
+                // On failure, fall back to the base alone: the tools are meant to
+                // be subtracted, so drawing them as solids would mislead.
+                boolean_or_fallback(children, ctx, "difference", true, |k, mut m| {
+                    let base = m.remove(0);
+                    k.difference(base, m)
+                })
             }
         }
 
@@ -1883,6 +2010,55 @@ mod tests {
             cache.len(),
             4,
             "identical spheres should share one cache entry"
+        );
+    }
+
+    #[test]
+    fn non_manifold_boolean_degrades_instead_of_aborting() {
+        // A lone open surface (a single triangle) is non-manifold: every edge is
+        // a boundary. Unioning it with a valid cube must not blank the whole
+        // render — the boolean is skipped, a fallback (the operands concatenated)
+        // is returned, and the failure is reported as a recoverable error.
+        let open_tri = Node::Polyhedron {
+            points: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            faces: vec![vec![0, 1, 2]],
+        };
+        let node = Node::Union(vec![
+            Node::Cube {
+                size: [10.0, 10.0, 10.0],
+                center: false,
+            },
+            open_tri.clone(),
+        ]);
+        let kernel = RustManifoldKernel::new();
+        let mut cache = GeomCache::new();
+        let (mesh, diag) = render_cached_diag(&node, &kernel, &mut cache).unwrap();
+        assert!(
+            !mesh.tris.is_empty(),
+            "degraded render should still yield geometry"
+        );
+        assert!(!diag.errors.is_empty(), "degradation must be reported");
+        assert!(diag.errors[0].contains("union"), "{:?}", diag.errors);
+        // render_cached_warns flattens the error into its single list.
+        let (_, warns) = render_cached_warns(&node, &kernel, &mut cache).unwrap();
+        assert!(warns.iter().any(|w| w.contains("union")), "{warns:?}");
+
+        // Difference degrades to the base alone (tools are dropped, not drawn).
+        // Two non-manifold tools force the tool-union step, which fails.
+        let diff = Node::Difference(vec![
+            Node::Cube {
+                size: [10.0, 10.0, 10.0],
+                center: false,
+            },
+            open_tri.clone(),
+            open_tri,
+        ]);
+        let (dmesh, ddiag) = render_cached_diag(&diff, &kernel, &mut cache).unwrap();
+        assert!(!dmesh.tris.is_empty());
+        assert!(
+            ddiag.errors.iter().any(|e| e.contains("difference")),
+            "{:?}",
+            ddiag.errors
         );
     }
 
