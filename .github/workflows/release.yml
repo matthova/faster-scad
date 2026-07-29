@@ -47,8 +47,11 @@ jobs:
           # universal binary: quito-geom links the native Manifold C++ kernel,
           # whose CMake build only produces the runner's host arch, so a
           # cross-compiled `universal-apple-darwin` fails to link the x86_64
-          # slice. macos-latest is Apple Silicon; macos-13 is Intel. Each emits
-          # its own updater entry (darwin-aarch64 / darwin-x86_64) in latest.json.
+          # slice. macos-latest is Apple Silicon; macos-15-intel is Intel (the
+          # x86_64 replacement after GitHub retired the macos-13 image in Dec
+          # 2025 — available until Aug 2027, after which hosted Intel macOS goes
+          # away entirely). Each emits its own updater entry (darwin-aarch64 /
+          # darwin-x86_64) in latest.json.
           - platform: macos-latest
             args: "--target aarch64-apple-darwin"
             rust-targets: "aarch64-apple-darwin"
@@ -56,7 +59,7 @@ jobs:
             # the README can link releases/latest/download/<name> permanently.
             bundle-glob: "desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg"
             stable-name: "Quito-macos-aarch64.dmg"
-          - platform: macos-13
+          - platform: macos-15-intel
             args: "--target x86_64-apple-darwin"
             rust-targets: "x86_64-apple-darwin"
             bundle-glob: "desktop/src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg"
