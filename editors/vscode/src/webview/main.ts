@@ -111,6 +111,11 @@ const HIGHLIGHT_MATERIAL = new THREE.MeshBasicMaterial({
   side: THREE.DoubleSide,
 });
 
+/** Material for the off-scene pick mesh. Never rendered — only `raycast` reads
+ *  it, for `material.side`. `DoubleSide` so 2D flat meshes (whose triangles all
+ *  face +z) stay pickable when the plane is viewed from below. */
+const PICK_MATERIAL = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide });
+
 /** Register the provenance soup for this render (builds the off-scene pick mesh
  *  and clears any stale highlight). */
 function setProvenance(
@@ -132,7 +137,7 @@ function setProvenance(
   geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
   geo.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
   pickGeometry = geo;
-  pickMesh = new THREE.Mesh(geo);
+  pickMesh = new THREE.Mesh(geo, PICK_MATERIAL);
   pickMesh.updateMatrixWorld(true);
 }
 

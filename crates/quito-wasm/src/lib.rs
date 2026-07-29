@@ -54,10 +54,11 @@ pub struct RenderResult {
     preview_positions: Vec<f32>,
     preview_normals: Vec<f32>,
     groups: String,
-    /// Provenance channel for editor↔preview linking (3D models only): a
+    /// Provenance channel for editor↔preview linking (2D and 3D alike): a
     /// concatenated per-statement triangle soup plus a JSON array of per-group
     /// `{start,count,span}` ranges. `span` is `[start,end]` byte offsets into the
-    /// source, or `null` when unattributable. Empty for 2D/empty models.
+    /// source, or `null` when unattributable. Empty only for models with no
+    /// geometry.
     provenance_positions: Vec<f32>,
     provenance_normals: Vec<f32>,
     provenance: String,
@@ -134,8 +135,8 @@ impl RenderResult {
         self.groups.clone()
     }
 
-    /// Provenance triangle soup (concatenated per-statement groups); empty for
-    /// 2D/empty models.
+    /// Provenance triangle soup (concatenated per-statement groups); empty only
+    /// for models with no geometry.
     #[wasm_bindgen(getter)]
     pub fn provenance_positions(&self) -> Vec<f32> {
         self.provenance_positions.clone()
@@ -423,22 +424,22 @@ pub fn render_with_files(
         (Vec::new(), Vec::new(), String::new())
     };
 
-    // Provenance channel for editor↔preview linking — 3D models with geometry.
-    // Shares the cache with the fused render above, so opaque leaf meshes aren't
-    // recomputed just to tag them with a span. 2D picking is out of scope.
-    let (provenance_positions, provenance_normals, provenance) =
-        if !mesh.tris.is_empty() && !quito_geom::is_2d(&eval.node) {
-            let r = CACHE.with(|c| {
-                let mut cache = c.borrow_mut();
-                quito_geom::render_provenance_cached(&eval.node, &kernel, &mut cache)
-            });
-            match r {
-                Ok(groups) => quito_geom::provenance_channel(&groups),
-                Err(_) => (Vec::new(), Vec::new(), String::new()),
-            }
-        } else {
-            (Vec::new(), Vec::new(), String::new())
-        };
+    // Provenance channel for editor↔preview linking — any model with geometry
+    // (2D flat meshes and 3D solids alike). Shares the cache with the fused
+    // render above, so opaque leaf meshes aren't recomputed just to tag them
+    // with a span.
+    let (provenance_positions, provenance_normals, provenance) = if !mesh.tris.is_empty() {
+        let r = CACHE.with(|c| {
+            let mut cache = c.borrow_mut();
+            quito_geom::render_provenance_cached(&eval.node, &kernel, &mut cache)
+        });
+        match r {
+            Ok(groups) => quito_geom::provenance_channel(&groups),
+            Err(_) => (Vec::new(), Vec::new(), String::new()),
+        }
+    } else {
+        (Vec::new(), Vec::new(), String::new())
+    };
 
     // Viewport channel only for models that reference `$vp` (drives the camera).
     let viewport = if source.contains("$vp") {
@@ -521,12 +522,19 @@ mod tests {
         assert!(!r.provenance_positions().is_empty());
         let p = r.provenance();
         assert!(p.contains("\"span\":["), "{p}");
+    }
 
-        // A 2D model has no provenance channel (picking is out of scope in v1).
-        let two_d = render_with_files("square(4);", vec![], vec![], vec![], vec![]);
-        assert!(two_d.ok());
-        assert!(two_d.provenance_positions().is_empty());
-        assert_eq!(two_d.provenance(), "");
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+    fn provenance_channel_populated_for_2d() {
+        // A 2D model is pickable/highlightable just like 3D: the flat mesh gets a
+        // provenance channel with per-statement spans.
+        let r = render_with_files("square(4);", vec![], vec![], vec![], vec![]);
+        assert!(r.ok());
+        assert!(r.is_2d());
+        assert!(!r.provenance_positions().is_empty());
+        let p = r.provenance();
+        assert!(p.contains("\"span\":["), "{p}");
     }
 
     #[cfg_attr(not(target_arch = "wasm32"), test)]
