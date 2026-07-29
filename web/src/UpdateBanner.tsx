@@ -3,7 +3,8 @@
 // download progress, install, and the interactive "up to date"/error results.
 // Pure view: no Tauri imports, so it's safe in any bundle.
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { renderMarkdown } from "./markdown";
 import type { UpdaterState } from "./checkForUpdates";
 
 interface Props {
@@ -14,6 +15,8 @@ interface Props {
 
 export function UpdateBanner({ state, onInstall, onDismiss }: Props) {
   const [showNotes, setShowNotes] = useState(false);
+  const rawNotes = state.kind === "available" ? state.notes : "";
+  const notesHtml = useMemo(() => (rawNotes ? renderMarkdown(rawNotes) : ""), [rawNotes]);
 
   // The interactive "you're up to date" confirmation self-dismisses so it
   // doesn't linger — it's a transient acknowledgement, not a persistent state.
@@ -69,8 +72,8 @@ export function UpdateBanner({ state, onInstall, onDismiss }: Props) {
         </div>
       </div>
 
-      {state.kind === "available" && showNotes && state.notes && (
-        <pre className="update-notes">{state.notes}</pre>
+      {state.kind === "available" && showNotes && notesHtml && (
+        <div className="update-notes" dangerouslySetInnerHTML={{ __html: notesHtml }} />
       )}
     </div>
   );
