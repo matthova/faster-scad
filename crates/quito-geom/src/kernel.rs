@@ -80,6 +80,13 @@ mod rust_manifold {
     use manifold_rust::types::{Error, MeshGL64};
 
     pub(super) fn to_manifold(m: &Mesh) -> Result<Manifold, GeomError> {
+        // Weld coincident-but-unshared vertices first, matching the C++ backend:
+        // many BOSL2 primitives emit revolution seams and cap rings as duplicate
+        // vertices, leaving the mesh manifold by position but not by index. The
+        // kernel needs shared edges, so without this the pure-Rust (wasm) path
+        // would reject a lot of geometry the native path accepts.
+        let welded = m.welded(1e-7);
+        let m = &welded;
         let mut vert_properties = Vec::with_capacity(m.verts.len() * 3);
         for v in &m.verts {
             vert_properties.extend_from_slice(v);

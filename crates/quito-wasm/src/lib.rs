@@ -47,6 +47,12 @@ pub struct RenderResult {
     echo: String,
     warnings: String,
     error: Option<String>,
+    /// Recoverable geometry errors: newline-joined messages for CSG ops that
+    /// failed and were replaced by a fallback mesh (e.g. non-manifold operands).
+    /// Non-empty means the preview is degraded — a mesh is present but wrong
+    /// somewhere — and the UI should alert the user. Distinct from `error`
+    /// (a hard failure that yields no mesh).
+    geom_errors: String,
     /// Structured diagnostics (JSON array) for inline editor squiggles.
     diagnostics: String,
     /// Preview color channel (only populated when the model uses `color`/`#`/`%`):
@@ -107,6 +113,13 @@ impl RenderResult {
     #[wasm_bindgen(getter)]
     pub fn ok(&self) -> bool {
         self.error.is_none()
+    }
+
+    /// Newline-joined recoverable geometry errors (degraded render), or empty
+    /// when the geometry is exact. See the field docs on `geom_errors`.
+    #[wasm_bindgen(getter)]
+    pub fn geom_errors(&self) -> String {
+        self.geom_errors.clone()
     }
 
     /// Structured diagnostics as a JSON array (`[{severity,message,start,end}]`),
@@ -195,6 +208,7 @@ impl RenderResult {
             echo,
             warnings,
             error: Some(msg),
+            geom_errors: String::new(),
             diagnostics,
             preview_positions: Vec::new(),
             preview_normals: Vec::new(),
@@ -382,9 +396,9 @@ pub fn render_with_files(
         if cache.len() > CACHE_CAP {
             cache.clear();
         }
-        quito_geom::render_cached_warns(&eval.node, &kernel, &mut cache)
+        quito_geom::render_cached_diag(&eval.node, &kernel, &mut cache)
     });
-    let (mesh, geom_warnings) = match mesh {
+    let (mesh, diag) = match mesh {
         Ok(v) => v,
         Err(e) => {
             let ge = quito_eval::EvalError::new(format!("geometry error: {e}"));
@@ -399,12 +413,16 @@ pub fn render_with_files(
     };
     // Fold non-fatal geometry warnings (e.g. non-convex minkowski) into the
     // console warnings stream.
-    for w in geom_warnings {
+    for w in diag.warnings {
         if !warnings.is_empty() {
             warnings.push('\n');
         }
         warnings.push_str(&w);
     }
+    // Recoverable geometry errors (a CSG op failed and the mesh is a fallback)
+    // go on their own channel so the UI can raise a distinct, non-blocking alert
+    // while still showing the degraded model.
+    let geom_errors = diag.errors.join("\n");
 
     let (positions, normals) = mesh.to_triangle_soup_f32();
 
@@ -459,6 +477,7 @@ pub fn render_with_files(
         echo,
         warnings,
         error: None,
+        geom_errors,
         diagnostics,
         preview_positions,
         preview_normals,
@@ -535,6 +554,28 @@ mod tests {
         assert!(!r.provenance_positions().is_empty());
         let p = r.provenance();
         assert!(p.contains("\"spans\":[["), "{p}");
+    }
+
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+    fn non_manifold_boolean_degrades_and_surfaces_geom_errors() {
+        // Unioning a cube with a lone open triangle (non-manifold) can't be done
+        // by the kernel. The render must not fail outright: a (degraded) mesh is
+        // still returned and the failure is reported on the geom_errors channel.
+        let src = "union() { cube(10); \
+                   polyhedron(points=[[0,0,0],[1,0,0],[0,1,0]], faces=[[0,1,2]]); }";
+        let r = render_with_files(src, vec![], vec![], vec![], vec![]);
+        assert!(
+            r.ok(),
+            "degraded render should still succeed: {}",
+            r.error()
+        );
+        assert!(r.triangle_count() > 0, "expected a fallback mesh");
+        assert!(
+            r.geom_errors().contains("union"),
+            "geom_errors: {:?}",
+            r.geom_errors()
+        );
     }
 
     #[cfg_attr(not(target_arch = "wasm32"), test)]
