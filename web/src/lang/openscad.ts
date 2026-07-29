@@ -10,6 +10,8 @@ import {
 } from "@codemirror/language";
 import { styleTags, tags as t } from "@lezer/highlight";
 import { parser } from "./openscad.grammar";
+import { openscadCompletion } from "./complete";
+import { signatureHelp } from "./signature";
 
 const parserWithMetadata = parser.configure({
   props: [
@@ -56,9 +58,10 @@ export const openscadLanguage = LRLanguage.define({
     commentTokens: { line: "//", block: { open: "/*", close: "*/" } },
     closeBrackets: { brackets: ["(", "[", "{", '"'] },
     indentOnInput: /^\s*\}$/,
+    autocomplete: openscadCompletion,
   },
 });
 
 export function openscad(): LanguageSupport {
-  return new LanguageSupport(openscadLanguage);
+  return new LanguageSupport(openscadLanguage, [signatureHelp()]);
 }
