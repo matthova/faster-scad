@@ -462,10 +462,11 @@ fn render_preview(source: &str, base_dir: &str, overlay: Overlay) -> PreviewMsg 
         None
     };
 
-    // Provenance channel for editor↔preview linking — 3D models with geometry.
-    // Shares the cache with the fused render, so opaque leaf meshes aren't
-    // recomputed just to tag them with a span. 2D picking is out of scope.
-    let provenance = if !mesh.tris.is_empty() && !quito_geom::is_2d(&out.node) {
+    // Provenance channel for editor↔preview linking — any model with geometry
+    // (2D flat meshes and 3D solids alike). Shares the cache with the fused
+    // render, so opaque leaf meshes aren't recomputed just to tag them with a
+    // span.
+    let provenance = if !mesh.tris.is_empty() {
         match quito_geom::render_provenance_cached(&out.node, &kernel, &mut cache) {
             Ok(g) => {
                 let (positions, normals, json) = quito_geom::provenance_channel(&g);

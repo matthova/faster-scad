@@ -47,6 +47,12 @@ const HIGHLIGHT_MATERIAL = new THREE.MeshBasicMaterial({
   side: THREE.DoubleSide,
 });
 
+/** Material for the off-scene pick mesh. Never rendered — only `raycast` reads
+ *  it, for `material.side`. `DoubleSide` so 2D flat meshes (whose triangles all
+ *  face +z) stay pickable when the plane is viewed from below (e.g. the `bottom`
+ *  preset or orbiting under z=0). */
+const PICK_MATERIAL = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide });
+
 export class Viewer {
   private renderer: THREE.WebGLRenderer;
   private scene: THREE.Scene;
@@ -254,7 +260,7 @@ export class Viewer {
   /** Register the per-statement provenance soup for this render. Builds the
    *  (off-scene) pick mesh used for model→code selection and code→model
    *  highlighting, and clears any stale highlight. Pass empty data to disable
-   *  picking (e.g. a 2D model, which has no provenance channel). */
+   *  picking (e.g. a model with no geometry, which has no provenance channel). */
   setProvenance(positions: Float32Array, normals: Float32Array, groups: ProvenanceGroup[]) {
     this.highlightSpan(null);
     this.pickGeometry?.dispose();
@@ -271,7 +277,7 @@ export class Viewer {
     // Not added to the scene (invisible); raycasting doesn't require scene
     // membership, only an up-to-date world matrix. The soup is already in world
     // coordinates, so the identity transform is correct.
-    this.pickMesh = new THREE.Mesh(geom);
+    this.pickMesh = new THREE.Mesh(geom, PICK_MATERIAL);
     this.pickMesh.updateMatrixWorld(true);
   }
 

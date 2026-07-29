@@ -2350,6 +2350,113 @@ mod tests {
         assert_eq!(groups[1].span, Some(5..13));
     }
 
+    // ---- 2D provenance (picking/highlighting parity with 3D) ----------------
+
+    #[test]
+    fn provenance_2d_transform_is_one_group_translated_at_z0() {
+        // `translate([2,0,0]) circle(3)` — a 2D leaf under an affine transform is
+        // one group with the outer span, its flat mesh translated +x and pinned to
+        // z=0 (the plane the flat mesh renders in).
+        let frags = FragmentSpec {
+            fn_: 32.0,
+            fa: 12.0,
+            fs: 2.0,
+        };
+        let outer = 0..24;
+        let node = prov(
+            outer.clone(),
+            Node::Translate {
+                v: [2.0, 0.0, 0.0],
+                child: Box::new(prov(13..22, Node::Circle { r: 3.0, frags })),
+            },
+        );
+        let mut cache = GeomCache::new();
+        let groups =
+            render_provenance_cached(&node, &RustManifoldKernel::new(), &mut cache).unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].span, Some(outer));
+        // Flat 2D mesh: every vertex sits on the z=0 plane.
+        assert!(
+            groups[0].mesh.verts.iter().all(|v| v[2].abs() < 1e-9),
+            "2D provenance mesh not flat at z=0"
+        );
+        // Translated +2 in x: a radius-3 circle now spans x ∈ [-1, 5].
+        let min_x = groups[0]
+            .mesh
+            .verts
+            .iter()
+            .map(|v| v[0])
+            .fold(f64::MAX, f64::min);
+        assert!(min_x >= -1.0 - 1e-6, "circle not translated: {min_x}");
+    }
+
+    #[test]
+    fn provenance_2d_difference_is_one_fused_group() {
+        // `difference(){ square(10); circle(4); }` — a 2D boolean is opaque, so the
+        // whole result is ONE group with the difference span (guards against a
+        // future contour-native path fragmenting it per-operand).
+        let frags = FragmentSpec {
+            fn_: 32.0,
+            fa: 12.0,
+            fs: 2.0,
+        };
+        let diff_span = 0..40;
+        let node = prov(
+            diff_span.clone(),
+            Node::Difference(vec![
+                prov(
+                    13..22,
+                    Node::Square {
+                        size: [10.0, 10.0],
+                        center: true,
+                    },
+                ),
+                prov(24..33, Node::Circle { r: 4.0, frags }),
+            ]),
+        );
+        let mut cache = GeomCache::new();
+        let groups =
+            render_provenance_cached(&node, &RustManifoldKernel::new(), &mut cache).unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].span, Some(diff_span));
+        // A real flat profile came through the 2D path: the 100-unit square with a
+        // ~16π bite taken out (the hole is a 32-gon, so a hair under π·16).
+        let area = flat_area(&groups[0].mesh);
+        assert!(
+            (area - (100.0 - 16.0 * std::f64::consts::PI)).abs() < 0.5,
+            "difference area {area}"
+        );
+    }
+
+    #[test]
+    fn provenance_2d_for_loop_instances_share_one_span() {
+        // A `for` loop unrolls into a Group of instances under ONE provenance span,
+        // so every instance is its own group but all carry the loop's span — they
+        // light up together.
+        let frags = FragmentSpec {
+            fn_: 16.0,
+            fa: 12.0,
+            fs: 2.0,
+        };
+        let loop_span = 0..30;
+        let instance = |x: f64| Node::Translate {
+            v: [x, 0.0, 0.0],
+            child: Box::new(Node::Circle { r: 1.0, frags }),
+        };
+        let node = prov(
+            loop_span.clone(),
+            Node::Group(vec![instance(0.0), instance(5.0), instance(10.0)]),
+        );
+        let mut cache = GeomCache::new();
+        let groups =
+            render_provenance_cached(&node, &RustManifoldKernel::new(), &mut cache).unwrap();
+        assert_eq!(groups.len(), 3);
+        assert!(
+            groups.iter().all(|g| g.span == Some(loop_span.clone())),
+            "all loop instances should share the loop span"
+        );
+    }
+
     #[test]
     fn to_3mf_colored_model_has_materials_and_objects() {
         let a = cube([1.0, 1.0, 1.0], false);
