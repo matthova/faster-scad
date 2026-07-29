@@ -12,6 +12,9 @@ export interface MeshInfo {
 /** A named camera orientation. */
 export type ViewPreset = "iso" | "front" | "back" | "top" | "bottom" | "right" | "left";
 
+/** Light/dark appearance, following the OS `prefers-color-scheme`. */
+export type ThemeMode = "light" | "dark";
+
 /** Camera projection: `perspective` (foreshortened) or `orthographic` (parallel,
  *  so an iso preset renders as a true isometric view). */
 export type Projection = "perspective" | "orthographic";
@@ -67,6 +70,9 @@ export class Viewer {
   private materials: THREE.Material[] = [];
   private hasFramed = false;
   private preset: ViewPreset = "iso";
+  /** The floor grid; rebuilt on theme change (GridHelper colors are fixed at
+   *  construction), so kept as a ref to remove/dispose the old one. */
+  private grid: THREE.GridHelper | null = null;
 
   // ---- provenance picking / highlighting ----
   private raycaster = new THREE.Raycaster();
@@ -96,7 +102,6 @@ export class Viewer {
     this.renderer.setPixelRatio(window.devicePixelRatio);
 
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x1a1d23);
 
     this.perspCamera = new THREE.PerspectiveCamera(45, 1, 0.01, 100000);
     this.perspCamera.up.set(0, 0, 1); // Z-up, like OpenSCAD
@@ -119,10 +124,12 @@ export class Viewer {
     this.scene.add(fill);
     this.scene.add(new THREE.AmbientLight(0xffffff, 0.5));
 
-    const grid = new THREE.GridHelper(200, 20, 0x3a3f4b, 0x2a2e37);
-    grid.rotation.x = Math.PI / 2; // grid in XY plane
-    this.scene.add(grid);
     this.scene.add(new THREE.AxesHelper(20));
+    // Background + grid colors follow the OS appearance; setTheme builds the
+    // initial grid so the first frame already matches the OS.
+    this.setTheme(
+      window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light",
+    );
 
     // Provenance picking: a click (not an orbit drag) selects the source
     // statement under the cursor. We arm on pointerdown and only fire on
@@ -173,6 +180,28 @@ export class Viewer {
     this.orthoCamera.left = -halfH * aspect;
     this.orthoCamera.right = halfH * aspect;
     this.orthoCamera.updateProjectionMatrix();
+  }
+
+  /** Apply the OS light/dark appearance to the scene: background color and the
+   *  floor grid. The grid is rebuilt (its colors are fixed at construction) and
+   *  the previous one disposed, so this is safe to call repeatedly on flips. */
+  setTheme(mode: ThemeMode) {
+    const dark = mode === "dark";
+    this.scene.background = new THREE.Color(dark ? 0x1a1d23 : 0xf3f3f3);
+    if (this.grid) {
+      this.scene.remove(this.grid);
+      this.grid.geometry.dispose();
+      (this.grid.material as THREE.Material).dispose();
+    }
+    const grid = new THREE.GridHelper(
+      200,
+      20,
+      dark ? 0x3a3f4b : 0xc8c8c8,
+      dark ? 0x2a2e37 : 0xe0e0e0,
+    );
+    grid.rotation.x = Math.PI / 2; // grid in XY plane
+    this.grid = grid;
+    this.scene.add(grid);
   }
 
   /** Remove and dispose the current mesh, its geometry, and its material(s). */

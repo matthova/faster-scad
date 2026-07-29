@@ -1,4 +1,7 @@
-:root {
+/* Palettes are attribute-scoped; :root stays dark so first paint (before JS
+   sets data-theme) matches today's dark default. App.tsx follows the OS. */
+:root,
+:root[data-theme="dark"] {
   color-scheme: dark;
   --bg: #14161b;
   --panel: #1a1d23;
@@ -7,6 +10,19 @@
   --muted: #9aa0aa;
   --accent: #f5a623;
   --err: #ff6b6b;
+  --warn: #e0b341;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #ffffff;
+  --panel: #f3f3f3;
+  --border: #d4d4d4;
+  --text: #1e1e1e;
+  --muted: #6b6b6b;
+  --accent: #d97706;
+  --err: #d32f2f;
+  --warn: #b7791f;
 }
 
 * {
@@ -54,7 +70,7 @@ body {
 }
 
 .actions button {
-  background: #23272f;
+  background: var(--panel);
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -102,7 +118,7 @@ body {
 }
 
 .examples-select {
-  background: #23272f;
+  background: var(--panel);
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -167,10 +183,10 @@ body {
   margin-right: -2px;
 }
 .tab-diag.error {
-  color: #e5484d;
+  color: var(--err);
 }
 .tab-diag.warn {
-  color: #f5a623;
+  color: var(--warn);
 }
 .tab-close {
   border: 0;
@@ -404,16 +420,16 @@ body {
   word-break: break-word;
 }
 .console-line.error {
-  color: #ff6b6b;
+  color: var(--err);
 }
 .console-line.warn {
-  color: #e0b341;
+  color: var(--warn);
 }
 .console-line.echo {
-  color: var(--fg, #ccc);
+  color: var(--text);
 }
 .console-line.muted {
-  color: #777;
+  color: var(--muted);
 }
 
 .console-toggle {
@@ -421,8 +437,8 @@ body {
   padding: 2px 8px;
 }
 .console-toggle.alert {
-  border-color: #e0b341;
-  color: #e0b341;
+  border-color: var(--warn);
+  color: var(--warn);
 }
 
 .statusbar {

@@ -1,16 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import { EditorView, keymap } from "@codemirror/view";
-import { EditorState } from "@codemirror/state";
+import { EditorState, Compartment } from "@codemirror/state";
+import { syntaxHighlighting } from "@codemirror/language";
 import { setDiagnostics, type Diagnostic } from "@codemirror/lint";
 import { basicSetup } from "codemirror";
 import { indentWithTab } from "@codemirror/commands";
 import { openscad } from "./lang/openscad";
+import { darkTheme, lightTheme, darkHighlight, lightHighlight } from "./lang/theme";
 import {
   Viewer,
   type MeshInfo,
   type ViewPreset,
   type PreviewGroup,
   type ProvenanceGroup,
+  type ThemeMode,
 } from "./viewer";
 import { Engine, export2dBrowser } from "./engine";
 import type { RenderResponse } from "./engineWorker";
@@ -60,6 +63,19 @@ const TAURI = isTauri();
 
 // Base URL for bundled libraries (public/lib/…), resolved against the page.
 const LIB_BASE = new URL("lib/", document.baseURI).href;
+
+/** The current OS appearance from `prefers-color-scheme`. */
+function currentMode(): ThemeMode {
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+/** Editor theme + syntax-highlighting extensions for a given appearance. Placed
+ *  after `basicSetup` so this style beats its `{fallback:true}` default. */
+function themeExts(mode: ThemeMode) {
+  return mode === "dark"
+    ? [darkTheme, syntaxHighlighting(darkHighlight)]
+    : [lightTheme, syntaxHighlighting(lightHighlight)];
+}
 
 // The first file is always the rendered "main"; the rest are libraries that
 // main can `use`/`include`.
@@ -201,6 +217,9 @@ export function App() {
     groups: [],
   });
   const debounceTimer = useRef<number | undefined>(undefined);
+  // Editor theme lives in a Compartment so it can be reconfigured live when the
+  // OS appearance flips, without recreating the editor.
+  const themeComp = useRef(new Compartment());
   // Provenance groups from the last render, for editor↔preview linking (the
   // viewer owns the pick geometry; this resolves the cursor → span, code→model).
   const provenanceRef = useRef<ProvenanceGroup[]>([]);
@@ -268,6 +287,8 @@ export function App() {
   const [dims, setDims] = useState<MeshInfo | null>(null);
   const [ortho, setOrtho] = useState(false);
   const [linkHighlight, setLinkHighlight] = useState(linkHighlightRef.current);
+  // OS light/dark appearance. Auto-follows `prefers-color-scheme`; no toggle.
+  const [mode, setMode] = useState<ThemeMode>(currentMode);
   const [time, setTime] = useState(sharedAnim?.t ?? 0);
   const [playing, setPlaying] = useState(sharedAnim?.playing ?? false);
   const [fps, setFps] = useState(sharedAnim?.fps ?? 15);
@@ -406,10 +427,9 @@ export function App() {
             indentWithTab,
           ]),
           openscad(),
-          EditorView.theme({
-            "&": { height: "100%", fontSize: "13px" },
-            ".cm-scroller": { fontFamily: "ui-monospace, Menlo, monospace" },
-          }),
+          // After basicSetup so our HighlightStyle beats the fallback default.
+          // Reconfigured live by the [mode] effect below.
+          themeComp.current.of(themeExts(currentMode())),
           EditorView.updateListener.of((u) => {
             if (u.docChanged && !suppressRef.current) {
               const idx = activeRef.current;
@@ -513,6 +533,28 @@ export function App() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Follow the OS appearance: subscribe once to prefers-color-scheme and mirror
+  // changes into `mode`. The [mode] effect below propagates them everywhere.
+  useEffect(() => {
+    const mql = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = () => setMode(currentMode());
+    mql.addEventListener("change", onChange);
+    return () => mql.removeEventListener("change", onChange);
+  }, []);
+
+  // Apply the current appearance to the document, the editor (via the theme
+  // Compartment), and the 3D viewer. Runs on mount and every flip. Declared
+  // after the mount effect so viewRef/viewerRef are already set on the first
+  // flip; the no-op guard covers the (unlikely) pre-mount case.
+  useEffect(() => {
+    document.documentElement.dataset.theme = mode;
+    document.documentElement.style.colorScheme = mode;
+    viewerRef.current?.setTheme(mode);
+    if (viewRef.current) {
+      viewRef.current.dispatch({ effects: themeComp.current.reconfigure(themeExts(mode)) });
+    }
+  }, [mode]);
 
   // Animation driver: while playing, advance $t one frame every 1000/fps ms,
   // wrapping after `steps` frames ($t = frame/steps, matching OpenSCAD). Frames
