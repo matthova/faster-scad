@@ -970,7 +970,12 @@ impl Interp<'_> {
         for (k, v) in bound {
             self.set_var(&k, v);
         }
-        self.set_var("$children", Value::Number(children.len() as f64));
+        // `$children` counts child *slots*, not raw statements: assignments and
+        // definitions inside the child block are scoped locals, and bare blocks
+        // are transparent (see `collect_child_slots`).
+        let mut slots = Vec::new();
+        collect_child_slots(children, &mut slots);
+        self.set_var("$children", Value::Number(slots.len() as f64));
         self.children_stack
             .push((children.to_vec(), caller_scopes, self.in_main));
         // The body's spans index into the file the module was defined in, so only
@@ -1038,9 +1043,17 @@ impl Interp<'_> {
             match idxs {
                 None => Ok(Node::group(self.eval_stmts(&kids)?)),
                 Some(idxs) => {
+                    // Indexed `children(i)` skips the whole-block evaluation, so
+                    // first hoist the block's scoped locals (assignments and
+                    // definitions) — a selected child may reference a variable
+                    // defined earlier in the same child block, e.g. BOSL2's
+                    // `attachable(){ x = ..; shape(x); children(); }`.
+                    self.eval_defs_and_assigns(&kids)?;
+                    let mut slots = Vec::new();
+                    collect_child_slots(&kids, &mut slots);
                     let mut out = Vec::new();
                     for i in idxs {
-                        if let Some(stmt) = kids.get(i) {
+                        if let Some(stmt) = slots.get(i) {
                             out.extend(self.eval_geom(&stmt.node)?);
                         }
                     }
@@ -1294,11 +1307,12 @@ impl Interp<'_> {
 
     fn b_linear_extrude(&mut self, args: &[Arg], children: &[Spanned<Stmt>]) -> EResult<Node> {
         let m = self.bind_named(&["height"], args)?;
-        let height = m
-            .get("height")
-            .or_else(|| m.get("h"))
-            .and_then(Value::as_number)
-            .unwrap_or(100.0);
+        // OpenSCAD's `linear_extrude` only accepts `height` (named or first
+        // positional) — `h` is NOT an alias. Passing `h=` leaves height unset,
+        // so it falls back to the default of 100 (OpenSCAD warns "variable h not
+        // specified as parameter" and does the same). Accepting `h` here would
+        // silently disagree with OpenSCAD, e.g. BOSL2-style `linear_extrude(h=x)`.
+        let height = m.get("height").and_then(Value::as_number).unwrap_or(100.0);
         let center = m.get("center").map(Value::truthy).unwrap_or(false);
         let twist = m.get("twist").and_then(Value::as_number).unwrap_or(0.0);
         let scale = match m.get("scale") {
@@ -1322,6 +1336,50 @@ impl Interp<'_> {
             })
             .max(1);
         let child = Box::new(Node::group(self.eval_children(children)?));
+        // `v`: extrude the profile along a direction vector instead of straight
+        // up Z. OpenSCAD places the top profile at `height * normalize(v)`,
+        // forming an oblique prism — equivalent to a straight extrude of the
+        // vector's z-extent followed by a z→xy shear.
+        let v = m.get("v").and_then(|val| match val {
+            Value::Vector(c) => {
+                let g = |i: usize| c.get(i).and_then(Value::as_number).unwrap_or(0.0);
+                Some([g(0), g(1), g(2)])
+            }
+            _ => None,
+        });
+        if let Some(v) = v {
+            let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+            if len > 1e-12 {
+                let d = [
+                    height * v[0] / len,
+                    height * v[1] / len,
+                    height * v[2] / len,
+                ];
+                let hz = d[2];
+                if hz.abs() > 1e-9 {
+                    let ext = Node::LinearExtrude {
+                        height: hz,
+                        center,
+                        twist,
+                        scale,
+                        slices,
+                        child,
+                    };
+                    // Shear: a point at height z is displaced in xy by
+                    // (dx, dy) * (z / hz), so the top (z = hz) lands at (dx, dy).
+                    let m4 = [
+                        [1.0, 0.0, d[0] / hz, 0.0],
+                        [0.0, 1.0, d[1] / hz, 0.0],
+                        [0.0, 0.0, 1.0, 0.0],
+                        [0.0, 0.0, 0.0, 1.0],
+                    ];
+                    return Ok(Node::MultMatrix {
+                        m: m4,
+                        child: Box::new(ext),
+                    });
+                }
+            }
+        }
         Ok(Node::LinearExtrude {
             height,
             center,
@@ -2692,6 +2750,26 @@ fn lookup(args: &[Value]) -> Value {
 }
 
 /// `search(find, list, num_returns=1, index=0)`.
+/// Collect the child *instantiations* a child block exposes to its parent
+/// module (for `$children` counting and `children(i)` indexing), matching
+/// OpenSCAD: assignments and `module`/`function`/`use`/`include` statements are
+/// scoped locals rather than children, and a bare `{ ... }` block is
+/// transparent — its statements splice into the parent's child list. Everything
+/// else (`module` calls, `for`, `if`, `let`) counts as exactly one child.
+fn collect_child_slots<'a>(kids: &'a [Spanned<Stmt>], out: &mut Vec<&'a Spanned<Stmt>>) {
+    for k in kids {
+        match &k.node {
+            Stmt::Assign { .. }
+            | Stmt::ModuleDef { .. }
+            | Stmt::FunctionDef { .. }
+            | Stmt::Use { .. }
+            | Stmt::Include { .. } => {}
+            Stmt::Block(inner) => collect_child_slots(inner, out),
+            _ => out.push(k),
+        }
+    }
+}
+
 fn search(args: &[Value]) -> Value {
     let Some(find) = args.first() else {
         return Value::Undef;
@@ -2757,6 +2835,20 @@ fn search(args: &[Value]) -> Value {
                 .collect(),
         ),
         // A string searches per character; a list searches per element.
+        // With the default `num_returns == 1`, OpenSCAD collapses a string
+        // search to a flat list of first-match indices and *omits* characters
+        // that are not found (`search("abe","abcdabcd") == [0,1]`, the missing
+        // `e` produces no entry) — unlike a list needle, which keeps an empty
+        // `[]` placeholder. Any other `num_returns` keeps the per-char sublists.
+        Value::Str(s) if num_returns == 1 => value::vector(
+            s.chars()
+                .filter_map(|c| {
+                    match_indices(&Value::Str(c.to_string()))
+                        .first()
+                        .map(|i| Value::Number(*i as f64))
+                })
+                .collect(),
+        ),
         Value::Str(s) => value::vector(
             s.chars()
                 .map(|c| pack(match_indices(&Value::Str(c.to_string()))))

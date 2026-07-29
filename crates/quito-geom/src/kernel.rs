@@ -198,6 +198,11 @@ mod manifold_backend {
     }
 
     fn to_manifold(m: &Mesh) -> Result<Manifold, GeomError> {
+        // Weld coincident-but-unshared vertices first: many BOSL2 primitives emit
+        // revolution seams and cap rings as duplicate vertices, leaving the mesh
+        // manifold by position but not by index. The kernel needs shared edges.
+        let welded = m.welded(1e-7);
+        let m = &welded;
         let mut props: Vec<f64> = Vec::with_capacity(m.verts.len() * 3);
         for v in &m.verts {
             props.extend_from_slice(v);

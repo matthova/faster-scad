@@ -8,7 +8,10 @@ test_is_hexdigit
 test_is_letter
 test_is_lower
 test_is_upper
+test_parse_float
+test_parse_frac
 test_parse_int
+test_parse_num
 test_rand_str
 test_starts_with
 test_str_find

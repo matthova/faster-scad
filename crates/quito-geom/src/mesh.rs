@@ -62,6 +62,47 @@ impl Mesh {
         Some((lo, hi))
     }
 
+    /// Weld vertices whose positions coincide within `eps`, returning a
+    /// re-indexed mesh with collapsed (zero-area) triangles dropped.
+    ///
+    /// BOSL2 solids of revolution and swept profiles (`cyl` with chamfer/
+    /// rounding, `rotate_extrude`, `path_sweep`, …) emit the revolution seam and
+    /// the cap/wall rings as *separate* vertices at identical positions. The raw
+    /// mesh is then manifold by position but not by index — its shared edges
+    /// reference distinct vertex ids — which the CSG kernel rejects as
+    /// non-manifold. OpenSCAD's exact kernel treats coincident points as one;
+    /// welding here restores that so the mesh survives a boolean.
+    pub fn welded(&self, eps: f64) -> Mesh {
+        let inv = 1.0 / eps;
+        let key = |p: &[f64; 3]| {
+            [
+                (p[0] * inv).round() as i64,
+                (p[1] * inv).round() as i64,
+                (p[2] * inv).round() as i64,
+            ]
+        };
+        let mut map: std::collections::HashMap<[i64; 3], u32> = std::collections::HashMap::new();
+        let mut verts: Vec<[f64; 3]> = Vec::with_capacity(self.verts.len());
+        let mut remap: Vec<u32> = Vec::with_capacity(self.verts.len());
+        for v in &self.verts {
+            let id = *map.entry(key(v)).or_insert_with(|| {
+                verts.push(*v);
+                (verts.len() - 1) as u32
+            });
+            remap.push(id);
+        }
+        let mut tris: Vec<[u32; 3]> = Vec::with_capacity(self.tris.len());
+        for t in &self.tris {
+            let a = remap[t[0] as usize];
+            let b = remap[t[1] as usize];
+            let c = remap[t[2] as usize];
+            if a != b && b != c && a != c {
+                tris.push([a, b, c]);
+            }
+        }
+        Mesh { verts, tris }
+    }
+
     /// Reverse triangle winding if the signed volume is negative, guaranteeing
     /// outward-facing normals for a consistently-oriented closed mesh.
     pub fn ensure_outward(&mut self) {
