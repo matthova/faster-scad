@@ -27,8 +27,9 @@ interface NativeResult {
   previewPositions: number[];
   previewNormals: number[];
   groups: string;
-  // Provenance channel — not yet produced by the native backend; picking is a
-  // web/VS Code feature for now, so these are optional and default to empty.
+  // Provenance channel for editor↔preview linking (picking + highlight). The
+  // native backend populates these for any model with geometry; kept optional so
+  // an older shell that predates the channel still deserializes cleanly.
   provenancePositions?: number[];
   provenanceNormals?: number[];
   provenance?: string;
