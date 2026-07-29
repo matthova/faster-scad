@@ -76,6 +76,12 @@ struct RenderResult {
     preview_positions: Vec<f32>,
     preview_normals: Vec<f32>,
     groups: String,
+    /// Provenance channel for editor↔preview linking (2D and 3D alike): a
+    /// concatenated per-statement triangle soup plus a JSON array of per-group
+    /// `{start,count,span}` ranges. Empty only for models with no geometry.
+    provenance_positions: Vec<f32>,
+    provenance_normals: Vec<f32>,
+    provenance: String,
     /// `$vp*` viewport variables as JSON (only when the source references `$vp`).
     viewport: String,
 }
@@ -135,7 +141,9 @@ impl FileResolver for DiskResolver {
     }
 
     fn load_bytes(&self, path: &str, from_dir: &str) -> Option<Vec<u8>> {
-        self.candidates(path, from_dir).into_iter().find_map(|c| std::fs::read(&c).ok())
+        self.candidates(path, from_dir)
+            .into_iter()
+            .find_map(|c| std::fs::read(&c).ok())
     }
 }
 
@@ -155,8 +163,15 @@ impl FileResolver for CombinedResolver {
         };
         for key in [path, joined.as_str()] {
             if let Some(source) = self.files.get(key) {
-                let dir = key.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default();
-                return Some(LoadedFile { key: key.to_string(), source: source.clone(), dir });
+                let dir = key
+                    .rsplit_once('/')
+                    .map(|(d, _)| d.to_string())
+                    .unwrap_or_default();
+                return Some(LoadedFile {
+                    key: key.to_string(),
+                    source: source.clone(),
+                    dir,
+                });
             }
         }
         self.disk.load(path, from_dir)
@@ -183,7 +198,8 @@ fn overrides(names: &[String], values: &[String]) -> Vec<(String, quito_eval::Va
         .iter()
         .zip(values)
         .filter_map(|(n, v)| {
-            quito_syntax::customizer::parse_value(v).map(|pv| (n.clone(), quito_eval::value_from_param(&pv)))
+            quito_syntax::customizer::parse_value(v)
+                .map(|pv| (n.clone(), quito_eval::value_from_param(&pv)))
         })
         .collect()
 }
@@ -207,11 +223,16 @@ fn eval_and_render(
         }
     })?;
     let resolver = CombinedResolver {
-        files: file_names.iter().cloned().zip(file_contents.iter().cloned()).collect(),
+        files: file_names
+            .iter()
+            .cloned()
+            .zip(file_contents.iter().cloned())
+            .collect(),
         disk: DiskResolver::new(),
     };
-    let out = quito_eval::eval_program_with_params(&program, &resolver, dir, &overrides(names, values))
-        .map_err(|e| EngineError {
+    let out =
+        quito_eval::eval_program_with_params(&program, &resolver, dir, &overrides(names, values))
+            .map_err(|e| EngineError {
             message: format!("evaluation error: {}", e.message),
             diagnostic: quito_eval::eval_error_diagnostic(&e),
         })?;
@@ -247,7 +268,15 @@ fn render(
     let dir = dir.unwrap_or_else(|| ".".to_string());
     let work = move || {
         let params = quito_syntax::customizer::extract(&source).to_json();
-        match eval_and_render(&cache, &source, &dir, &param_names, &param_values, &file_names, &file_contents) {
+        match eval_and_render(
+            &cache,
+            &source,
+            &dir,
+            &param_names,
+            &param_values,
+            &file_names,
+            &file_contents,
+        ) {
             Ok((mesh, out, is_2d, geom_warnings)) => {
                 let (positions, normals) = mesh.to_triangle_soup_f32();
                 let diagnostics = quito_eval::diagnostics_json(None, &out.warnings);
@@ -258,6 +287,21 @@ fn render(
                         let mut cache = cache.lock().unwrap();
                         match quito_geom::render_groups_cached(&out.node, &kernel, &mut cache) {
                             Ok(g) => quito_geom::preview_channel(&g),
+                            Err(_) => Default::default(),
+                        }
+                    } else {
+                        Default::default()
+                    };
+                // Provenance channel for editor↔preview linking — any model with
+                // geometry (2D flat meshes and 3D solids alike). Shares the cache
+                // with the fused render above, so opaque leaf meshes aren't
+                // recomputed just to tag them with a span.
+                let (provenance_positions, provenance_normals, provenance) =
+                    if !mesh.tris.is_empty() {
+                        let kernel = quito_geom::ManifoldKernel::new();
+                        let mut cache = cache.lock().unwrap();
+                        match quito_geom::render_provenance_cached(&out.node, &kernel, &mut cache) {
+                            Ok(g) => quito_geom::provenance_channel(&g),
                             Err(_) => Default::default(),
                         }
                     } else {
@@ -291,6 +335,9 @@ fn render(
                     preview_positions,
                     preview_normals,
                     groups,
+                    provenance_positions,
+                    provenance_normals,
+                    provenance,
                     viewport,
                 }
             }
@@ -326,10 +373,17 @@ fn save_model(
         // 2D vector formats need the exact contours, not the flat mesh.
         if format == "dxf" || format == "svg" {
             let program = quito_syntax::parse(&source).map_err(|e| {
-                format!("parse error: {} (at {}..{})", e.message, e.span.start, e.span.end)
+                format!(
+                    "parse error: {} (at {}..{})",
+                    e.message, e.span.start, e.span.end
+                )
             })?;
             let resolver = CombinedResolver {
-                files: file_names.iter().cloned().zip(file_contents.iter().cloned()).collect(),
+                files: file_names
+                    .iter()
+                    .cloned()
+                    .zip(file_contents.iter().cloned())
+                    .collect(),
                 disk: DiskResolver::new(),
             };
             let out = quito_eval::eval_program_with_params(
@@ -403,7 +457,10 @@ where
     F: Fn(String) + Send + 'static,
 {
     let t = std::fs::canonicalize(target).unwrap_or_else(|_| target.to_path_buf());
-    let parent = t.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+    let parent = t
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
     let target = t.clone();
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         // React to any change touching our file (event kinds vary by platform —
@@ -449,7 +506,10 @@ where
 fn canonical(path: &str) -> PathBuf {
     let pb = PathBuf::from(path);
     std::fs::canonicalize(&pb).unwrap_or_else(|_| {
-        match (pb.parent().and_then(|p| std::fs::canonicalize(p).ok()), pb.file_name()) {
+        match (
+            pb.parent().and_then(|p| std::fs::canonicalize(p).ok()),
+            pb.file_name(),
+        ) {
             (Some(dir), Some(name)) => dir.join(name),
             _ => pb,
         }
@@ -465,7 +525,13 @@ fn spawn_watcher(
     let app = app.clone();
     let emit_path = path.to_string();
     match install_watcher(&PathBuf::from(path), last_write, move |content| {
-        let _ = app.emit("file-changed", FileChanged { path: emit_path.clone(), content });
+        let _ = app.emit(
+            "file-changed",
+            FileChanged {
+                path: emit_path.clone(),
+                content,
+            },
+        );
     }) {
         Ok(w) => Some(w),
         Err(e) => {
@@ -486,9 +552,14 @@ fn open_file(
 ) -> Result<OpenedFile, String> {
     let content = std::fs::read_to_string(&path).map_err(|e| format!("open {path}: {e}"))?;
     let pb = PathBuf::from(&path);
-    let dir = pb.parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default();
-    let name =
-        pb.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "untitled.scad".into());
+    let dir = pb
+        .parent()
+        .map(|d| d.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let name = pb
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "untitled.scad".into());
 
     // Opening a file starts a fresh project, so replace any existing watchers.
     let mut ws = state.watchers.lock().unwrap();
@@ -496,7 +567,12 @@ fn open_file(
     if let Some(w) = spawn_watcher(&app, state.last_write.clone(), &path) {
         ws.push(w);
     }
-    Ok(OpenedFile { path, name, dir, content })
+    Ok(OpenedFile {
+        path,
+        name,
+        dir,
+        content,
+    })
 }
 
 /// Write UTF-8 source text to `path` (⌘S / Save As). Records a self-write marker
@@ -573,12 +649,21 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::
         .quit()
         .build()?;
 
-    let new_item = MenuItemBuilder::with_id("new", "New").accelerator("CmdOrCtrl+N").build(app)?;
-    let open = MenuItemBuilder::with_id("open", "Open…").accelerator("CmdOrCtrl+O").build(app)?;
-    let save = MenuItemBuilder::with_id("save", "Save").accelerator("CmdOrCtrl+S").build(app)?;
-    let save_as =
-        MenuItemBuilder::with_id("save-as", "Save As…").accelerator("CmdOrCtrl+Shift+S").build(app)?;
-    let export = MenuItemBuilder::with_id("export", "Export…").accelerator("CmdOrCtrl+E").build(app)?;
+    let new_item = MenuItemBuilder::with_id("new", "New")
+        .accelerator("CmdOrCtrl+N")
+        .build(app)?;
+    let open = MenuItemBuilder::with_id("open", "Open…")
+        .accelerator("CmdOrCtrl+O")
+        .build(app)?;
+    let save = MenuItemBuilder::with_id("save", "Save")
+        .accelerator("CmdOrCtrl+S")
+        .build(app)?;
+    let save_as = MenuItemBuilder::with_id("save-as", "Save As…")
+        .accelerator("CmdOrCtrl+Shift+S")
+        .build(app)?;
+    let export = MenuItemBuilder::with_id("export", "Export…")
+        .accelerator("CmdOrCtrl+E")
+        .build(app)?;
     let file = SubmenuBuilder::new(app, "File")
         .item(&new_item)
         .item(&open)
@@ -599,11 +684,14 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::
         .select_all()
         .build()?;
 
-    let reset_view =
-        MenuItemBuilder::with_id("reset-view", "Reset View").accelerator("CmdOrCtrl+0").build(app)?;
+    let reset_view = MenuItemBuilder::with_id("reset-view", "Reset View")
+        .accelerator("CmdOrCtrl+0")
+        .build(app)?;
     let view = SubmenuBuilder::new(app, "View").item(&reset_view).build()?;
 
-    MenuBuilder::new(app).items(&[&app_menu, &file, &edit, &view]).build()
+    MenuBuilder::new(app)
+        .items(&[&app_menu, &file, &edit, &view])
+        .build()
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -653,7 +741,9 @@ pub fn run() {
         if let tauri::RunEvent::Opened { urls } = _event {
             use tauri::Manager;
             for url in urls {
-                let Ok(path) = url.to_file_path() else { continue };
+                let Ok(path) = url.to_file_path() else {
+                    continue;
+                };
                 if path.extension().and_then(|e| e.to_str()) == Some("scad") {
                     let p = path.to_string_lossy().into_owned();
                     *_app_handle.state::<AppState>().pending_open.lock().unwrap() = Some(p.clone());
@@ -679,13 +769,17 @@ mod tests {
         // Eval error (assert) → still surfaced, with the offending statement span.
         let e = eval_and_render(&cache, "assert(false);", ".", &[], &[], &[], &[]).unwrap_err();
         assert!(e.message.starts_with("evaluation error"));
-        assert!(e.diagnostic.start >= 0, "eval error should carry a statement span");
+        assert!(
+            e.diagnostic.start >= 0,
+            "eval error should carry a statement span"
+        );
     }
 
     #[test]
     fn native_render_command_logic() {
         let cache = Arc::new(Mutex::new(quito_geom::GeomCache::new()));
-        let (mesh, _, _, _) = eval_and_render(&cache, "cube([2,3,4]);", ".", &[], &[], &[], &[]).unwrap();
+        let (mesh, _, _, _) =
+            eval_and_render(&cache, "cube([2,3,4]);", ".", &[], &[], &[], &[]).unwrap();
         assert!((mesh.volume() - 24.0).abs() < 1e-6);
 
         // Overrides apply, like the customizer.
@@ -714,6 +808,27 @@ mod tests {
         )
         .unwrap();
         assert!((mesh.volume() - 27.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn native_render_produces_provenance_channel() {
+        // The native backend feeds editor↔preview picking/highlighting the same
+        // provenance channel the wasm engine does. Exercise the exact wiring the
+        // `render` command uses (render_provenance_cached → provenance_channel)
+        // for both a 3D solid and a 2D shape.
+        for src in ["cube(2); translate([5,0,0]) sphere(2);", "square(4);"] {
+            let cache = Arc::new(Mutex::new(quito_geom::GeomCache::new()));
+            let (mesh, out, _, _) = eval_and_render(&cache, src, ".", &[], &[], &[], &[]).unwrap();
+            assert!(!mesh.tris.is_empty(), "{src} produced no geometry");
+            let kernel = quito_geom::ManifoldKernel::new();
+            let groups = {
+                let mut c = cache.lock().unwrap();
+                quito_geom::render_provenance_cached(&out.node, &kernel, &mut c).unwrap()
+            };
+            let (positions, _normals, json) = quito_geom::provenance_channel(&groups);
+            assert!(!positions.is_empty(), "{src} produced no provenance soup");
+            assert!(json.contains("\"span\":["), "{src} provenance json: {json}");
+        }
     }
 
     #[test]
@@ -804,7 +919,10 @@ mod tests {
         };
 
         std::fs::remove_dir_all(&dir).ok();
-        assert!(!self_seen, "watcher wrongly reported the self-write as an external edit");
+        assert!(
+            !self_seen,
+            "watcher wrongly reported the self-write as an external edit"
+        );
         assert!(ext_seen, "watcher did not report the later external change");
     }
 }
