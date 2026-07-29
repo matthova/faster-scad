@@ -1,7 +1,7 @@
 # Quito OpenSCAD — VS Code extension
 
 OpenSCAD language support and a live 3D preview, powered by the
-[Quito](https://github.com/quito-cad/quito) engine.
+<a href="https://github.com/quito-cad/quito" target="_blank" rel="noopener noreferrer">Quito</a> engine.
 
 ## Features
 

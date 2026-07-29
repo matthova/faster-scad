@@ -28,7 +28,7 @@ cargo build --release -p quito-cli    # → target/release/quito
 
 ### Watch recipes
 
-**[`watchexec`](https://github.com/watchexec/watchexec)** (any editor):
+**<a href="https://github.com/watchexec/watchexec" target="_blank" rel="noopener noreferrer">`watchexec`</a>** (any editor):
 
 ```sh
 watchexec -e scad -- ./target/release/quito model.scad -o model.stl
@@ -36,14 +36,14 @@ watchexec -e scad -- ./target/release/quito model.scad -o model.stl
 watchexec -e scad -- ./target/release/quito model.scad -o preview.png --imgsize 900,700
 ```
 
-**[`entr`](https://eradman.com/entrproject/):**
+**<a href="https://eradman.com/entrproject/" target="_blank" rel="noopener noreferrer">`entr`</a>:**
 
 ```sh
 ls *.scad | entr ./target/release/quito /_ -o model.stl
 ```
 
 **VS Code task** (`.vscode/tasks.json`) — build on every save via the
-[Trigger Task on Save](https://marketplace.visualstudio.com/items?itemName=Gruntfuggly.triggertaskonsave)
+<a href="https://marketplace.visualstudio.com/items?itemName=Gruntfuggly.triggertaskonsave" target="_blank" rel="noopener noreferrer">Trigger Task on Save</a>
 extension, or run once with **Run Task → Quito: render**:
 
 ```json
@@ -78,8 +78,8 @@ vim.api.nvim_create_autocmd("BufWritePost", {
 - **PNG** (`-o preview.png`): open in any auto-refreshing image viewer. Frame with
   `--imgsize W,H`, `--camera …`, `--projection ortho`, `--viewall`.
 - **STL/3MF**: any hot-reloading mesh viewer, e.g.
-  [`f3d`](https://f3d.app/) (`f3d model.stl`) or the VS Code
-  [3D Viewer](https://marketplace.visualstudio.com/items?itemName=slevesque.vscode-3dviewer)
+  <a href="https://f3d.app/" target="_blank" rel="noopener noreferrer">`f3d`</a> (`f3d model.stl`) or the VS Code
+  <a href="https://marketplace.visualstudio.com/items?itemName=slevesque.vscode-3dviewer" target="_blank" rel="noopener noreferrer">3D Viewer</a>
   extension.
 
 `include`/`use` resolve relative to the input file and each `OPENSCADPATH`
@@ -93,7 +93,7 @@ directory, exactly like OpenSCAD.
 
 ## 2. `quito-lsp` language server
 
-`quito-lsp` speaks the [Language Server Protocol](https://microsoft.github.io/language-server-protocol/)
+`quito-lsp` speaks the <a href="https://microsoft.github.io/language-server-protocol/" target="_blank" rel="noopener noreferrer">Language Server Protocol</a>
 over stdio, so one server works across VS Code, Neovim, Helix, Zed, Emacs, and
 any other LSP client. It provides:
 
