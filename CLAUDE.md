@@ -4,97 +4,86 @@ Quito is a clean-room OpenSCAD reimplementation in Rust. Before writing any
 code, read [CONTRIBUTING.md](CONTRIBUTING.md) — the **clean-room policy is
 mandatory** (never read or paraphrase OpenSCAD's GPL source).
 
-## Commit messages are load-bearing
+## Changesets are load-bearing
 
-Releases are cut by **release-please**, which parses Conventional Commits to
-decide the next version and to write `CHANGELOG.md`. A malformed subject line
-does not fail CI — it silently produces the wrong version or a missing changelog
-entry. Get it right at commit time.
+Releases are cut by **[changesets](https://github.com/changesets/changesets)**,
+not by parsing commit messages. Versioning is driven by `.changeset/*.md` files
+you add **in the same PR as your change**. A user-facing change that ships with
+no changeset does not fail CI — it silently lands with no changelog entry and no
+version bump. Get it right at PR time.
 
-Format:
+### Add a changeset
+
+From the repo root:
 
 ```
-type(scope): summary in the imperative mood
-
-Optional body explaining why, wrapped at ~72 chars.
-
-BREAKING CHANGE: only when the public API actually breaks.
+npx changeset
 ```
 
-### Type → effect
+Pick the bump, write a one-line **user-facing** summary. It writes a
+`.changeset/<name>.md` — commit it with your change. (You can also hand-write the
+file; see the format in existing ones / `.changeset/README.md`.) The summary is
+what lands verbatim in `CHANGELOG.md` and the GitHub Release notes, so write it
+for a reader, not a commit log.
 
-| type | changelog section | version bump (0.x) |
+### Picking the bump (we are pre-1.0)
+
+The whole repo shares **one** version, so the bump is repo-wide, not per-crate.
+
+| bump | pre-1.0 effect | use for |
 | --- | --- | --- |
-| `feat` (alias `feature`) | Features | **minor** — 0.1.1 → 0.2.0 |
-| `fix` | Bug Fixes | patch — 0.1.1 → 0.1.2 |
-| `perf` | Performance | patch |
-| `revert` | Reverts | patch |
-| `deps` | Dependencies | patch |
-| `docs` `refactor` `style` `test` `build` `ci` `chore` | hidden | none on their own |
+| `patch` | 0.2.0 → 0.2.1 | bug fixes, perf, dependency bumps |
+| `minor` | 0.2.0 → 0.3.0 | genuinely new capability — **and** any breaking change |
+| `major` | → 1.0.0 | do not use until we deliberately cut 1.0 |
 
 Two consequences worth internalizing:
 
-- **`feat` costs a minor version.** At 0.x that is the caret boundary for both
-  Cargo and npm, so `^0.1.0` consumers of `quito-engine` do not receive it
-  automatically. Use `fix` for bug fixes and `feat` only for genuinely new
-  capability. Do not reach for `feat` as a default.
-- **Hidden types cut no release.** A branch of only `docs:`/`chore:`/`ci:`
-  commits produces an empty changelog, and release-please skips the release PR
-  entirely ("No user facing commits found"). Mixed with a `feat`/`fix` they ride
-  along silently — present in history, absent from the changelog.
+- **`minor` costs the caret boundary.** At 0.x, `0.2.0 → 0.3.0` is the caret
+  boundary for both Cargo and npm, so `^0.2.0` consumers of `quito-engine` do not
+  receive it automatically. Reach for `patch` by default and `minor` only for
+  genuinely new or breaking behavior.
+- **Breaking changes are still `minor` pre-1.0.** Select `minor` and call the
+  break out in the summary. Do not select `major` — that jumps us to 1.0.0.
+- **No changeset = no release entry.** A PR of pure `docs`/`ci`/`test`/`refactor`
+  churn needs none. But a real fix or feature with no changeset rides in silently:
+  present in history, absent from the changelog, and it won't move the version.
 
-Breaking changes use `feat!:` or a `BREAKING CHANGE:` footer. Under 0.x that is
-still only a **minor** bump (`bump-minor-pre-major`), not a major.
+### Commit messages (no longer load-bearing)
 
-### Scopes
-
-Optional, but preferred. Existing scopes, roughly by frequency: `web`, `geom`,
-`desktop`, `eval`, `lsp`, `npm`, `ci`, `docs`, `release`. Also reasonable:
-`syntax`, `ir`, `cli`. Combine with a comma when a change genuinely spans
-crates — `feat(geom,web): …`.
-
-### The PR title is the commit message
-
-This repo squash-merges, and its squash title is `COMMIT_OR_PR_TITLE`: with
-**one** commit GitHub uses that commit's subject, with **several** it uses the
-**PR title**. Either way something you wrote gets parsed by release-please, so
-**write the PR title as a valid conventional commit too**. A PR titled
-"Fix the thing" squashed from three commits yields an unparseable subject and no
-changelog entry.
+Commit messages and PR titles no longer drive versioning, so a malformed subject
+can't produce the wrong bump. Keep the existing `type(scope): summary` house
+style anyway for a readable history — it's just no longer parsed. Scopes in use,
+roughly by frequency: `web`, `geom`, `desktop`, `eval`, `lsp`, `npm`, `ci`,
+`docs`, `release`; also `syntax`, `ir`, `cli`.
 
 ### Rules
 
-- Never hand-edit a `version` field. release-please owns them across
-  `Cargo.toml`, `Cargo.lock`, `desktop/src-tauri/{Cargo.toml,Cargo.lock,tauri.conf.json}`,
+- Never hand-edit a `version` field. `scripts/sync-versions.mjs` (run by
+  `npm run version`) owns them across `package.json` (root, canonical),
+  `Cargo.toml`, `Cargo.lock`,
+  `desktop/src-tauri/{Cargo.toml,Cargo.lock,tauri.conf.json}`,
   `desktop/{package.json,package-lock.json}`, and
-  `packages/npm/{package.json,package-lock.json}`. CI now *asserts* the tag
-  matches the tree, so a stray edit fails the release build.
-- Never author a `chore(main): release X.Y.Z` commit or PR. That shape is
-  release-please's, and hand-writing it confuses its release detection.
-- Never **Rebase and merge** the release PR. It is enabled on this repo but it
-  strips the PR association release-please uses to find the release commit —
-  the release is then skipped with only a log warning. Squash or merge commit.
-- To force a version, add a `Release-As: 1.0.0` footer to a commit on `main`.
+  `packages/npm/{package.json,package-lock.json}`. CI *asserts* the tag matches
+  the tree, so a stray edit fails the release build.
+- Never hand-run `changeset version` on a feature branch, and never hand-author a
+  `chore: version packages` commit or PR — that shape is the changesets action's.
+- The "Version Packages" PR keys the release on the committed version, not on any
+  PR association, so **any** merge style (squash, merge commit, or rebase) is
+  safe for it.
+- To force a specific version, add an empty `major`/`minor`/`patch` changeset (or
+  edit the pending one) so the bump lands where you want it.
 
-### Examples
+### Example changeset
 
-```
-feat(geom): support minkowski on non-convex 2D profiles
-fix(eval): resolve $children inside nested module instantiation
-perf(geom): cache tessellation across warm edits
-docs: document the mesh format in the engine README
-ci: pin wasm-pack to 0.13 in the publish workflow
-```
+`.changeset/curly-lions-cheer.md`:
 
 ```
-feat(engine)!: return RenderOutput instead of RenderResult
+---
+"quito-release-root": minor
+---
 
-BREAKING CHANGE: `render()` no longer hands back a wasm-owned object,
-so callers must stop calling `.free()`.
+support minkowski on non-convex 2D profiles
 ```
-
-Avoid: `Fix bug`, `update deps`, `WIP`, `feat: various improvements`,
-`chore(main): release 0.2.0`.
 
 The full release process, including the human-only steps, is in
 [docs/RELEASING.md](docs/RELEASING.md).

@@ -3,11 +3,11 @@ name: Publish engine to npm
 # Publishes the `quito-engine` npm package (the wasm build of crates/quito-wasm)
 # for an ALREADY-CREATED GitHub Release. Two entry points:
 #
-#   1. release-please (the normal path). release-please.yml dispatches this
-#      workflow with `--ref <tag> -f tag=<tag>` right after it cuts the Release.
-#      The `release: published` trigger below does NOT fire for release-please's
-#      Release — GitHub suppresses workflow triggers from GITHUB_TOKEN-authored
-#      events, and workflow_dispatch is the documented exception.
+#   1. changesets (the normal path). changesets.yml dispatches this workflow with
+#      `--ref <tag> -f tag=<tag>` right after it cuts the Release. The
+#      `release: published` trigger below does NOT fire for that Release — GitHub
+#      suppresses workflow triggers from GITHUB_TOKEN-authored events, and
+#      workflow_dispatch is the documented exception.
 #   2. `release: published` / manual dispatch (escape hatch), for a
 #      hand-published Release or a re-publish against an existing tag.
 #
@@ -17,9 +17,9 @@ name: Publish engine to npm
 # and the registration below is unchanged. On a public repo, provenance (a
 # sigstore attestation shown on the npm page) is emitted automatically.
 #
-# The version is NOT stamped here any more — release-please owns
-# [workspace.package] version and packages/npm/package.json, so the tagged commit
-# already carries the right version (this is also what makes the wasm's
+# The version is NOT stamped here any more — changesets + scripts/sync-versions.mjs
+# own [workspace.package] version and packages/npm/package.json, so the tagged
+# commit already carries the right version (this is also what makes the wasm's
 # version() truthful, since it compiles in CARGO_PKG_VERSION). The step below
 # only ASSERTS tag and tree agree.
 #
@@ -46,11 +46,11 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    # Ignore bot-authored release events: a release-please Release reaches this
-    # workflow via dispatch. If an App/PAT token is ever put on release-please.yml
-    # its Release would also fire `release: published`, and two concurrent runs
-    # would both pass the "already published?" check before either publishes,
-    # leaving the loser with a red E403.
+    # Ignore bot-authored release events: a changesets-cut Release reaches this
+    # workflow via dispatch. If an App/PAT token is ever put on changesets.yml its
+    # Release would also fire `release: published`, and two concurrent runs would
+    # both pass the "already published?" check before either publishes, leaving
+    # the loser with a red E403.
     if: >-
       github.event_name != 'release' ||
       github.event.release.author.login != 'github-actions[bot]'
@@ -116,12 +116,10 @@ jobs:
       - name: Update npm
         run: npm install -g npm@latest
 
-      # release-please owns the versions, so the tagged commit already carries
-      # them — no stamping. Assert instead: the wasm compiles CARGO_PKG_VERSION
-      # into version(), and package.json becomes the published version, so a
-      # mismatch here would ship a package whose version() disagrees with its own
-      # manifest. (Tags cut before release-please was adopted will fail this;
-      # that is intended — they predate the model.)
+      # changesets owns the versions, so the tagged commit already carries them —
+      # no stamping. Assert instead: the wasm compiles CARGO_PKG_VERSION into
+      # version(), and package.json becomes the published version, so a mismatch
+      # here would ship a package whose version() disagrees with its own manifest.
       - name: Assert in-repo versions match the release tag
         shell: bash
         run: |
@@ -134,7 +132,7 @@ jobs:
           [ "$CARGO" = "$V" ] || { echo "::error::Cargo.toml [workspace.package] version is $CARGO but the tag says $V."; fail=1; }
           [ "$PKG" = "$V" ]   || { echo "::error::packages/npm/package.json is $PKG but the tag says $V."; fail=1; }
           if [ "$fail" -ne 0 ]; then
-            echo "Versions are owned by release-please. Cut releases by merging its release PR, not by tagging by hand."
+            echo "Versions are owned by changesets. Cut releases by merging the Version Packages PR, not by tagging by hand."
             exit 1
           fi
           echo "Cargo.toml and packages/npm/package.json both report $V."
@@ -153,7 +151,7 @@ jobs:
           npm install
           npm run build:facade
 
-      # No `npm version` step: release-please already wrote the version into
+      # No `npm version` step: changesets already wrote the version into
       # package.json, and the assertion above proved it matches the tag.
 
       - name: Publish to npm (idempotent)

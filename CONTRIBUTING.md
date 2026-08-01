@@ -37,44 +37,42 @@ behavior in a way that differs from upstream, add a COMPAT entry.
 - Geometry features land with a `corpus/geom` case blessed against OpenSCAD.
 - Run `cargo test` before submitting.
 
-## Commit messages
+## Changesets
 
-Quito releases with [release-please](https://github.com/googleapis/release-please),
-which reads [Conventional Commits](https://www.conventionalcommits.org/) to pick
-the next version and write `CHANGELOG.md`. A malformed subject doesn't fail CI —
-it silently yields the wrong bump or a missing changelog entry.
+Quito versions and releases with
+[changesets](https://github.com/changesets/changesets). Add a changeset **in the
+same PR** as any user-facing change:
 
+```sh
+npx changeset
 ```
-type(scope): summary in the imperative mood
-```
 
-| type | changelog section | bump (while 0.x) |
+Pick the bump, write a one-line user-facing summary, commit the resulting
+`.changeset/*.md`. A change that ships with no changeset doesn't fail CI — it
+just lands with no changelog entry and no version bump. Pure
+`docs`/`ci`/`test`/`refactor` churn needs no changeset.
+
+The repo shares **one** version, so the bump is repo-wide:
+
+| bump | pre-1.0 effect | use for |
 | --- | --- | --- |
-| `feat` (alias `feature`) | Features | **minor** (0.1.1 → 0.2.0) |
-| `fix` | Bug Fixes | patch (0.1.1 → 0.1.2) |
-| `perf` / `revert` / `deps` | Performance / Reverts / Dependencies | patch |
-| `docs` `refactor` `style` `test` `build` `ci` `chore` | hidden | none on their own |
+| `patch` | 0.2.0 → 0.2.1 | bug fixes, perf, dependency bumps |
+| `minor` | 0.2.0 → 0.3.0 | genuinely new capability — **and** any breaking change |
+| `major` | → 1.0.0 | do not use until we deliberately cut 1.0 |
 
-- **`feat` costs a minor version**, which at 0.x is the caret boundary for both
-  Cargo and npm — `^0.1.0` consumers of `quito-engine` won't pick it up
-  automatically. Reserve it for new capability; bug fixes are `fix`.
-- **Hidden types alone cut no release.** A docs-only branch produces an empty
-  changelog and release-please skips the release PR. Alongside a `feat`/`fix`
-  they land normally but stay out of the changelog.
-- Breaking changes are `feat!:` or a `BREAKING CHANGE:` footer — still only a
-  **minor** bump under 0.x.
-- Scopes in use: `web`, `geom`, `desktop`, `eval`, `lsp`, `npm`, `ci`, `docs`,
-  `release`, plus `syntax` / `ir` / `cli`. Comma-separate when a change really
-  spans crates (`feat(geom,web): …`).
+`minor` crosses the caret boundary (`^0.2.0` consumers of `quito-engine` won't
+pick it up automatically), so reach for `patch` by default. Breaking changes are
+still `minor` while we're 0.x — select `minor` and call the break out in the
+summary.
 
-**Write your PR title as a conventional commit too.** Squash-merging uses the
-PR title whenever a PR has more than one commit, so that title — not your
-individual commits — is what release-please parses.
+Commit messages and PR titles no longer drive releases; keep the `type(scope):`
+house style for readable history anyway (scopes in use: `web`, `geom`,
+`desktop`, `eval`, `lsp`, `npm`, `ci`, `docs`, `release`, plus `syntax` / `ir` /
+`cli`).
 
-Never hand-edit a `version` field (release-please owns all of them, and CI
-asserts tag and tree agree), and never author a `chore(main): release X.Y.Z`
-commit yourself. See [docs/RELEASING.md](docs/RELEASING.md) for the full
-process.
+Never hand-edit a `version` field — `scripts/sync-versions.mjs` owns all of them
+and CI asserts tag and tree agree. See [docs/RELEASING.md](docs/RELEASING.md) for
+the full process and `.changeset/README.md` for the changeset format.
 
 ## Formatting
 
