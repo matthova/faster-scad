@@ -40,7 +40,7 @@ Need `.deb` / `.rpm` / `.msi` or an older version? <a href="https://github.com/m
 
 ## Run it anywhere
 
-One engine, five ways to reach it. Pick the surface that fits and start modeling.
+One engine, many ways to reach it. Pick the surface that fits and start modeling.
 
 | Surface | For whom | Get started |
 |---|---|---|
@@ -50,9 +50,26 @@ One engine, five ways to reach it. Pick the surface that fits and start modeling
 | **VS Code** | Editor-native | Extension with a live 3D preview + export |
 | **Any LSP editor** | Neovim, Helix, Zed, Emacs… | `quito-lsp` — diagnostics, hover, completion |
 | **CLI** | Scripts & CI | `quito model.scad -o out.stl` |
+| **Embed (npm)** | Your own app | `npm i quito-engine` — the wasm engine, browser or Node ([docs](packages/npm/README.md)) |
 
 All of them drive the exact same Rust core, so a model behaves identically no
 matter where you open it.
+
+### Embed the engine in your own project
+
+The geometry engine ships to npm as [`quito-engine`](https://www.npmjs.com/package/quito-engine)
+— the same Rust core compiled to WebAssembly, for building your own viewer,
+running headless renders, or embedding the playground engine:
+
+```js
+import { render } from "quito-engine";
+const r = await render("difference() { cube(20, center=true); sphere(12); }");
+// r.positions / r.normals: triangle soup ready for three.js / WebGL.
+```
+
+Works in bundlers (Vite/webpack), straight from a CDN (no install), and in Node.
+See [`packages/npm/README.md`](packages/npm/README.md) for the worker pattern,
+CDN usage, and the full API.
 
 ## What you can do
 
@@ -161,7 +178,9 @@ Zed, Emacs, VS Code, and a CLI file-watch loop is in
 | `quito-lsp` | LSP language server: diagnostics, hover, completion, render command |
 
 `web/` (live at <a href="https://matthova.github.io/faster-scad/" target="_blank" rel="noopener noreferrer">https://matthova.github.io/faster-scad/</a>), `desktop/` (Tauri),
-and `editors/vscode/` are thin front-ends over the same core.
+and `editors/vscode/` are thin front-ends over the same core. `packages/npm/`
+publishes the wasm engine as [`quito-engine`](packages/npm/README.md) for use in
+other projects.
 
 ## Contributing
 
