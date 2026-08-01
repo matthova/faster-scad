@@ -1,7 +1,10 @@
-# Releasing the Quito desktop app
+# Releasing Quito
 
-The desktop app (`desktop/`, Tauri v2) ships as native installers for macOS,
-Windows, and Linux, and updates itself in place via the Tauri updater.
+One tag ships everything: the desktop installers (`desktop/`, Tauri v2 — native
+builds for macOS, Windows, and Linux that update themselves in place) and the
+`quito-engine` npm package (the wasm build of `crates/quito-wasm`).
+
+Releases are cut by **release-please**, not by tagging by hand.
 
 ## How auto-update works
 
@@ -23,35 +26,67 @@ Update artifacts per platform:
 | Linux   | `.AppImage`       | ✅ AppImage only                      |
 | Linux   | `.deb` / `.rpm`   | ❌ update via the package manager     |
 
-## Cutting a release (repeat each version)
+## Cutting a release
 
-The release **tag** is the single source of truth for the version — you do
-**not** bump any version fields in the repo to cut a release.
+1. **Land Conventional Commits on `main`** — already the house style
+   (`feat(geom,web): …`, `fix(eval,geom): …`). The types and the CHANGELOG
+   sections they map to live in `release-please-config.json`;
+   `docs`/`chore`/`ci`/`test`/`build`/`refactor`/`style` are hidden and, on their
+   own, do **not** cut a release.
+2. **release-please keeps a `chore(main): release X.Y.Z` PR open**, updating it as
+   commits land. Review the `CHANGELOG.md` diff on it.
+   - CI does not start on that PR by itself — it is authored by `GITHUB_TOKEN`,
+     so it lands in the approval-required state. Click **Approve workflows to
+     run** if you want the checks.
+3. **Merge the release PR** with **Squash and merge** or **Create a merge
+   commit**. Never **Rebase and merge**: that strips the PR association
+   release-please uses to find the release commit, and it will silently skip
+   cutting the release with only a log warning.
+4. Merging pushes the release commit, creates the tag `vX.Y.Z` and the GitHub
+   Release, then dispatches:
+   - **Release desktop app** — 4-OS installers + `latest.json`, uploaded onto
+     that Release.
+   - **Publish engine to npm** — `quito-engine`, via OIDC with provenance.
 
-1. **Publish a GitHub Release** with a tag of `v<version>` (e.g. `v0.1.1`):
-   - GitHub → **Releases** → **Draft a new release** → **Choose a tag** →
-     type the new tag (it's created on publish) → **Publish release**, or
-   - from the CLI: `gh release create v0.1.1 --title "v0.1.1" --generate-notes`
+   Assets appear a few minutes later. Existing desktop users are offered the
+   update as soon as `latest.json` uploads.
 
-   Publishing fires the **Release desktop app** workflow automatically.
-2. The workflow stamps the tag into `tauri.conf.json`'s `version` (`v0.1.1` →
-   `0.1.1`, in the CI checkout only — nothing is committed back), then builds +
-   signs on all three OSes and **uploads the installers and `latest.json` as
-   assets onto the release you just published**. They appear a few minutes later.
-3. That's it — the release is already published, so existing users are offered
-   the update as soon as the assets finish uploading. (Don't publish until
-   you're ready to ship. To stage instead, mark it a **pre-release**: the
-   updater ignores pre-releases, and you can un-check that later.)
+### Versions are owned by release-please
 
-> The version shown in installers and used by the updater's `version` comparison
-> comes entirely from the tag. The `version` fields committed in
-> `tauri.conf.json` / `package.json` / `Cargo.toml` only matter for local
-> `tauri dev` — they don't need to match the release tag. Keep them roughly
-> current if you like, but it's not required to ship.
+`.release-please-manifest.json` is the source of truth. release-please writes it
+into `Cargo.toml`, `Cargo.lock`, `desktop/src-tauri/{Cargo.toml,Cargo.lock,tauri.conf.json}`,
+`desktop/{package.json,package-lock.json}`, and `packages/npm/{package.json,package-lock.json}`.
 
-You can also re-run a build against an existing release via **Actions →
-Release desktop app → Run workflow** (or `gh workflow run "Release desktop app"
--f tag=v0.1.1`).
+**Never hand-edit those version fields.** CI no longer stamps versions — it
+asserts them, so a tag whose commit carries a different version fails the build
+rather than shipping a mismatched installer or a package whose `version()`
+disagrees with its own manifest.
+
+Deliberately *not* on the shared version: `web/package.json` (private
+playground, never published), `editors/vscode/package.json` (ships to the VS
+Code marketplace on its own cadence), and `fuzz/Cargo.toml` (`publish = false`).
+
+### Version bumps
+
+Under 0.x, `bump-minor-pre-major` is on:
+
+| commit | bump | example |
+| --- | --- | --- |
+| `fix:` | patch | 0.1.1 → 0.1.2 |
+| `feat:` | minor | 0.1.1 → 0.2.0 |
+| `feat!:` / `BREAKING CHANGE:` | minor | 0.1.1 → 0.2.0 |
+
+To force a specific version, add a `Release-As: 1.0.0` footer to a commit on
+`main`.
+
+### Escape hatches
+
+- Re-run a build for an existing tag:
+  `gh workflow run release.yml --ref vX.Y.Z -f tag=vX.Y.Z`
+  (same for `publish-npm.yml`).
+- Publishing a Release **by hand** still fires both workflows via
+  `release: published`. Bot-authored releases are ignored on that trigger so the
+  dispatch path can't double-fire.
 
 ---
 
@@ -78,12 +113,22 @@ These require secrets, paid accounts, or GitHub UI actions an agent can't do.
 - [ ] **Confirm GitHub Actions can create releases**: Settings → Actions →
       General → Workflow permissions → **Read and write permissions**. (The
       workflow also requests `contents: write`.)
+- [ ] **Allow Actions to open PRs**: Settings → Actions → General → **Allow
+      GitHub Actions to create and approve pull requests**. Without it
+      release-please cannot open its release PR.
+- [ ] **Register the npm trusted publisher** (one-time; `quito-engine@0.0.0`
+      already exists on the registry, so only the registration is left):
+      npmjs.com → `quito-engine` → Settings → Trusted Publisher → GitHub
+      Actions, with Organization or user `matthova`, Repository `faster-scad`,
+      Workflow filename `publish-npm.yml`, Environment blank. Fields are
+      case-sensitive and exact, and npm does not validate them at save time.
 
 ### Per release
 
-- [ ] **Publish the GitHub Release** (with "Set as a pre-release" **unchecked**)
-      to trigger the build. This exposes the update to existing users once the
-      assets finish uploading, so publish only when ready to ship.
+- [ ] **Merge the `chore(main): release X.Y.Z` PR** (Squash or Merge commit — never
+      Rebase). Everything downstream is automatic. Merge only when ready to
+      ship: existing desktop users are offered the update as soon as the assets
+      upload.
 
 ### Recommended before a public launch — OS code-signing
 

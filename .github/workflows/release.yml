@@ -1,23 +1,28 @@
 name: Release desktop app
 
-# Cut a desktop release by PUBLISHING a GitHub Release:
-#   Releases → "Draft a new release" → create a tag like `v0.1.0` → Publish.
+# Builds and uploads the desktop installers for an ALREADY-CREATED GitHub
+# Release. Two entry points:
 #
-# The release TAG is the single source of truth for the version: the build
-# stamps `v0.1.0` -> `0.1.0` into tauri.conf.json (see "Stamp version" below),
-# so you never bump the version in the repo to cut a release.
+#   1. release-please (the normal path). Merging the `chore(main): release X.Y.Z` PR
+#      cuts the tag + Release, then release-please.yml dispatches this workflow
+#      with `--ref <tag> -f tag=<tag>`. The `release: published` trigger below
+#      does NOT fire for release-please's Release: GitHub suppresses workflow
+#      triggers from GITHUB_TOKEN-authored events.
+#   2. `release: published` (escape hatch), which still fires when a HUMAN
+#      publishes a Release by hand. A manual `workflow_dispatch` also re-runs a
+#      build against any existing tag.
 #
-# Publishing fires this workflow, which builds + signs the app on each OS and
-# uploads the installers plus the updater manifest (latest.json) as assets on
-# the release you just published. The in-app updater reads
+# The version is NOT stamped here any more. release-please owns every
+# version-bearing file in the repo, so the commit this tag points at already
+# carries the right version in tauri.conf.json — which feeds both the installer
+# version and the updater manifest. The step below only ASSERTS that, so a
+# hand-cut tag cannot silently ship a mismatched installer.
+#
+# The in-app updater reads
 #   https://github.com/matthova/faster-scad/releases/latest/download/latest.json
-# which resolves to the latest published, non-prerelease release.
-#
-# Because the build attaches assets AFTER you publish, the installers appear a
-# few minutes later once the matrix finishes.
-#
-# A manual `workflow_dispatch` (Actions tab, or `gh workflow run`) is also
-# available for re-running a build against an existing tag/release.
+# which resolves to the latest published, non-prerelease release. Because assets
+# attach AFTER the Release exists, installers appear a few minutes later once
+# the matrix finishes.
 #
 # Required repository secrets (see docs/RELEASING.md):
 #   TAURI_SIGNING_PRIVATE_KEY           — minisign private key (updater signing)
@@ -30,7 +35,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag (must match tauri.conf.json version), e.g. v0.1.0"
+        description: "Release tag to build, e.g. v0.1.0 (must already exist)"
         required: true
         type: string
 
@@ -39,6 +44,14 @@ permissions:
 
 jobs:
   release:
+    # A release-please Release arrives here only via workflow_dispatch. If an
+    # App/PAT token is ever put on release-please.yml, its Release would ALSO
+    # fire the `release: published` trigger and race this dispatch — 8 matrix
+    # jobs contending for the same assets and latest.json. Ignore bot-authored
+    # release events so only the dispatch path runs.
+    if: >-
+      github.event_name != 'release' ||
+      github.event.release.author.login != 'github-actions[bot]'
     strategy:
       fail-fast: false
       matrix:
@@ -78,21 +91,29 @@ jobs:
             stable-name: "Quito-windows-x64-setup.exe"
 
     runs-on: ${{ matrix.platform }}
+    # Serialize per-platform against the same tag so a hand-published Release and
+    # an in-flight dispatch can't both build the same leg and race on asset
+    # upload / latest.json. Keyed by platform so the matrix still parallelizes.
+    concurrency:
+      group: release-desktop-${{ matrix.platform }}-${{ github.event.release.tag_name || inputs.tag }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
         with:
+          # Build the TAGGED commit on every trigger. release-please dispatches
+          # with `--ref <tag>` so this is already right, but a hand-dispatch from
+          # the Actions UI defaults the ref to main — pin it explicitly.
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
           # quito-geom builds the native Manifold C++ kernel; the BOSL2 corpus
           # submodule isn't needed to bundle, so a shallow checkout is fine.
           submodules: false
 
-      # The release tag is the single source of truth for the version. The
-      # updater manifest (latest.json) and the installer version both come from
-      # tauri.conf.json's `version`, so stamp the tag into it here (in the
-      # ephemeral CI checkout only — nothing is committed back). This is why you
-      # never bump the version in the repo to cut a release. Cargo.toml is left
-      # alone: rewriting it would invalidate the cached `--locked` build, and the
-      # crate version doesn't feed the updater.
-      - name: Stamp version from release tag
+      # release-please owns the version now: the tagged commit already carries it
+      # in tauri.conf.json, which is what feeds the installer version and the
+      # updater manifest (latest.json). Nothing is stamped here — this only
+      # asserts tag and file agree, so a hand-cut tag can't ship an installer
+      # labelled with a different version than the Release it attaches to.
+      - name: Assert tauri.conf.json matches the release tag
         shell: bash
         run: |
           TAG="${{ github.event.release.tag_name || inputs.tag }}"
@@ -101,8 +122,12 @@ jobs:
             echo "::error::Release tag '$TAG' is not a valid vX.Y.Z semver tag."
             exit 1
           fi
-          node -e "const f='desktop/src-tauri/tauri.conf.json',fs=require('fs'),j=require('./'+f);j.version='${VERSION}';fs.writeFileSync(f,JSON.stringify(j,null,2)+'\n')"
-          echo "Stamped tauri.conf.json version = $VERSION (from tag $TAG)."
+          IN_REPO=$(node -p "require('./desktop/src-tauri/tauri.conf.json').version")
+          if [ "$IN_REPO" != "$VERSION" ]; then
+            echo "::error::tauri.conf.json is $IN_REPO but the tag says $VERSION. Versions are owned by release-please; tags cut by hand must point at a commit whose version already matches."
+            exit 1
+          fi
+          echo "tauri.conf.json version = $IN_REPO matches tag $TAG."
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -163,7 +188,26 @@ jobs:
         working-directory: desktop
         run: npm ci
 
-      - name: Build, sign, and draft release
+      # Resolve the existing Release's numeric id so tauri-action uploads INTO it
+      # rather than reconciling it. See the `releaseId` note on the next step.
+      # Fails loudly if the Release is missing, instead of silently creating a
+      # second one under the same tag.
+      - name: Resolve release id
+        id: rel
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.event.release.tag_name || inputs.tag }}"
+          ID=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq .id)
+          if [ -z "$ID" ] || [ "$ID" = "null" ]; then
+            echo "::error::No GitHub Release exists for tag $TAG. Cut it with release-please (merge the release PR) or publish one by hand first."
+            exit 1
+          fi
+          echo "id=$ID" >> "$GITHUB_OUTPUT"
+          echo "Uploading assets to release id $ID ($TAG)."
+
+      - name: Build, sign, and upload installers
         uses: tauri-apps/tauri-action@v0
         env:
           # tauri-action creates the GitHub Release via the API and needs a token
@@ -183,17 +227,16 @@ jobs:
         with:
           # desktop/ holds package.json; tauri finds src-tauri/tauri.conf.json.
           projectPath: desktop
-          # On `release: published` this is the tag you just published; on manual
-          # dispatch it's the tag input. tauri-action finds the existing release
-          # for this tag and uploads assets to it.
-          tagName: ${{ github.event.release.tag_name || inputs.tag }}
-          releaseName: "Quito __VERSION__"
+          # Pass releaseId, NOT tagName. tauri-action only reconciles the Release
+          # when `tagName && !releaseId` (src/index.ts) — and that path calls
+          # updateRelease, which would replace release-please's CHANGELOG notes
+          # and title with the one-liner below, on every matrix leg. Giving it an
+          # id skips creation entirely and goes straight to asset upload, leaving
+          # the Release body that release-please generated intact.
+          releaseId: ${{ steps.rel.outputs.id }}
+          # Still used as the `notes` field of latest.json (the updater manifest),
+          # which is what the in-app update banner shows.
           releaseBody: "See the assets below to download and install Quito."
-          # The release already exists (you published it), so build assets are
-          # uploaded to it directly rather than into a new draft. On manual
-          # dispatch against a tag with no release, one is created (published).
-          releaseDraft: false
-          prerelease: false
           # Emits latest.json (the updater manifest) alongside the installers.
           includeUpdaterJson: true
           args: ${{ matrix.args }}

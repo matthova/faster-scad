@@ -1,0 +1,134 @@
+name: release-please
+
+# Maintains a release PR from the Conventional Commits landing on main. Merging
+# that PR bumps every version-bearing file in the repo (see
+# release-please-config.json), writes CHANGELOG.md, pushes the tag vX.Y.Z, and
+# creates the GitHub Release — then dispatches the desktop build and the npm
+# publish against that tag.
+#
+# WHY THE EXPLICIT DISPATCHES BELOW
+# The Release is created with GITHUB_TOKEN, and GitHub suppresses workflow
+# triggers from GITHUB_TOKEN-authored events to prevent recursion, so
+# `release: published` does NOT fire release.yml or publish-npm.yml. Switching
+# those to `on: push: tags` would not help either — tag pushes ride the `push`
+# event, same suppression. `workflow_dispatch` invoked through the API is one of
+# the two documented exceptions, so we dispatch both explicitly. That is why
+# this job needs `actions: write`, and why no PAT or GitHub App is required.
+#
+# WHY --ref "$TAG" RATHER THAN main
+# npm builds its provenance attestation from the runner's GITHUB_REF/GITHUB_SHA,
+# not from the checked-out tree. Dispatching from main would attest a main build
+# even though publish-npm.yml checks out the tag. Dispatching against the tag
+# makes the attestation truthful, and each run executes the workflow as it
+# existed at that tag.
+#
+# BOOTSTRAP NOTE
+# `bootstrap-sha` in release-please-config.json is a fallback only. It is
+# ignored in practice because the v0.1.1 GitHub Release is found, which is what
+# establishes the previous version. Once the first release-please PR has merged
+# the key is inert and can be deleted.
+#
+# PREREQUISITES
+#   - release.yml and publish-npm.yml must exist on the DEFAULT BRANCH, or the
+#     dispatch 404s. (GitHub resolves workflow_dispatch by filename on default.)
+#   - Settings > Actions > General > "Allow GitHub Actions to create and approve
+#     pull requests" must be enabled, or release-please cannot open its PR.
+#   - Merge the release PR with "Squash and merge" or "Create a merge commit".
+#     NEVER "Rebase and merge": that strips the PR association release-please
+#     uses to find the release commit, and it will silently skip cutting the
+#     release with only a log warning.
+#
+# KNOWN LIMITATION: ci.yml does not auto-run on the release PR — a PR opened by
+# GITHUB_TOKEN lands in the approval-required state. Click "Approve workflows to
+# run" on the PR if you want the checks.
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+# Two merges landing inside one run's window otherwise produce overlapping
+# createReleases()/createPullRequests() passes against the same
+# `autorelease: pending` label — the known cause of duplicate release PRs.
+# Never cancel-in-progress: aborting between cutting the Release and the
+# dispatch step would leave a tagged release with no installers and no package.
+concurrency:
+  group: release-please-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # release commit, tag, GitHub Release
+      pull-requests: write # create/update the release PR
+      issues: write # autorelease: pending / tagged labels
+      actions: write # gh workflow run (see note above)
+    steps:
+      - uses: googleapis/release-please-action@v5
+        id: release
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # Manifest mode. Do NOT add `release-type:` here — setting it switches
+          # the action to non-manifest mode and silently ignores both files.
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      # Everything below runs only on the merge that actually cut a release.
+      # Compare against the string explicitly: this output is "true"/"false" as
+      # text, and GitHub casts ANY non-empty string (including "false") to true,
+      # so a bare `if: steps.release.outputs.release_created` would dispatch on
+      # every push to main.
+      - name: Dispatch the desktop build and the npm publish
+        if: ${{ steps.release.outputs.release_created == 'true' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.release.outputs.tag_name }}
+        run: |
+          # The tag is created moments earlier; give the ref a beat to become
+          # visible to the dispatch endpoint before referencing it.
+          for i in $(seq 1 10); do
+            if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/${TAG}" >/dev/null 2>&1; then
+              echo "tag $TAG is visible"; break
+            fi
+            echo "waiting for tag $TAG to appear ($i/10)"; sleep 3
+          done
+
+          for wf in release.yml publish-npm.yml; do
+            echo "dispatching $wf at $TAG"
+            gh workflow run "$wf" --ref "$TAG" -f tag="$TAG"
+          done
+
+      # `gh workflow run` returns success when the dispatch is ACCEPTED, not when
+      # a run STARTS. If the workflow YAML fails to parse at that ref, or the
+      # workflow is disabled in the Actions UI, the dispatch is a 204 no-op: this
+      # job would go green with a tagged release, no installers and no npm
+      # package. Assert a run actually materialized.
+      - name: Verify both dispatched runs started
+        if: ${{ steps.release.outputs.release_created == 'true' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.release.outputs.tag_name }}
+        run: |
+          sleep 10
+          failed=0
+          for wf in release.yml publish-npm.yml; do
+            n=0
+            for i in $(seq 1 12); do
+              n=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$wf" \
+                    --branch "$TAG" --event workflow_dispatch \
+                    --json databaseId --jq 'length' 2>/dev/null || echo 0)
+              [ "$n" -gt 0 ] && break
+              sleep 5
+            done
+            if [ "$n" -eq 0 ]; then
+              echo "::error::Dispatched $wf at $TAG but no run started. Check that it is enabled in the Actions tab and that it parses at that ref."
+              failed=1
+            else
+              echo "$wf: run started"
+            fi
+          done
+          exit "$failed"
