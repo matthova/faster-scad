@@ -36,7 +36,9 @@
     ],
     "fileAssociations": [
       {
-        "ext": ["scad"],
+        "ext": [
+          "scad"
+        ],
         "name": "OpenSCAD Source",
         "description": "OpenSCAD source file",
         "role": "Editor"

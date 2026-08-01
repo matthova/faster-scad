@@ -1,0 +1,63 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+
+  "bootstrap-sha": "15356cf1fbd2abdafd30b97c47a5d3dc4b761666",
+
+  "include-component-in-tag": false,
+  "include-v-in-tag": true,
+
+  "bump-minor-pre-major": true,
+
+  "separate-pull-requests": false,
+
+  "changelog-sections": [
+    { "type": "feat", "section": "Features" },
+    { "type": "feature", "section": "Features" },
+    { "type": "fix", "section": "Bug Fixes" },
+    { "type": "perf", "section": "Performance" },
+    { "type": "revert", "section": "Reverts" },
+    { "type": "deps", "section": "Dependencies" },
+    { "type": "docs", "section": "Documentation", "hidden": true },
+    { "type": "refactor", "section": "Code Refactoring", "hidden": true },
+    { "type": "style", "section": "Styles", "hidden": true },
+    { "type": "test", "section": "Tests", "hidden": true },
+    { "type": "build", "section": "Build System", "hidden": true },
+    { "type": "ci", "section": "Continuous Integration", "hidden": true },
+    { "type": "chore", "section": "Miscellaneous Chores", "hidden": true }
+  ],
+
+  "packages": {
+    ".": {
+      "release-type": "simple",
+      "package-name": "quito",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        { "type": "toml", "path": "Cargo.toml", "jsonpath": "$.workspace.package.version" },
+        {
+          "type": "toml",
+          "path": "Cargo.lock",
+          "jsonpath": "$.package[?(@.name.value.match(/^(quito-|xtask$)/))].version"
+        },
+
+        { "type": "toml", "path": "desktop/src-tauri/Cargo.toml", "jsonpath": "$.package.version" },
+        {
+          "type": "toml",
+          "path": "desktop/src-tauri/Cargo.lock",
+          "jsonpath": "$.package[?(@.name.value.match(/^quito-/))].version"
+        },
+        { "type": "json", "path": "desktop/src-tauri/tauri.conf.json", "jsonpath": "$.version" },
+        { "type": "json", "path": "desktop/package.json", "jsonpath": "$.version" },
+        { "type": "json", "path": "desktop/package-lock.json", "jsonpath": "$.version" },
+        { "type": "json", "path": "desktop/package-lock.json", "jsonpath": "$.packages[''].version" },
+
+        { "type": "json", "path": "packages/npm/package.json", "jsonpath": "$.version" },
+        { "type": "json", "path": "packages/npm/package-lock.json", "jsonpath": "$.version" },
+        {
+          "type": "json",
+          "path": "packages/npm/package-lock.json",
+          "jsonpath": "$.packages[''].version"
+        }
+      ]
+    }
+  }
+}

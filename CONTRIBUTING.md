@@ -37,6 +37,45 @@ behavior in a way that differs from upstream, add a COMPAT entry.
 - Geometry features land with a `corpus/geom` case blessed against OpenSCAD.
 - Run `cargo test` before submitting.
 
+## Commit messages
+
+Quito releases with [release-please](https://github.com/googleapis/release-please),
+which reads [Conventional Commits](https://www.conventionalcommits.org/) to pick
+the next version and write `CHANGELOG.md`. A malformed subject doesn't fail CI —
+it silently yields the wrong bump or a missing changelog entry.
+
+```
+type(scope): summary in the imperative mood
+```
+
+| type | changelog section | bump (while 0.x) |
+| --- | --- | --- |
+| `feat` (alias `feature`) | Features | **minor** (0.1.1 → 0.2.0) |
+| `fix` | Bug Fixes | patch (0.1.1 → 0.1.2) |
+| `perf` / `revert` / `deps` | Performance / Reverts / Dependencies | patch |
+| `docs` `refactor` `style` `test` `build` `ci` `chore` | hidden | none on their own |
+
+- **`feat` costs a minor version**, which at 0.x is the caret boundary for both
+  Cargo and npm — `^0.1.0` consumers of `quito-engine` won't pick it up
+  automatically. Reserve it for new capability; bug fixes are `fix`.
+- **Hidden types alone cut no release.** A docs-only branch produces an empty
+  changelog and release-please skips the release PR. Alongside a `feat`/`fix`
+  they land normally but stay out of the changelog.
+- Breaking changes are `feat!:` or a `BREAKING CHANGE:` footer — still only a
+  **minor** bump under 0.x.
+- Scopes in use: `web`, `geom`, `desktop`, `eval`, `lsp`, `npm`, `ci`, `docs`,
+  `release`, plus `syntax` / `ir` / `cli`. Comma-separate when a change really
+  spans crates (`feat(geom,web): …`).
+
+**Write your PR title as a conventional commit too.** Squash-merging uses the
+PR title whenever a PR has more than one commit, so that title — not your
+individual commits — is what release-please parses.
+
+Never hand-edit a `version` field (release-please owns all of them, and CI
+asserts tag and tree agree), and never author a `chore(main): release X.Y.Z`
+commit yourself. See [docs/RELEASING.md](docs/RELEASING.md) for the full
+process.
+
 ## Formatting
 
 CI enforces `cargo fmt --all --check`. A repo-tracked pre-commit hook in
