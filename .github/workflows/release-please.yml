@@ -96,9 +96,12 @@ jobs:
             echo "waiting for tag $TAG to appear ($i/10)"; sleep 3
           done
 
+          # This job has no `actions/checkout`, so pass --repo explicitly:
+          # `gh workflow run` otherwise resolves the repo from the local git
+          # remote and dies with "fatal: not a git repository".
           for wf in release.yml publish-npm.yml; do
             echo "dispatching $wf at $TAG"
-            gh workflow run "$wf" --ref "$TAG" -f tag="$TAG"
+            gh workflow run "$wf" --ref "$TAG" -f tag="$TAG" --repo "$GITHUB_REPOSITORY"
           done
 
       # `gh workflow run` returns success when the dispatch is ACCEPTED, not when
