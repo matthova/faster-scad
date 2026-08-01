@@ -29,7 +29,6 @@
   "packages": {
     ".": {
       "release-type": "simple",
-      "package-name": "quito",
       "changelog-path": "CHANGELOG.md",
       "extra-files": [
         { "type": "toml", "path": "Cargo.toml", "jsonpath": "$.workspace.package.version" },
