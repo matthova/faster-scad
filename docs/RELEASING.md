@@ -4,7 +4,8 @@ One tag ships everything: the desktop installers (`desktop/`, Tauri v2 — nativ
 builds for macOS, Windows, and Linux that update themselves in place) and the
 `quito-engine` npm package (the wasm build of `crates/quito-wasm`).
 
-Releases are cut by **release-please**, not by tagging by hand.
+Releases are cut by **[changesets](https://github.com/changesets/changesets)**,
+not by tagging by hand.
 
 ## How auto-update works
 
@@ -28,22 +29,25 @@ Update artifacts per platform:
 
 ## Cutting a release
 
-1. **Land Conventional Commits on `main`** — already the house style
-   (`feat(geom,web): …`, `fix(eval,geom): …`). The types and the CHANGELOG
-   sections they map to live in `release-please-config.json`;
-   `docs`/`chore`/`ci`/`test`/`build`/`refactor`/`style` are hidden and, on their
-   own, do **not** cut a release.
-2. **release-please keeps a `chore(main): release X.Y.Z` PR open**, updating it as
-   commits land. Review the `CHANGELOG.md` diff on it.
+1. **Add a changeset with each user-facing change.** In the PR, run
+   `npx changeset`, pick the bump, write a one-line summary, and commit the
+   `.changeset/*.md`. Pure `docs`/`ci`/`test`/`refactor` PRs need none. See
+   `.changeset/README.md` and [CONTRIBUTING.md](../CONTRIBUTING.md).
+2. **The `changesets` workflow keeps a "Version Packages" PR open**, updating it
+   as changesets land on `main`. It runs `npm run version`
+   (`changeset version` + `scripts/sync-versions.mjs`), which consumes the
+   `.changeset/*.md` files, bumps every version-bearing file, and writes
+   `CHANGELOG.md`. Review that diff on the PR.
    - CI does not start on that PR by itself — it is authored by `GITHUB_TOKEN`,
      so it lands in the approval-required state. Click **Approve workflows to
      run** if you want the checks.
-3. **Merge the release PR** with **Squash and merge** or **Create a merge
-   commit**. Never **Rebase and merge**: that strips the PR association
-   release-please uses to find the release commit, and it will silently skip
-   cutting the release with only a log warning.
-4. Merging pushes the release commit, creates the tag `vX.Y.Z` and the GitHub
-   Release, then dispatches:
+3. **Merge the Version Packages PR** with any merge style. Unlike release-please
+   there is no PR association to strip, so **Squash**, **Merge commit**, and
+   **Rebase and merge** are all safe — the release keys on the committed version,
+   not the PR.
+4. Merging lands the bumped version on `main`. `changesets.yml` sees the tree's
+   version has no matching `vX.Y.Z` tag, creates the tag + GitHub Release (notes
+   from `CHANGELOG.md`), then dispatches:
    - **Release desktop app** — 4-OS installers + `latest.json`, uploaded onto
      that Release.
    - **Publish engine to npm** — `quito-engine`, via OIDC with provenance.
@@ -51,11 +55,14 @@ Update artifacts per platform:
    Assets appear a few minutes later. Existing desktop users are offered the
    update as soon as `latest.json` uploads.
 
-### Versions are owned by release-please
+### Versions are owned by changesets
 
-`.release-please-manifest.json` is the source of truth. release-please writes it
-into `Cargo.toml`, `Cargo.lock`, `desktop/src-tauri/{Cargo.toml,Cargo.lock,tauri.conf.json}`,
-`desktop/{package.json,package-lock.json}`, and `packages/npm/{package.json,package-lock.json}`.
+The root `package.json` version is the canonical source of truth.
+`changeset version` bumps it and writes `CHANGELOG.md`; then
+`scripts/sync-versions.mjs` propagates that version into `Cargo.toml`,
+`Cargo.lock`, `desktop/src-tauri/{Cargo.toml,Cargo.lock,tauri.conf.json}`,
+`desktop/{package.json,package-lock.json}`, and
+`packages/npm/{package.json,package-lock.json}`.
 
 **Never hand-edit those version fields.** CI no longer stamps versions — it
 asserts them, so a tag whose commit carries a different version fails the build
@@ -68,16 +75,17 @@ Code marketplace on its own cadence), and `fuzz/Cargo.toml` (`publish = false`).
 
 ### Version bumps
 
-Under 0.x, `bump-minor-pre-major` is on:
+The repo shares one version; you pick the bump in each changeset. While we're
+0.x:
 
-| commit | bump | example |
+| changeset | bump | example |
 | --- | --- | --- |
-| `fix:` | patch | 0.1.1 → 0.1.2 |
-| `feat:` | minor | 0.1.1 → 0.2.0 |
-| `feat!:` / `BREAKING CHANGE:` | minor | 0.1.1 → 0.2.0 |
+| `patch` | patch | 0.2.0 → 0.2.1 |
+| `minor` | minor | 0.2.0 → 0.3.0 |
+| breaking change | `minor` (not `major`) | 0.2.0 → 0.3.0 |
 
-To force a specific version, add a `Release-As: 1.0.0` footer to a commit on
-`main`.
+Do not select `major` before we deliberately cut 1.0. To land a specific bump,
+add (or edit) a changeset with that level; the highest pending bump wins.
 
 ### Escape hatches
 
@@ -114,8 +122,8 @@ These require secrets, paid accounts, or GitHub UI actions an agent can't do.
       General → Workflow permissions → **Read and write permissions**. (The
       workflow also requests `contents: write`.)
 - [ ] **Allow Actions to open PRs**: Settings → Actions → General → **Allow
-      GitHub Actions to create and approve pull requests**. Without it
-      release-please cannot open its release PR.
+      GitHub Actions to create and approve pull requests**. Without it the
+      changesets action cannot open its Version Packages PR.
 - [ ] **Register the npm trusted publisher** (one-time; `quito-engine@0.0.0`
       already exists on the registry, so only the registration is left):
       npmjs.com → `quito-engine` → Settings → Trusted Publisher → GitHub
@@ -125,10 +133,9 @@ These require secrets, paid accounts, or GitHub UI actions an agent can't do.
 
 ### Per release
 
-- [ ] **Merge the `chore(main): release X.Y.Z` PR** (Squash or Merge commit — never
-      Rebase). Everything downstream is automatic. Merge only when ready to
-      ship: existing desktop users are offered the update as soon as the assets
-      upload.
+- [ ] **Merge the "Version Packages" PR** (any merge style). Everything
+      downstream is automatic. Merge only when ready to ship: existing desktop
+      users are offered the update as soon as the assets upload.
 
 ### Recommended before a public launch — OS code-signing
 

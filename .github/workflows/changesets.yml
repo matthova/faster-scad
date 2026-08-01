@@ -1,0 +1,202 @@
+name: changesets
+
+# Drives versioning + releases with changesets (this replaced release-please).
+#
+# FLOW
+#   1. A contributor adds a changeset in their PR (`npx changeset`), committing a
+#      `.changeset/*.md` note that declares the bump (patch/minor/major) and a
+#      user-facing summary. See .changeset/README.md.
+#   2. On every push to main this workflow runs changesets/action. While
+#      unreleased changesets exist it opens/updates a "Version Packages" PR that
+#      runs `npm run version` (= `changeset version` + scripts/sync-versions.mjs),
+#      bumping EVERY version-bearing file in the repo and writing CHANGELOG.md.
+#   3. Merging that PR lands the bumped version on main with no changesets left.
+#      The "Cut release" step then sees the tree's version has no matching
+#      vX.Y.Z tag, creates the tag + GitHub Release, and dispatches the desktop
+#      build and the npm publish against that tag.
+#
+# WHY THE EXPLICIT DISPATCHES BELOW
+# The Release is created with GITHUB_TOKEN, and GitHub suppresses workflow
+# triggers from GITHUB_TOKEN-authored events to prevent recursion, so
+# `release: published` does NOT fire release.yml or publish-npm.yml. Switching
+# those to `on: push: tags` would not help — tag pushes ride the `push` event,
+# same suppression. `workflow_dispatch` invoked through the API is one of the two
+# documented exceptions, so we dispatch both explicitly. That is why this job
+# needs `actions: write`, and why no PAT or GitHub App is required.
+#
+# WHY --ref "$TAG" RATHER THAN main
+# npm builds its provenance attestation from the runner's GITHUB_REF/GITHUB_SHA,
+# not from the checked-out tree. Dispatching from main would attest a main build
+# even though publish-npm.yml checks out the tag. Dispatching against the tag
+# makes the attestation truthful, and each run executes the workflow as it
+# existed at that tag.
+#
+# WHY THE TREE'S VERSION IS THE SIGNAL (not an action output)
+# The action only emits `published`/`hasChangesets`; it has no "a version PR was
+# just merged" output because we intentionally do NOT give it a `publish:`
+# command (our npm publish is a bespoke wasm + OIDC build in publish-npm.yml, and
+# our tags are `vX.Y.Z`, not changesets' `pkg@X.Y.Z`). So we key the release on
+# the committed version having no tag yet. The check is idempotent: ordinary
+# pushes and feature merges find the tag already present and no-op.
+#
+# PREREQUISITES
+#   - release.yml and publish-npm.yml must exist on the DEFAULT BRANCH, or the
+#     dispatch 404s. (GitHub resolves workflow_dispatch by filename on default.)
+#   - Settings > Actions > General > "Allow GitHub Actions to create and approve
+#     pull requests" must be enabled, or changesets cannot open its Version PR.
+#   - Merge the Version PR normally (squash or merge commit). Unlike
+#     release-please there is no association to strip, so "Rebase and merge" is
+#     also safe here — the release keys on the committed version, not the PR.
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+# Serialize runs on main so two merges landing close together can't produce
+# overlapping Version PR passes or a double release cut. Never cancel-in-progress:
+# aborting between cutting the Release and the dispatch step would leave a tagged
+# release with no installers and no package.
+concurrency:
+  group: changesets-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Version PR commit, tag, GitHub Release
+      pull-requests: write # create/update the Version Packages PR
+      actions: write # gh workflow run (see note above)
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # changesets diffs against the base branch and the tag check needs the
+          # full tag list; fetch everything.
+          fetch-depth: 0
+          submodules: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Installs @changesets/cli + the changelog-github formatter from the root
+      # package-lock.json. Pure JS tooling — no Rust/cargo needed to version.
+      - name: Install release tooling
+        run: npm ci
+
+      - name: Create Version PR or apply a version bump
+        id: changesets
+        uses: changesets/action@v1
+        with:
+          # Runs on the Version PR branch to produce its contents. Bumps
+          # package.json via changesets, then propagates to Cargo/Tauri/npm.
+          version: npm run version
+          # No `publish:` — tagging, the GitHub Release, and the downstream
+          # dispatch are handled by the steps below, keyed on the committed
+          # version. Providing a publish command here would make changesets try
+          # to `npm publish` and tag as `pkg@X.Y.Z`, neither of which we want.
+          commit: "chore: version packages"
+          title: "chore: version packages"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Runs only when no changesets are pending (a Version PR merge, or any plain
+      # push). The tag-existence check keeps every other push a no-op.
+      - name: Cut tag + GitHub Release for a newly-committed version
+        if: ${{ steps.changesets.outputs.hasChangesets == 'false' }}
+        id: cut
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+].+)?$'; then
+            echo "::error::Root package.json version '$VERSION' is not a valid semver."
+            exit 1
+          fi
+          TAG="v$VERSION"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+             || git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "$TAG already exists — nothing to cut."
+            echo "created=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Release notes = the top section of CHANGELOG.md (first `## ` heading
+          # up to the next), which changesets just prepended for this version.
+          NOTES=$(awk '/^## /{c++} c==1{print} c==2{exit}' CHANGELOG.md)
+          [ -z "$NOTES" ] && NOTES="Release $TAG"
+
+          # A prerelease version (0.3.0-rc.1) is marked as such so the updater's
+          # releases/latest — which resolves to the newest NON-prerelease — skips
+          # it, and publish-npm.yml routes it to the `next` dist-tag.
+          PRERELEASE=""
+          case "$VERSION" in *-*) PRERELEASE="--prerelease" ;; esac
+
+          # `gh release create` also creates the git tag at --target.
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$TAG" \
+            --notes "$NOTES" \
+            $PRERELEASE
+          echo "Created release $TAG."
+          echo "created=true" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch the desktop build and the npm publish
+        if: ${{ steps.cut.outputs.created == 'true' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.cut.outputs.tag }}
+        run: |
+          # The tag is created moments earlier; give the ref a beat to become
+          # visible to the dispatch endpoint before referencing it.
+          for i in $(seq 1 10); do
+            if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/${TAG}" >/dev/null 2>&1; then
+              echo "tag $TAG is visible"; break
+            fi
+            echo "waiting for tag $TAG to appear ($i/10)"; sleep 3
+          done
+
+          # No `actions/checkout` remote to infer from in the dispatch context, so
+          # pass --repo explicitly.
+          for wf in release.yml publish-npm.yml; do
+            echo "dispatching $wf at $TAG"
+            gh workflow run "$wf" --ref "$TAG" -f tag="$TAG" --repo "$GITHUB_REPOSITORY"
+          done
+
+      # `gh workflow run` returns success when the dispatch is ACCEPTED, not when
+      # a run STARTS. If the workflow YAML fails to parse at that ref, or is
+      # disabled in the Actions UI, the dispatch is a 204 no-op: this job would go
+      # green with a tagged release, no installers and no npm package. Assert a
+      # run actually materialized.
+      - name: Verify both dispatched runs started
+        if: ${{ steps.cut.outputs.created == 'true' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.cut.outputs.tag }}
+        run: |
+          sleep 10
+          failed=0
+          for wf in release.yml publish-npm.yml; do
+            n=0
+            for i in $(seq 1 12); do
+              n=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$wf" \
+                    --branch "$TAG" --event workflow_dispatch \
+                    --json databaseId --jq 'length' 2>/dev/null || echo 0)
+              [ "$n" -gt 0 ] && break
+              sleep 5
+            done
+            if [ "$n" -eq 0 ]; then
+              echo "::error::Dispatched $wf at $TAG but no run started. Check that it is enabled in the Actions tab and that it parses at that ref."
+              failed=1
+            else
+              echo "$wf: run started"
+            fi
+          done
+          exit "$failed"
