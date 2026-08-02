@@ -1611,11 +1611,20 @@ impl Interp<'_> {
 
     fn bind_params(&mut self, params: &[Param], args: &[Arg]) -> EResult<FastMap<String, Value>> {
         let mut map = FastMap::default();
+        // Every declared parameter is in scope for the body — bound to its
+        // default expression, or to `undef` when it has neither a default nor a
+        // supplied argument. This matches OpenSCAD: a parameter always shadows
+        // an outer variable of the same name, even when the caller omits it.
+        // Without the `undef` fallback, an omitted parameter would leak through
+        // to a global of the same name (e.g. BOSL2's `circ_pitch`), breaking the
+        // ubiquitous `assert(...) expr` guard idiom, whose body can't compile to
+        // the slot-based VM path and so relies on this map.
         for p in params {
-            if let Some(d) = &p.default {
-                let v = self.eval_expr(d)?;
-                map.insert(p.name.clone(), v);
-            }
+            let v = match &p.default {
+                Some(d) => self.eval_expr(d)?,
+                None => Value::Undef,
+            };
+            map.insert(p.name.clone(), v);
         }
         let mut pos = 0;
         for a in args {
@@ -3276,6 +3285,22 @@ mod tests {
         // A failing bare assert still aborts.
         let prog = parse("z = assert(1 > 2); echo(z);").unwrap();
         assert!(eval_program(&prog).is_err(), "failing assert should error");
+    }
+
+    #[test]
+    fn omitted_param_shadows_global_through_assert_guard() {
+        // An omitted parameter is `undef` in the body, shadowing any global of
+        // the same name — even when the body is an `assert(...) expr` guard,
+        // which can't compile to the slot-based VM path and so relies on the
+        // interpreted binding map. Regression for BOSL2 gears.scad, where a
+        // top-level `circ_pitch` used to leak into `circular_pitch()`'s omitted
+        // `circ_pitch` param and trip its `one_defined` assert.
+        let out = eval(
+            "function f(p, mod) = assert(true) is_undef(p);\n\
+             p = 9;\n\
+             echo(f(mod = 2));",
+        );
+        assert_eq!(out.echoes, vec!["ECHO: true"]);
     }
 
     #[test]

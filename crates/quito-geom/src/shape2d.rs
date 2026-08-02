@@ -770,12 +770,36 @@ fn point_in_polygon(poly: &[Point2], pt: Point2) -> bool {
 /// the cap triangulation (indices into the vertex list). See [`prepare`].
 type PreparedContours = (Vec<Point2>, Vec<(usize, usize)>, Vec<[u32; 3]>);
 
+/// Remove consecutive duplicate points (within the kernel's weld tolerance),
+/// including a final point that repeats the first, so the contour has no
+/// zero-length edges.
+fn dedup_consecutive(c: &Contour) -> Contour {
+    const EPS: f64 = 1e-7;
+    let close = |a: &Point2, b: &Point2| (a[0] - b[0]).abs() <= EPS && (a[1] - b[1]).abs() <= EPS;
+    let mut out: Contour = Vec::with_capacity(c.len());
+    for p in c {
+        if out.last().is_none_or(|q| !close(q, p)) {
+            out.push(*p);
+        }
+    }
+    if out.len() >= 2 && close(&out[0], out.last().unwrap()) {
+        out.pop();
+    }
+    out
+}
+
 /// Prepare a set of contours (with even-odd nesting → outers + holes) for
 /// filling and extrusion. Returns the concatenated vertex list, each contour's
 /// `(start, len)` range in it (outers oriented CCW, holes CW), and the cap
 /// triangulation (indices into the vertex list), with holes cut out via earcut.
 fn prepare(contours: &[Contour]) -> PreparedContours {
-    let valid: Vec<&Contour> = contours.iter().filter(|c| c.len() >= 3).collect();
+    // Drop consecutive duplicate vertices (and any closing repeat of the first)
+    // from each contour. A zero-length edge would otherwise extrude into a
+    // degenerate side wall — a quad with two coincident corners — which the
+    // manifold kernel rejects as non-manifold. Generated profiles routinely
+    // emit such duplicates (e.g. BOSL2's `rack2d`).
+    let cleaned: Vec<Contour> = contours.iter().map(|c| dedup_consecutive(c)).collect();
+    let valid: Vec<&Contour> = cleaned.iter().filter(|c| c.len() >= 3).collect();
     let n = valid.len();
     if n == 0 {
         return (Vec::new(), Vec::new(), Vec::new());
