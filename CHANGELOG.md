@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.0
+
+### Minor Changes
+
+- [#64](https://github.com/matthova/faster-scad/pull/64) [`62c6aab`](https://github.com/matthova/faster-scad/commit/62c6aab56978ae172bf542345815dfb7e1ee9398) Thanks [@matthova](https://github.com/matthova)! - add a "Fast" preview toggle that renders unions by concatenation instead of the CSG kernel — much faster on union-heavy models (skips the kernel's costliest work), at the cost of a non-watertight on-screen mesh. Differences, intersections and hulls still resolve exactly, so holes and clips look correct; exports and reported volume always use the exact, watertight path.
+
+- [#65](https://github.com/matthova/faster-scad/pull/65) [`cfee417`](https://github.com/matthova/faster-scad/commit/cfee4178f7174a951f5e6242393c2b1d75c5f61e) Thanks [@matthova](https://github.com/matthova)! - add a toolbar toggle to switch the web playground's render engine between Quito and actual OpenSCAD. The OpenSCAD path runs the official OpenSCAD 2025.03.25 WebAssembly build (Manifold backend) in a worker, loaded lazily so its ~9.6 MB wasm is only downloaded when selected. Handy for comparing our output against upstream. On the OpenSCAD engine the "Fast" toggle acts like OpenSCAD's F5 preview — a colored render showing `color(...)` — while Fast off gives a plain exact render. Limitations while on the OpenSCAD engine: no customizer or editor↔preview linking (Quito-only), and 3D models only.
+
+### Patch Changes
+
+- [#63](https://github.com/matthova/faster-scad/pull/63) [`d3db472`](https://github.com/matthova/faster-scad/commit/d3db4720b29e238910e7f5cb3f73385a7d8b37b6) Thanks [@matthova](https://github.com/matthova)! - Add an animated BOSL2 gear-train demo, and fix two engine bugs it exposed: (1) an omitted function parameter now correctly shadows a same-named global (as `undef`) even inside `assert(...) expr` guard bodies, so BOSL2 gears.scad idioms like `circular_pitch()` no longer trip a spurious assertion; (2) `linear_extrude` now drops consecutive duplicate vertices, so profiles that emit zero-length edges (e.g. BOSL2's `rack2d`) produce manifold solids instead of degrading to un-combined geometry under boolean union.
+
+- [#60](https://github.com/matthova/faster-scad/pull/60) [`dc2f96d`](https://github.com/matthova/faster-scad/commit/dc2f96d3126e9499764ceb6fe0718239b927307e) Thanks [@matthova](https://github.com/matthova)! - add a GitHub link icon to the toolbar (opens the repo in the system browser, works in web and desktop)
+
+- [#62](https://github.com/matthova/faster-scad/pull/62) [`f2aa6bf`](https://github.com/matthova/faster-scad/commit/f2aa6bf486b8637ca5d3ef4d4d3eb6c9a3976000) Thanks [@matthova](https://github.com/matthova)! - default the export format to 3MF for multi-color models (until you pick a format yourself), so colors aren't silently dropped by STL
+
 ## 0.4.1
 
 ### Patch Changes
