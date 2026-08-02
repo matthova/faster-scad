@@ -54,7 +54,9 @@ import {
   isTauri,
   openExternal,
   DesktopEngine,
+  DesktopOpenscadEngine,
   saveModelNative,
+  saveBytesNative,
   openScadFile,
   openScadPath,
   takePendingOpen,
@@ -244,7 +246,12 @@ export function App() {
   const editorHost = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const viewerRef = useRef<Viewer | null>(null);
-  const engineRef = useRef<Engine | DesktopEngine | null>(null);
+  const engineRef = useRef<Engine | DesktopEngine | DesktopOpenscadEngine | null>(null);
+  // Directory of the opened file, for the native engine's disk include/use
+  // resolution. Held here (not just on the engine instance) so it survives an
+  // engine swap: switching to OpenSCAD and back rebuilds the DesktopEngine, and
+  // it needs to be re-seeded with the current file's dir.
+  const engineDirRef = useRef(".");
   const viewRef = useRef<EditorView | null>(null);
   const lastPositions = useRef<Float32Array>(new Float32Array(0));
   // Preview color channel from the last render, for colored 3MF export.
@@ -273,10 +280,12 @@ export function App() {
   // Fast (non-watertight) preview toggle. Mirrored to a ref so the once-wired
   // `renderNow` closure reads the live value.
   const fastPreviewRef = useRef(loadPrefs().fastPreview);
-  // Active render engine (browser only; desktop always uses native). Mirrored to
-  // a ref so the once-wired render closures read the live value. `swapEngineRef`
-  // is set inside the mount effect (it needs the effect's onResult/onBusyChange).
-  const engineKindRef = useRef<EngineKind>(TAURI ? "quito" : loadPrefs().engine);
+  // Active render engine. "quito" is our engine (native C++ kernel on desktop,
+  // wasm in the browser); "openscad" is the vendored OpenSCAD wasm build, which
+  // runs in-webview on both. Mirrored to a ref so the once-wired render closures
+  // read the live value. `swapEngineRef` is set inside the mount effect (it needs
+  // the effect's onResult/onBusyChange).
+  const engineKindRef = useRef<EngineKind>(loadPrefs().engine);
   const swapEngineRef = useRef<(kind: EngineKind) => void>(() => {});
 
   // File + customizer state. A `#code/…` share link (browser only) wins over
@@ -429,26 +438,33 @@ export function App() {
         slowTimer.current = window.setTimeout(markRenderPending, SLOW_RENDER_MS);
       }
     };
-    // Build an engine for the given kind. Desktop always uses the native engine;
-    // the browser picks Quito or the vendored OpenSCAD wasm.
-    const buildEngine = (kind: EngineKind): Engine | DesktopEngine => {
+    // Build an engine for the given kind. "openscad" runs OpenSCAD — a locally-
+    // installed binary on desktop (falling back to wasm if none is installed), or
+    // the vendored wasm build in the browser. "quito" uses the native C++ engine
+    // on desktop and the wasm engine in the browser.
+    const buildEngine = (
+      kind: EngineKind,
+    ): Engine | DesktopEngine | DesktopOpenscadEngine => {
       const cb = (r: RenderResponse) => onResult(r);
-      if (TAURI) return new DesktopEngine(cb, { onBusyChange });
-      return kind === "openscad"
-        ? new OpenscadEngine(cb, { onBusyChange })
-        : new Engine(cb, { onBusyChange });
+      if (kind === "openscad") {
+        if (!TAURI) return new OpenscadEngine(cb, { onBusyChange });
+        const osc = new DesktopOpenscadEngine(cb, { onBusyChange });
+        osc.dir = engineDirRef.current; // disk include/use via OPENSCADPATH
+        return osc;
+      }
+      if (!TAURI) return new Engine(cb, { onBusyChange });
+      const native = new DesktopEngine(cb, { onBusyChange });
+      native.dir = engineDirRef.current; // re-seed disk include/use resolution
+      return native;
     };
     engineRef.current = buildEngine(engineKindRef.current);
 
     // Swap the live engine (toolbar toggle): tear down the old worker, build the
-    // new one, carry over the desktop include/use dir, and re-render.
+    // new one (which re-seeds the native include/use dir from `engineDirRef`),
+    // and re-render.
     swapEngineRef.current = (kind: EngineKind) => {
-      const prevDir =
-        engineRef.current instanceof DesktopEngine ? engineRef.current.dir : null;
       engineRef.current?.dispose();
-      const next = buildEngine(kind);
-      if (prevDir !== null && next instanceof DesktopEngine) next.dir = prevDir;
-      engineRef.current = next;
+      engineRef.current = buildEngine(kind);
       renderNowRef.current();
     };
 
@@ -474,10 +490,11 @@ export function App() {
         );
       }
       const libs = fs.slice(1);
-      if (TAURI) {
+      if (engineRef.current instanceof DesktopEngine) {
         // Native engine resolves include/use from disk (OPENSCADPATH) + the
-        // in-memory tabs; no CDN fetch needed.
-        engineRef.current?.render(
+        // in-memory tabs; no CDN fetch needed. Only the native engine can read
+        // disk — the OpenSCAD wasm engine (even on desktop) takes the closure path.
+        engineRef.current.render(
           fs[0].content,
           names,
           values,
@@ -486,9 +503,10 @@ export function App() {
           fastPreviewRef.current,
         );
       } else {
-        // Browser: resolve the include/use closure (fetching libraries), then
-        // render with the full file set. Read `engineRef.current` (not a captured
-        // local) so a live engine swap takes effect on the next render.
+        // Wasm engine (Quito or OpenSCAD, in browser or desktop): resolve the
+        // include/use closure (fetching libraries), then render with the full
+        // file set. Read `engineRef.current` (not a captured local) so a live
+        // engine swap takes effect on the next render.
         const { names: fileNames, contents: fileContents } = await resolveClosure(
           fs[0].content,
           libs,
@@ -744,7 +762,11 @@ export function App() {
     filesRef.current = next;
     setFiles(next);
     if (path) savedRef.current[name] = content;
-    if (dir && engineRef.current instanceof DesktopEngine) engineRef.current.dir = dir;
+    if (dir) {
+      engineDirRef.current = dir;
+      const e = engineRef.current;
+      if (e instanceof DesktopEngine || e instanceof DesktopOpenscadEngine) e.dir = dir;
+    }
     if (activeRef.current === 0 && viewRef.current) {
       const view = viewRef.current;
       suppressRef.current = true;
@@ -817,9 +839,13 @@ export function App() {
         const path = await saveSourceAs(content, f.name);
         if (!path) return; // cancelled
         recordSaved(idx, path, content);
-        // Main file's directory drives include/use resolution on the native engine.
-        if (idx === 0 && engineRef.current instanceof DesktopEngine) {
-          engineRef.current.dir = path.slice(0, path.length - basename(path).length) || ".";
+        // Main file's directory drives include/use resolution on either native
+        // engine (Quito's disk resolver / OpenSCAD's OPENSCADPATH).
+        if (idx === 0) {
+          const d = path.slice(0, path.length - basename(path).length) || ".";
+          engineDirRef.current = d;
+          const e = engineRef.current;
+          if (e instanceof DesktopEngine || e instanceof DesktopOpenscadEngine) e.dir = d;
         }
         void watchFiles(filesRef.current.map((x) => x.path).filter((p): p is string => !!p));
       }
@@ -897,8 +923,8 @@ export function App() {
   }
 
   /** Swap the render engine between Quito and the vendored OpenSCAD wasm, then
-   *  re-render on the new engine. Remembered across sessions. Browser only —
-   *  the desktop shell always uses the native engine. */
+   *  re-render on the new engine. Remembered across sessions. On desktop, "quito"
+   *  is the native engine and "openscad" runs the OpenSCAD wasm in-webview. */
   function toggleEngine() {
     const next: EngineKind = engineKindRef.current === "openscad" ? "quito" : "openscad";
     engineKindRef.current = next;
@@ -1362,7 +1388,16 @@ export function App() {
     const values = names.map((n) => toLiteral(ov[n]));
     const libs = fs.slice(1);
 
-    if (TAURI) {
+    // On desktop, write bytes we build client-side via a native save dialog;
+    // in the browser, trigger an anchor download. Used by the wasm-engine export
+    // paths below (the native engine has its own `save_model` re-render path).
+    const saveExport = (data: Uint8Array, ext: string) =>
+      TAURI ? void saveBytesNative(data, ext) : downloadBlob(data, `quito.${ext}`);
+
+    // The native re-render export applies only when the native engine produced
+    // what's on screen. With the OpenSCAD wasm engine active (even on desktop),
+    // fall through to the client-side build paths so the file matches the view.
+    if (engineRef.current instanceof DesktopEngine) {
       // Native: re-render on the native engine and write via a save dialog, so
       // the exported model is welded/exact (not derived from the render soup).
       void saveModelNative(
@@ -1392,7 +1427,7 @@ export function App() {
           fileContents,
           format,
         });
-        downloadBlob(new TextEncoder().encode(text), `quito.${format}`);
+        saveExport(new TextEncoder().encode(text), format);
       } catch (err) {
         setStatus((s) => ({ ...s, error: `export failed: ${String(err)}` }));
         setConsoleOpen(true);
@@ -1431,7 +1466,7 @@ export function App() {
       const exportable = groups.filter((g) => g.mode !== "background");
       const data =
         exportable.length > 0 ? build3MFColored(positions, exportable) : build3MF(pos);
-      downloadBlob(data, `quito.3mf`);
+      saveExport(data, "3mf");
       return;
     }
     const data =
@@ -1442,7 +1477,7 @@ export function App() {
           : format === "amf"
             ? buildAMF(pos)
             : buildBinarySTL(pos);
-    downloadBlob(data, `quito.${format}`);
+    saveExport(data, format);
   }
 
   // Keep the imperative refs (editor keymap, native menu) pointing at the latest
@@ -1532,19 +1567,21 @@ export function App() {
           >
             Link
           </button>
-          {!TAURI && (
-            <button
-              className={engineKind === "openscad" ? "active" : undefined}
-              onClick={toggleEngine}
-              title={
-                engineKind === "openscad"
-                  ? "Rendering with OpenSCAD 2025.03.25 (Manifold) — the vendored OpenSCAD wasm engine. Click to switch back to Quito."
+          <button
+            className={engineKind === "openscad" ? "active" : undefined}
+            onClick={toggleEngine}
+            title={
+              engineKind === "openscad"
+                ? TAURI
+                  ? "Rendering with OpenSCAD (Manifold) — your locally-installed OpenSCAD if available, otherwise the bundled wasm build. Click to switch back to Quito."
+                  : "Rendering with OpenSCAD 2025.03.25 (Manifold) — the vendored OpenSCAD wasm engine. Click to switch back to Quito."
+                : TAURI
+                  ? "Rendering with Quito — our native engine. Click to switch to OpenSCAD (uses your local install if available, else the bundled wasm build)."
                   : "Rendering with Quito — our engine. Click to switch to the OpenSCAD wasm engine (first use downloads ~10 MB)."
-              }
-            >
-              {engineKind === "openscad" ? "OpenSCAD" : "Quito"}
-            </button>
-          )}
+            }
+          >
+            {engineKind === "openscad" ? "OpenSCAD" : "Quito"}
+          </button>
           <button
             className={fastPreview ? "active" : undefined}
             onClick={toggleFastPreview}

@@ -22,9 +22,9 @@
 // only (2D models export empty). This is the official nightly WebAssembly build
 // (OpenSCAD 2025.03.25), rendered with the Manifold backend (`--backend=manifold`)
 // — the same build the OpenSCAD web playground ships.
-import type { RenderRequest, RenderResponse } from "./engineWorker";
+import type { RenderRequest } from "./engineWorker";
 import { blankResponse } from "./renderResponse";
-import { buildColoredFromOff, measure, parseBinaryStl } from "./openscadGeometry";
+import { assembleOpenscadResponse } from "./openscadGeometry";
 
 const OPENSCAD_VERSION = "OpenSCAD 2025.03.25 (Manifold)";
 
@@ -153,64 +153,17 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
       return;
     }
 
-    let positions: Float32Array;
-    let normals: Float32Array;
-    let previewPositions: Float32Array = new Float32Array(0);
-    let previewNormals: Float32Array = new Float32Array(0);
-    let groups = "";
-    if (preview) {
-      // Colored F5-style preview: parse the colored OFF into a grouped soup and
-      // feed the viewer's colored channel. `positions`/`normals` carry the same
-      // geometry (distinct buffers) so stats and exports work unchanged.
-      const built = buildColoredFromOff(new TextDecoder().decode(data));
-      previewPositions = built.positions;
-      previewNormals = built.normals;
-      groups = JSON.stringify(built.groups);
-      positions = new Float32Array(built.positions);
-      normals = new Float32Array(built.normals);
-    } else {
-      // Copy into a standalone ArrayBuffer (the FS view may alias wasm memory).
-      const parsed = parseBinaryStl(data.slice().buffer);
-      positions = parsed.positions;
-      normals = parsed.normals;
-    }
-    const { volume, area } = measure(positions);
-
-    const msg: RenderResponse = {
-      seq,
+    const { message, transfer } = assembleOpenscadResponse(seq, {
       ok: true,
-      error: "",
-      geomErrors: "",
+      data,
+      preview: !!preview,
       echo,
       warnings,
-      positions,
-      normals,
-      triangleCount: positions.length / 9,
-      vertexCount: positions.length / 3,
-      volume,
-      area,
-      is2D: false,
-      ms: performance.now() - t0,
+      error: "",
       version: OPENSCAD_VERSION,
-      params: `{"params":[]}`,
-      diagnostics: "[]",
-      previewPositions,
-      previewNormals,
-      groups,
-      provenancePositions: new Float32Array(0),
-      provenanceNormals: new Float32Array(0),
-      provenance: "",
-      viewport: "",
-      // Geometry is exact (F6) either way — only color/preview-mode differs — so
-      // exports use it directly (no re-render), unlike Quito's fast preview.
-      preview: false,
-    };
-    (self as unknown as Worker).postMessage(
-      msg,
-      preview
-        ? [positions.buffer, normals.buffer, previewPositions.buffer, previewNormals.buffer]
-        : [positions.buffer, normals.buffer],
-    );
+      ms: performance.now() - t0,
+    });
+    (self as unknown as Worker).postMessage(message, transfer);
   } catch (renderErr) {
     fail(`engine error: ${String(renderErr)}`);
   }
