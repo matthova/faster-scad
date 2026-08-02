@@ -90,6 +90,7 @@ export class DesktopEngine {
     values: string[] = [],
     fileNames: string[] = [],
     fileContents: string[] = [],
+    preview = false,
   ) {
     const seq = ++this.seq;
     this.setBusy(true);
@@ -108,6 +109,7 @@ export class DesktopEngine {
           paramValues: values,
           fileNames,
           fileContents,
+          preview,
         }),
       )
       .then((res) => {
@@ -139,6 +141,7 @@ export class DesktopEngine {
           provenanceNormals: new Float32Array(res.provenanceNormals ?? []),
           provenance: res.provenance ?? "",
           viewport: res.viewport,
+          preview,
         });
       })
       .catch((e) => {

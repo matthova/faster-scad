@@ -101,10 +101,43 @@ impl GeomCache {
     }
 }
 
+/// How CSG booleans are resolved during a render.
+///
+/// This is the "watertight vs. fast" knob, mirroring OpenSCAD's F6 (CGAL/Manifold
+/// exact render) vs. F5 (OpenCSG preview). We can't run OpenCSG's image-space GPU
+/// compositing here — the viewer is plain three.js — but we get most of the win a
+/// different way: the dominant cost in typical models is the top-level union of
+/// many parts, and for an *opaque* render a union looks identical whether or not
+/// its interior walls are removed. So in preview we skip that boolean entirely.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum RenderMode {
+    /// Every boolean goes through the kernel; the result is a watertight manifold.
+    Exact,
+    /// `union`/`group` operands are concatenated instead of unioned — fast, but
+    /// the mesh keeps its internal walls and is *not* watertight. Booleans that
+    /// can't be faked this way (difference/intersection/hull/minkowski) still run
+    /// exactly (their operands are rendered in [`RenderMode::Exact`]), so holes,
+    /// clips and hulls still look right.
+    PreviewConcat,
+}
+
+/// Fold the render mode into a cache key so a subtree rendered both ways (exact
+/// once, concatenated once) gets two entries instead of colliding. `Exact` keeps
+/// the bare hash, so exact renders — and the exact operands of a preview render —
+/// share the existing cache across preview/non-preview renders.
+fn mode_key(hash: u64, mode: RenderMode) -> u64 {
+    match mode {
+        RenderMode::Exact => hash,
+        RenderMode::PreviewConcat => hash ^ 0x9E37_79B9_7F4A_7C15,
+    }
+}
+
 /// Shared state threaded through a single render traversal.
 struct Ctx<'a> {
     kernel: &'a dyn Kernel,
     cache: &'a mut GeomCache,
+    /// How booleans are resolved (exact kernel vs. fast preview concatenation).
+    mode: RenderMode,
     /// Precomputed structural hash of every node in the tree, by address.
     hashes: &'a HashMap<*const Node, u64>,
     /// Non-fatal geometry warnings collected during the render (e.g. non-convex
@@ -185,6 +218,29 @@ pub fn render_cached_diag(
     kernel: &dyn Kernel,
     cache: &mut GeomCache,
 ) -> Result<(Mesh, RenderDiagnostics), GeomError> {
+    render_cached_diag_mode(node, kernel, cache, RenderMode::Exact)
+}
+
+/// Fast, **non-watertight** render (see [`RenderMode::PreviewConcat`]): unions are
+/// concatenated rather than unioned, skipping the kernel's most expensive work.
+/// The mesh is only suitable for opaque display, not export — use
+/// [`render_cached_diag`] for the authoritative watertight geometry, stats, and
+/// export. Differences/intersections/hulls still resolve exactly, so holes and
+/// clips look correct.
+pub fn render_preview_cached_diag(
+    node: &Node,
+    kernel: &dyn Kernel,
+    cache: &mut GeomCache,
+) -> Result<(Mesh, RenderDiagnostics), GeomError> {
+    render_cached_diag_mode(node, kernel, cache, RenderMode::PreviewConcat)
+}
+
+fn render_cached_diag_mode(
+    node: &Node,
+    kernel: &dyn Kernel,
+    cache: &mut GeomCache,
+    mode: RenderMode,
+) -> Result<(Mesh, RenderDiagnostics), GeomError> {
     let mut hashes = HashMap::new();
     hash_all(node, &mut hashes);
     let mut warnings = Vec::new();
@@ -192,6 +248,7 @@ pub fn render_cached_diag(
     let mut ctx = Ctx {
         kernel,
         cache,
+        mode,
         hashes: &hashes,
         warnings: &mut warnings,
         errors: &mut errors,
@@ -208,7 +265,7 @@ pub fn render_cached_diag(
 /// diagnostics); miss → render, capturing the diagnostics this subtree added, and
 /// store them with the mesh so a later warm hit re-reports them.
 fn render_node(node: &Node, ctx: &mut Ctx) -> Result<Mesh, GeomError> {
-    let key = ctx.hashes[&(node as *const Node)];
+    let key = mode_key(ctx.hashes[&(node as *const Node)], ctx.mode);
     if let Some(entry) = ctx.cache.nodes.get(&key) {
         ctx.warnings.extend(entry.warnings.iter().cloned());
         ctx.errors.extend(entry.errors.iter().cloned());
@@ -310,6 +367,10 @@ pub fn render_groups_cached(
     let mut ctx = Ctx {
         kernel,
         cache,
+        // The color/provenance channels already avoid the cross-part union cost
+        // (they partition unions into per-region meshes), so they always run
+        // exact — there is nothing for preview concatenation to save here.
+        mode: RenderMode::Exact,
         hashes: &hashes,
         warnings: &mut warnings,
         errors: &mut errors,
@@ -438,6 +499,8 @@ pub fn render_provenance_cached(
     let mut ctx = Ctx {
         kernel,
         cache,
+        // See `render_groups_cached`: the provenance channel is already union-free.
+        mode: RenderMode::Exact,
         hashes: &hashes,
         warnings: &mut warnings,
         errors: &mut errors,
@@ -916,6 +979,21 @@ fn render2d_lowered(node: &Node, ctx: &mut Ctx) -> Result<Vec<Contour>, GeomErro
 /// alone (the tools are meant to be *subtracted*, so drawing them as solids
 /// would mislead), so it passes `base_only = true` and the base as the first
 /// child.
+/// Run `f` with the context forced into [`RenderMode::Exact`], restoring the
+/// previous mode afterwards. Used when descending into the operands of a boolean
+/// that must resolve exactly (difference/intersection/hull/minkowski): those feed
+/// their operands into the kernel, which needs real watertight meshes — a
+/// preview-concatenated (self-overlapping, non-manifold) operand would be rejected
+/// and, worse, degrade a difference to "no hole". So even under preview, unions
+/// *nested inside* these ops are still unioned for real.
+fn with_exact<T>(ctx: &mut Ctx, f: impl FnOnce(&mut Ctx) -> T) -> T {
+    let prev = ctx.mode;
+    ctx.mode = RenderMode::Exact;
+    let out = f(ctx);
+    ctx.mode = prev;
+    out
+}
+
 fn boolean_or_fallback(
     children: &[Node],
     ctx: &mut Ctx,
@@ -1007,7 +1085,10 @@ fn render_uncached(node: &Node, ctx: &mut Ctx) -> Result<Mesh, GeomError> {
             ctx,
         ),
         Node::Projection { cut, child } => {
-            let mesh = render_node(child, ctx)?;
+            // Contour extraction assumes clean geometry; a preview-concatenated
+            // child (overlapping internal walls) would spawn spurious contours,
+            // so project from the exact mesh.
+            let mesh = with_exact(ctx, |ctx| render_node(child, ctx))?;
             let contours = if *cut {
                 shape2d::slice_z0(&mesh)
             } else {
@@ -1016,20 +1097,33 @@ fn render_uncached(node: &Node, ctx: &mut Ctx) -> Result<Mesh, GeomError> {
             Ok(shape2d::flat_mesh(&contours))
         }
 
-        Node::Group(children) => {
-            boolean_or_fallback(children, ctx, "union", false, |k, m| k.union(m))
+        Node::Group(children) | Node::Union(children) => {
+            if ctx.mode == RenderMode::PreviewConcat {
+                // Preview: skip the union and just pile the operands together.
+                // For an opaque render the interior walls are occluded by the
+                // outer surfaces, so this is visually indistinguishable from a
+                // real union — but it skips the kernel's costliest work. The
+                // result is deliberately non-watertight (see `RenderMode`).
+                let mut acc = Mesh::new();
+                for child in children {
+                    let m = render_node(child, ctx)?;
+                    append_mesh(&mut acc, &m);
+                }
+                Ok(acc)
+            } else {
+                boolean_or_fallback(children, ctx, "union", false, |k, m| k.union(m))
+            }
         }
-        Node::Union(children) => {
-            boolean_or_fallback(children, ctx, "union", false, |k, m| k.union(m))
-        }
-        Node::Intersection(children) => {
+        Node::Intersection(children) => with_exact(ctx, |ctx| {
             boolean_or_fallback(children, ctx, "intersection", false, |k, m| {
                 k.intersection(m)
             })
-        }
-        Node::Hull(children) => boolean_or_fallback(children, ctx, "hull", false, |k, m| k.hull(m)),
+        }),
+        Node::Hull(children) => with_exact(ctx, |ctx| {
+            boolean_or_fallback(children, ctx, "hull", false, |k, m| k.hull(m))
+        }),
         Node::Minkowski(children) => {
-            let meshes = render_all(children, ctx)?;
+            let meshes = with_exact(ctx, |ctx| render_all(children, ctx))?;
             // 3D minkowski is exact only for convex operands (hull of vertex
             // sums); a non-convex operand yields the convex approximation. Warn
             // rather than silently mislead. (2D minkowski is exact — see
@@ -1048,10 +1142,13 @@ fn render_uncached(node: &Node, ctx: &mut Ctx) -> Result<Mesh, GeomError> {
                 Ok(Mesh::new())
             } else {
                 // On failure, fall back to the base alone: the tools are meant to
-                // be subtracted, so drawing them as solids would mislead.
-                boolean_or_fallback(children, ctx, "difference", true, |k, mut m| {
-                    let base = m.remove(0);
-                    k.difference(base, m)
+                // be subtracted, so drawing them as solids would mislead. Operands
+                // render exact even under preview so the hole is still cut.
+                with_exact(ctx, |ctx| {
+                    boolean_or_fallback(children, ctx, "difference", true, |k, mut m| {
+                        let base = m.remove(0);
+                        k.difference(base, m)
+                    })
                 })
             }
         }
@@ -1358,7 +1455,7 @@ fn extrude_csg(
         }
         // projection: render the 3D child, flatten, then extrude.
         Node::Projection { cut, child } => {
-            let mesh = render_node(child, ctx)?;
+            let mesh = with_exact(ctx, |ctx| render_node(child, ctx))?;
             let contours = if *cut {
                 shape2d::slice_z0(&mesh)
             } else {
@@ -2903,5 +3000,121 @@ mod tests {
         assert_eq!(xml.matches("<item ").count(), 2);
         assert!(xml.contains("displaycolor=\"#FF0000FF\""), "{xml}");
         assert!(xml.contains("displaycolor=\"#0000FF80\""), "{xml}");
+    }
+
+    // ---- preview (non-watertight) render mode ----
+
+    fn shifted_cube(dx: f64) -> Node {
+        Node::Translate {
+            v: [dx, 0.0, 0.0],
+            child: Box::new(Node::Cube {
+                size: [1.0, 1.0, 1.0],
+                center: false,
+            }),
+        }
+    }
+
+    fn through_cyl() -> Node {
+        Node::Cylinder {
+            h: 40.0,
+            r1: 5.0,
+            r2: 5.0,
+            center: true,
+            frags: FragmentSpec {
+                fn_: 32.0,
+                fa: 12.0,
+                fs: 2.0,
+            },
+        }
+    }
+
+    /// Preview skips the union boolean: the two overlapping cubes are simply
+    /// concatenated (triangle count is the exact sum of the operands, and it
+    /// exceeds what a real union would emit), yet the outer bounding box is
+    /// identical to the exact union — so an opaque render looks the same.
+    #[test]
+    fn preview_union_concatenates_but_keeps_bbox() {
+        let node = Node::Union(vec![shifted_cube(0.0), shifted_cube(0.5)]);
+        let k = RustManifoldKernel::new();
+
+        let (exact, _) = render_cached_diag(&node, &k, &mut GeomCache::new()).unwrap();
+        let (prev, _) = render_preview_cached_diag(&node, &k, &mut GeomCache::new()).unwrap();
+
+        // Two axis-aligned cubes: 12 triangles each, concatenated with no boolean.
+        // The exact union instead re-triangulates the seam (a different count),
+        // which is exactly the work preview skips.
+        assert_eq!(prev.tris.len(), 24, "preview should not run the union");
+        assert_ne!(
+            prev.tris.len(),
+            exact.tris.len(),
+            "the exact union re-meshes the overlap; preview does not"
+        );
+
+        let (elo, ehi) = exact.bbox().unwrap();
+        let (plo, phi) = prev.bbox().unwrap();
+        for i in 0..3 {
+            assert!((elo[i] - plo[i]).abs() < 1e-9, "bbox lo differs");
+            assert!((ehi[i] - phi[i]).abs() < 1e-9, "bbox hi differs");
+        }
+    }
+
+    /// Difference still resolves exactly under preview, so the hole is cut — even
+    /// when the base is itself a union (which must therefore be unioned for real
+    /// before the subtraction). Preview volume should match the exact difference.
+    #[test]
+    fn preview_difference_of_union_base_still_cuts_hole() {
+        let node = Node::Difference(vec![
+            Node::Union(vec![shifted_cube(0.0), shifted_cube(0.5)]),
+            // A skinny bar poking through the overlap region.
+            Node::Translate {
+                v: [0.75, 0.5, -1.0],
+                child: Box::new(Node::Cylinder {
+                    h: 3.0,
+                    r1: 0.2,
+                    r2: 0.2,
+                    center: false,
+                    frags: FragmentSpec {
+                        fn_: 24.0,
+                        fa: 12.0,
+                        fs: 2.0,
+                    },
+                }),
+            },
+        ]);
+        let k = RustManifoldKernel::new();
+        let (exact, _) = render_cached_diag(&node, &k, &mut GeomCache::new()).unwrap();
+        let (prev, _) = render_preview_cached_diag(&node, &k, &mut GeomCache::new()).unwrap();
+        // Exact-resolved subtree: preview must equal the watertight difference.
+        let rel = (prev.volume() - exact.volume()).abs() / exact.volume();
+        assert!(rel < 1e-6, "preview difference volume off by {rel}");
+    }
+
+    /// A difference nested inside a preview union is still exact (its hole survives
+    /// concatenation), while the union around it is skipped.
+    #[test]
+    fn preview_union_of_differenced_part_keeps_hole() {
+        let holed = Node::Difference(vec![
+            Node::Cube {
+                size: [20.0, 20.0, 20.0],
+                center: true,
+            },
+            through_cyl(),
+        ]);
+        let node = Node::Union(vec![
+            holed.clone(),
+            Node::Translate {
+                v: [30.0, 0.0, 0.0],
+                child: Box::new(Node::Cube {
+                    size: [4.0, 4.0, 4.0],
+                    center: true,
+                }),
+            },
+        ]);
+        let k = RustManifoldKernel::new();
+        let (exact_holed, _) = render_cached_diag(&holed, &k, &mut GeomCache::new()).unwrap();
+        let (prev, _) = render_preview_cached_diag(&node, &k, &mut GeomCache::new()).unwrap();
+        // The union is concatenated, so triangle count is the holed part plus the
+        // far cube (12 tris) — no cross-part boolean was run.
+        assert_eq!(prev.tris.len(), exact_holed.tris.len() + 12);
     }
 }

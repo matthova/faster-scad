@@ -8,9 +8,13 @@ export interface Prefs {
   /** Bidirectional editor↔preview highlighting: code→model (cursor highlights
    *  geometry) and model→code (clicking a face selects its source). */
   linkHighlight: boolean;
+  /** Fast preview: unions are concatenated instead of run through the CSG kernel
+   *  — much faster to render, but the on-screen mesh is not watertight. Exports
+   *  and reported volume/area always use the exact path regardless. */
+  fastPreview: boolean;
 }
 
-const DEFAULTS: Prefs = { linkHighlight: true };
+const DEFAULTS: Prefs = { linkHighlight: true, fastPreview: false };
 
 export function loadPrefs(): Prefs {
   try {
@@ -20,15 +24,17 @@ export function loadPrefs(): Prefs {
     return {
       linkHighlight:
         typeof p.linkHighlight === "boolean" ? p.linkHighlight : DEFAULTS.linkHighlight,
+      fastPreview: typeof p.fastPreview === "boolean" ? p.fastPreview : DEFAULTS.fastPreview,
     };
   } catch {
     return { ...DEFAULTS };
   }
 }
 
-export function savePrefs(p: Prefs): void {
+/** Persist a partial preference update, merged over what's already stored. */
+export function savePrefs(p: Partial<Prefs>): void {
   try {
-    localStorage.setItem(KEY, JSON.stringify(p));
+    localStorage.setItem(KEY, JSON.stringify({ ...loadPrefs(), ...p }));
   } catch {
     // storage full / unavailable — non-fatal, just don't persist
   }

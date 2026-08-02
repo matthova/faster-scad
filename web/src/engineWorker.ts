@@ -1,6 +1,11 @@
 /// <reference lib="webworker" />
 // The engine worker: initializes the wasm module once, then renders on demand.
-import init, { render_with_files, parameters, version } from "../engine/quito.js";
+import init, {
+  render_with_files,
+  render_preview_with_files,
+  parameters,
+  version,
+} from "../engine/quito.js";
 
 export interface RenderRequest {
   seq: number;
@@ -12,6 +17,9 @@ export interface RenderRequest {
   /** Extra file names for include/use resolution, parallel to `fileContents`. */
   fileNames: string[];
   fileContents: string[];
+  /** Fast, non-watertight preview: unions are concatenated, skipping the CSG
+   *  kernel's costliest work. On-screen only — export/stats need the exact path. */
+  preview?: boolean;
 }
 
 export interface RenderResponse {
@@ -54,6 +62,9 @@ export interface RenderResponse {
   provenance: string;
   /** `$vp*` viewport variables as JSON, or "" when the source has no `$vp`. */
   viewport: string;
+  /** True when the mesh came from the fast, non-watertight preview path — so the
+   *  UI can flag stats as approximate and exports re-render exact. */
+  preview?: boolean;
   /** True when this is a synthetic result from a *stopped* render — a watchdog
    *  timeout or a user Stop — rather than a real engine result. The render never
    *  actually finished, so the app leaves the crash-recovery sentinel in place
@@ -65,7 +76,7 @@ export interface RenderResponse {
 const ready = init();
 
 self.onmessage = async (e: MessageEvent<RenderRequest>) => {
-  const { seq, source, names, values, fileNames, fileContents } = e.data;
+  const { seq, source, names, values, fileNames, fileContents, preview } = e.data;
   await ready;
 
   const t0 = performance.now();
@@ -78,7 +89,9 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
 
   let res;
   try {
-    res = render_with_files(source, names, values, fileNames, fileContents);
+    res = preview
+      ? render_preview_with_files(source, names, values, fileNames, fileContents)
+      : render_with_files(source, names, values, fileNames, fileContents);
   } catch (err) {
     // A wasm call-stack overflow (V8's limit) surfaces as a RangeError; give a
     // human-readable hint instead of the raw engine message.
@@ -146,6 +159,7 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
     provenanceNormals,
     provenance: res.provenance,
     viewport: res.viewport,
+    preview: preview ?? false,
   };
   res.free();
   (self as unknown as Worker).postMessage(msg, [
