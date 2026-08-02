@@ -11,6 +11,21 @@ export function isTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
+/**
+ * Open a URL in the user's default browser. In the desktop shell a plain
+ * `target="_blank"` link would try to navigate the webview, so route it through
+ * the Tauri opener plugin (system browser). In the browser build, just open a
+ * new tab.
+ */
+export async function openExternal(url: string): Promise<void> {
+  if (!isTauri()) {
+    window.open(url, "_blank", "noopener,noreferrer");
+    return;
+  }
+  const { openUrl } = await import("@tauri-apps/plugin-opener");
+  await openUrl(url);
+}
+
 // Shape returned by the Rust `render` command (serde camelCase).
 interface NativeResult {
   ok: boolean;

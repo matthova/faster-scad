@@ -111,6 +111,18 @@ body {
   cursor: default;
 }
 
+/* GitHub source link — a compact, square icon button. */
+.actions button.github-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  color: var(--muted);
+}
+.actions button.github-link:hover:not(:disabled) {
+  color: var(--text);
+}
+
 /* Pressed state for toggle buttons (e.g. projection). */
 .actions button.active {
   border-color: var(--accent);

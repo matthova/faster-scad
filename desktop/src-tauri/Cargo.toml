@@ -25,6 +25,8 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
+# Opens external URLs (e.g. the GitHub link) in the system browser.
+tauri-plugin-opener = "2"
 # In-app auto-update: `updater` pulls the signed release manifest and installs
 # the platform artifact; `process` provides `relaunch` after an update lands.
 # Desktop-only — the updater has no meaning on mobile targets.
