@@ -20,6 +20,10 @@ export interface RenderRequest {
   /** Fast, non-watertight preview: unions are concatenated, skipping the CSG
    *  kernel's costliest work. On-screen only — export/stats need the exact path. */
   preview?: boolean;
+  /** Runtime URL of the vendored OpenSCAD wasm loader, injected by the OpenSCAD
+   *  engine so its worker can dynamically import it under any deploy base.
+   *  Ignored by this (Quito) worker. */
+  openscadUrl?: string;
 }
 
 export interface RenderResponse {

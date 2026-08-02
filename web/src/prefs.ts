@@ -4,6 +4,10 @@
 
 const KEY = "quito.prefs.v1";
 
+/** Which render engine the playground drives (browser only). "quito" is our own
+ *  wasm engine; "openscad" is the vendored OpenSCAD wasm build. */
+export type EngineKind = "quito" | "openscad";
+
 export interface Prefs {
   /** Bidirectional editor↔preview highlighting: code→model (cursor highlights
    *  geometry) and model→code (clicking a face selects its source). */
@@ -12,9 +16,11 @@ export interface Prefs {
    *  — much faster to render, but the on-screen mesh is not watertight. Exports
    *  and reported volume/area always use the exact path regardless. */
   fastPreview: boolean;
+  /** Active render engine (browser only; the desktop shell always uses native). */
+  engine: EngineKind;
 }
 
-const DEFAULTS: Prefs = { linkHighlight: true, fastPreview: false };
+const DEFAULTS: Prefs = { linkHighlight: true, fastPreview: false, engine: "quito" };
 
 export function loadPrefs(): Prefs {
   try {
@@ -25,6 +31,7 @@ export function loadPrefs(): Prefs {
       linkHighlight:
         typeof p.linkHighlight === "boolean" ? p.linkHighlight : DEFAULTS.linkHighlight,
       fastPreview: typeof p.fastPreview === "boolean" ? p.fastPreview : DEFAULTS.fastPreview,
+      engine: p.engine === "openscad" ? "openscad" : DEFAULTS.engine,
     };
   } catch {
     return { ...DEFAULTS };

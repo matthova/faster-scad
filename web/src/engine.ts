@@ -104,10 +104,23 @@ export class Engine {
     }
   }
 
-  private spawn() {
-    this.worker = new Worker(new URL("./engineWorker.ts", import.meta.url), {
+  /** Construct the backing worker. Overridden by `OpenscadEngine` to spawn the
+   *  OpenSCAD worker instead of the Quito one. Kept as a literal `new Worker(new
+   *  URL(...))` per call site so Vite can bundle each worker. */
+  protected createWorker(): Worker {
+    return new Worker(new URL("./engineWorker.ts", import.meta.url), {
       type: "module",
     });
+  }
+
+  /** Extra fields merged into every posted request. Overridden by
+   *  `OpenscadEngine` to inject the wasm loader URL. */
+  protected requestExtra(): Partial<RenderRequest> {
+    return {};
+  }
+
+  private spawn() {
+    this.worker = this.createWorker();
     this.worker.onmessage = (e: MessageEvent<RenderResponse>) => {
       this.clearTimer();
       this.setBusy(false);
@@ -147,7 +160,18 @@ export class Engine {
       fileNames,
       fileContents,
       preview,
+      ...this.requestExtra(),
     } satisfies RenderRequest);
+  }
+
+  /** Permanently tear down the worker (used when swapping to another engine).
+   *  Unlike `cancel()`, no synthetic result is delivered — the caller is
+   *  replacing this engine wholesale. */
+  dispose() {
+    this.clearTimer();
+    this.worker.terminate();
+    this.pending = null;
+    this.setBusy(false);
   }
 
   /** Stop the in-flight render (user pressed Stop): terminate the worker, drop
@@ -173,5 +197,25 @@ export class Engine {
     this.seq += 1;
     this.setBusy(false);
     this.onResult(blankResponse(this.seq, { error, stopped: true }));
+  }
+}
+
+/** Renders with the vendored OpenSCAD wasm instead of Quito. Inherits all of
+ *  `Engine`'s scheduling/watchdog/cancellation — only the worker and the
+ *  injected loader URL differ. See openscadWorker.ts for the contract and its
+ *  documented limitations. */
+export class OpenscadEngine extends Engine {
+  // The vendored loader lives in `public/openscad/`; resolve it against the
+  // document base so it works under any deploy path (e.g. GitHub Pages subdir).
+  private readonly url = new URL("openscad/openscad.js", document.baseURI).href;
+
+  protected createWorker(): Worker {
+    return new Worker(new URL("./openscadWorker.ts", import.meta.url), {
+      type: "module",
+    });
+  }
+
+  protected requestExtra(): Partial<RenderRequest> {
+    return { openscadUrl: this.url };
   }
 }

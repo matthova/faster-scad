@@ -186,6 +186,14 @@ export class DesktopEngine {
     this.abort("Render stopped. (The native engine may still be finishing in the background.)");
   }
 
+  /** Tear down (parity with `Engine.dispose`). The native render runs
+   *  out-of-process, so bump `seq` to ignore any in-flight result and idle. */
+  dispose() {
+    this.clearTimer();
+    this.seq += 1;
+    this.setBusy(false);
+  }
+
   private onTimeout(seq: number) {
     if (seq !== this.seq) return;
     this.timer = undefined;
