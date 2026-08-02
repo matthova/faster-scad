@@ -42,7 +42,7 @@ import {
   saveProject,
   clearProject,
   markRenderPending,
-  clearRenderPending,
+  settleRenderPending,
   wasRenderPending,
   type File,
 } from "./project";
@@ -515,10 +515,13 @@ export function App() {
     viewRef.current = view;
 
     if (wasStuck) {
-      // The last render never finished (froze/crashed the tab). Clear the
-      // sentinel and stay idle instead of re-triggering it; the recovery banner
-      // lets the user simplify the script or render on demand.
-      clearRenderPending();
+      // The last render never finished (froze/crashed the tab). Stay idle instead
+      // of re-triggering it; the recovery banner lets the user simplify the script
+      // or render on demand. The sentinel is deliberately left ARMED: safe mode
+      // must survive repeated relaunches (a user who just quits from here would
+      // otherwise auto-render the same too-heavy model next launch). It clears
+      // only when a render genuinely completes — an edit/Render-anyway that
+      // finishes, a New project, or a loaded example.
       setStatus((s) => ({
         ...s,
         ok: false,
@@ -962,8 +965,13 @@ export function App() {
     // freeze the main thread here (the worker already returned), and a set-then-
     // cleared sentinel across this synchronous block persists only if we never
     // reach the clear below — i.e. exactly when the tab froze/crashed applying it.
+    // A *stopped* result (watchdog timeout / user Stop) is exempt: the render
+    // never finished, so the sentinel must stay in whatever state the slow-timer
+    // left it (armed iff the render ran past SLOW_RENDER_MS) — clearing/re-arming
+    // it here would either disarm recovery for a too-heavy render or falsely arm
+    // it for a quick Stop.
     window.clearTimeout(slowTimer.current);
-    markRenderPending();
+    if (!r.stopped) markRenderPending();
 
     if (r.version) setVersion(r.version);
 
@@ -1082,11 +1090,12 @@ export function App() {
       frameWaiter();
     }
 
-    // The render (and its mesh application) completed without freezing the tab —
-    // disarm the crash-recovery sentinel. Last statement on purpose: if applying
-    // a huge mesh above hangs the main thread, the sentinel stays set so the next
-    // load recovers instead of re-freezing.
-    clearRenderPending();
+    // Settle the crash-recovery sentinel. A genuine render (and its mesh
+    // application) completed without freezing the tab, so it's disarmed. Last
+    // statement on purpose: if applying a huge mesh above hangs the main thread,
+    // we never reach here and the sentinel stays set so the next load recovers.
+    // A *stopped* result (watchdog/Stop) is exempt — see settleRenderPending.
+    settleRenderPending(!!r.stopped);
   }
 
   const consoleLines: { kind: "error" | "warn" | "echo"; text: string }[] = [];

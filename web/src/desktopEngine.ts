@@ -182,7 +182,7 @@ export class DesktopEngine {
     this.clearTimer();
     this.seq += 1; // ignore the in-flight native result when it lands
     this.setBusy(false);
-    this.onResult(blankResponse(this.seq, { error, version: "native" }));
+    this.onResult(blankResponse(this.seq, { error, version: "native", stopped: true }));
   }
 }
 

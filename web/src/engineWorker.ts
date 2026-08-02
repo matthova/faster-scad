@@ -54,6 +54,12 @@ export interface RenderResponse {
   provenance: string;
   /** `$vp*` viewport variables as JSON, or "" when the source has no `$vp`. */
   viewport: string;
+  /** True when this is a synthetic result from a *stopped* render — a watchdog
+   *  timeout or a user Stop — rather than a real engine result. The render never
+   *  actually finished, so the app leaves the crash-recovery sentinel in place
+   *  (see project.ts) instead of clearing it, and the next launch recovers
+   *  instead of re-triggering the freeze. Absent on genuine results. */
+  stopped?: boolean;
 }
 
 const ready = init();
