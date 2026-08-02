@@ -16,7 +16,7 @@ import {
   type ThemeMode,
   type Span,
 } from "./viewer";
-import { Engine, export2dBrowser, renderMeshExactBrowser } from "./engine";
+import { Engine, OpenscadEngine, export2dBrowser, renderMeshExactBrowser } from "./engine";
 import type { RenderResponse } from "./engineWorker";
 import {
   buildBinarySTL,
@@ -46,7 +46,7 @@ import {
   wasRenderPending,
   type File,
 } from "./project";
-import { loadPrefs, savePrefs } from "./prefs";
+import { loadPrefs, savePrefs, type EngineKind } from "./prefs";
 import { EXAMPLES } from "./examples";
 import { decodeSharedProject, shareUrl } from "./share";
 import { resolveClosure } from "./library";
@@ -273,6 +273,11 @@ export function App() {
   // Fast (non-watertight) preview toggle. Mirrored to a ref so the once-wired
   // `renderNow` closure reads the live value.
   const fastPreviewRef = useRef(loadPrefs().fastPreview);
+  // Active render engine (browser only; desktop always uses native). Mirrored to
+  // a ref so the once-wired render closures read the live value. `swapEngineRef`
+  // is set inside the mount effect (it needs the effect's onResult/onBusyChange).
+  const engineKindRef = useRef<EngineKind>(TAURI ? "quito" : loadPrefs().engine);
+  const swapEngineRef = useRef<(kind: EngineKind) => void>(() => {});
 
   // File + customizer state. A `#code/…` share link (browser only) wins over
   // the autosaved localStorage project, so opening a shared URL always shows
@@ -350,6 +355,7 @@ export function App() {
   const [ortho, setOrtho] = useState(false);
   const [linkHighlight, setLinkHighlight] = useState(linkHighlightRef.current);
   const [fastPreview, setFastPreview] = useState(fastPreviewRef.current);
+  const [engineKind, setEngineKind] = useState<EngineKind>(engineKindRef.current);
   // OS light/dark appearance. Auto-follows `prefers-color-scheme`; no toggle.
   const [mode, setMode] = useState<ThemeMode>(currentMode);
   const [time, setTime] = useState(sharedAnim?.t ?? 0);
@@ -423,10 +429,28 @@ export function App() {
         slowTimer.current = window.setTimeout(markRenderPending, SLOW_RENDER_MS);
       }
     };
-    const engine = TAURI
-      ? new DesktopEngine((r: RenderResponse) => onResult(r), { onBusyChange })
-      : new Engine((r: RenderResponse) => onResult(r), { onBusyChange });
-    engineRef.current = engine;
+    // Build an engine for the given kind. Desktop always uses the native engine;
+    // the browser picks Quito or the vendored OpenSCAD wasm.
+    const buildEngine = (kind: EngineKind): Engine | DesktopEngine => {
+      const cb = (r: RenderResponse) => onResult(r);
+      if (TAURI) return new DesktopEngine(cb, { onBusyChange });
+      return kind === "openscad"
+        ? new OpenscadEngine(cb, { onBusyChange })
+        : new Engine(cb, { onBusyChange });
+    };
+    engineRef.current = buildEngine(engineKindRef.current);
+
+    // Swap the live engine (toolbar toggle): tear down the old worker, build the
+    // new one, carry over the desktop include/use dir, and re-render.
+    swapEngineRef.current = (kind: EngineKind) => {
+      const prevDir =
+        engineRef.current instanceof DesktopEngine ? engineRef.current.dir : null;
+      engineRef.current?.dispose();
+      const next = buildEngine(kind);
+      if (prevDir !== null && next instanceof DesktopEngine) next.dir = prevDir;
+      engineRef.current = next;
+      renderNowRef.current();
+    };
 
     const renderNow = async () => {
       const fs = filesRef.current;
@@ -453,7 +477,7 @@ export function App() {
       if (TAURI) {
         // Native engine resolves include/use from disk (OPENSCADPATH) + the
         // in-memory tabs; no CDN fetch needed.
-        engine.render(
+        engineRef.current?.render(
           fs[0].content,
           names,
           values,
@@ -463,13 +487,21 @@ export function App() {
         );
       } else {
         // Browser: resolve the include/use closure (fetching libraries), then
-        // render with the full file set.
+        // render with the full file set. Read `engineRef.current` (not a captured
+        // local) so a live engine swap takes effect on the next render.
         const { names: fileNames, contents: fileContents } = await resolveClosure(
           fs[0].content,
           libs,
           LIB_BASE,
         );
-        engine.render(fs[0].content, names, values, fileNames, fileContents, fastPreviewRef.current);
+        engineRef.current?.render(
+          fs[0].content,
+          names,
+          values,
+          fileNames,
+          fileContents,
+          fastPreviewRef.current,
+        );
       }
     };
     const requestRender = () => {
@@ -862,6 +894,17 @@ export function App() {
     setFastPreview(next);
     savePrefs({ fastPreview: next });
     renderNowRef.current?.();
+  }
+
+  /** Swap the render engine between Quito and the vendored OpenSCAD wasm, then
+   *  re-render on the new engine. Remembered across sessions. Browser only —
+   *  the desktop shell always uses the native engine. */
+  function toggleEngine() {
+    const next: EngineKind = engineKindRef.current === "openscad" ? "quito" : "openscad";
+    engineKindRef.current = next;
+    setEngineKind(next);
+    savePrefs({ engine: next });
+    swapEngineRef.current(next);
   }
 
   function switchTo(idx: number) {
@@ -1489,13 +1532,30 @@ export function App() {
           >
             Link
           </button>
+          {!TAURI && (
+            <button
+              className={engineKind === "openscad" ? "active" : undefined}
+              onClick={toggleEngine}
+              title={
+                engineKind === "openscad"
+                  ? "Rendering with OpenSCAD 2025.03.25 (Manifold) — the vendored OpenSCAD wasm engine. Click to switch back to Quito."
+                  : "Rendering with Quito — our engine. Click to switch to the OpenSCAD wasm engine (first use downloads ~10 MB)."
+              }
+            >
+              {engineKind === "openscad" ? "OpenSCAD" : "Quito"}
+            </button>
+          )}
           <button
             className={fastPreview ? "active" : undefined}
             onClick={toggleFastPreview}
             title={
-              fastPreview
-                ? "Fast preview on — unions are skipped (not watertight); much faster to render. Exports & volume stay exact. Click to disable."
-                : "Fast preview off — exact, watertight render. Click to enable a faster, non-watertight preview."
+              engineKind === "openscad"
+                ? fastPreview
+                  ? "Preview on — OpenSCAD F5-style colored render (shows color(...)). Click for a plain exact render."
+                  : "Preview off — plain exact (F6-style) render. Click for an F5-style colored preview."
+                : fastPreview
+                  ? "Fast preview on — unions are skipped (not watertight); much faster to render. Exports & volume stay exact. Click to disable."
+                  : "Fast preview off — exact, watertight render. Click to enable a faster, non-watertight preview."
             }
           >
             Fast

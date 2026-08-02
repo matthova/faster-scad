@@ -14,6 +14,9 @@ export default defineConfig({
       // offline (libraries fetched from a CDN still need the network).
       workbox: {
         globPatterns: ["**/*.{js,css,html,wasm,svg}"],
+        // The OpenSCAD engine is opt-in and its wasm is ~9.6 MB; keep it out of
+        // the precache so it's only fetched when a user selects that engine.
+        globIgnores: ["**/openscad/**"],
         maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
       },
       manifest: {
