@@ -205,6 +205,19 @@ function toCmDiagnostics(diags: EngineDiag[], source: string): Diagnostic[] {
 const FORMATS_3D: ExportFmt[] = ["stl", "off", "obj", "3mf", "amf"];
 const FORMATS_2D: ExportFmt[] = ["dxf", "svg"];
 
+// A model is "multi-color" for export purposes when its exportable (non-`%`
+// background) color groups use more than one distinct color. STL silently drops
+// color; 3MF preserves it as separate objects — so we default multi-color models
+// to 3MF until the user picks a format themselves.
+function distinctExportColors(groups: PreviewGroup[]): number {
+  const seen = new Set<string>();
+  for (const g of groups) {
+    if (g.mode === "background") continue;
+    seen.add(g.color.join(","));
+  }
+  return seen.size;
+}
+
 // A render running longer than this is considered a death-spiral candidate and
 // arms the crash-recovery sentinel (see project.ts). Fast renders never trip it,
 // so an ordinary reload mid-render doesn't force recovery mode on next load.
@@ -322,6 +335,9 @@ export function App() {
   const [recovering, setRecovering] = useState(wasStuck);
   const [consoleOpen, setConsoleOpen] = useState(false);
   const [exportFmt, setExportFmt] = useState<ExportFmt>("stl");
+  // Whether the user has manually chosen an export format. Until they do, the
+  // format auto-tracks the model: 3MF for multi-color 3D models, STL otherwise.
+  const userPickedFmtRef = useRef(false);
   const [is2D, setIs2D] = useState(false);
   const [dims, setDims] = useState<MeshInfo | null>(null);
   const [ortho, setOrtho] = useState(false);
@@ -1049,15 +1065,14 @@ export function App() {
       // Offer vector formats for 2D models, mesh formats for 3D; keep the
       // selected format valid when the model's dimensionality changes.
       setIs2D(r.is2D);
-      setExportFmt((f) =>
-        r.is2D
-          ? FORMATS_2D.includes(f)
-            ? f
-            : "dxf"
-          : FORMATS_3D.includes(f)
-            ? f
-            : "stl",
-      );
+      const multiColor = distinctExportColors(groups) > 1;
+      setExportFmt((f) => {
+        if (r.is2D) return FORMATS_2D.includes(f) ? f : "dxf";
+        // Until the user picks a format, default multi-color models to 3MF (which
+        // preserves the colors) and everything else to STL.
+        if (!userPickedFmtRef.current) return multiColor ? "3mf" : "stl";
+        return FORMATS_3D.includes(f) ? f : "stl";
+      });
       setStatus({
         ok: true,
         message: r.geomErrors
@@ -1495,7 +1510,10 @@ export function App() {
             <select
               aria-label="Export format"
               value={exportFmt}
-              onChange={(e) => setExportFmt(e.target.value as ExportFmt)}
+              onChange={(e) => {
+                userPickedFmtRef.current = true;
+                setExportFmt(e.target.value as ExportFmt);
+              }}
             >
               {(is2D ? FORMATS_2D : FORMATS_3D).map((f) => (
                 <option key={f} value={f}>
