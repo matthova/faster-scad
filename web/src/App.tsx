@@ -561,6 +561,7 @@ export function App() {
       view.destroy();
       unsubCamera();
       unsubPick();
+      viewer.dispose();
       window.removeEventListener("keydown", onKeyDown);
       for (const u of unlisteners) u();
     };
