@@ -88,3 +88,16 @@ export function wasRenderPending(): boolean {
     return false;
   }
 }
+
+/** Settle the sentinel when a render pass produces a result.
+ *
+ *  `stopped` is true for a *synthetic* result — a watchdog timeout or a user
+ *  Stop — where the render never actually finished. Such a result must NOT clear
+ *  the sentinel: doing so was the original bug, where the 20s watchdog wiped its
+ *  own recovery net, so a render heavier than the watchdog re-triggered the
+ *  freeze on every launch. Leaving it untouched keeps it armed (if the in-flight
+ *  slow-timer set it) so the next launch recovers. A genuine result — success or
+ *  a real engine error — means the tab survived, so the sentinel is cleared. */
+export function settleRenderPending(stopped: boolean): void {
+  if (!stopped) clearRenderPending();
+}

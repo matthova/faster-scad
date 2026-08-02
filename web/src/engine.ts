@@ -144,6 +144,6 @@ export class Engine {
     this.pending = null;
     this.seq += 1;
     this.setBusy(false);
-    this.onResult(blankResponse(this.seq, { error }));
+    this.onResult(blankResponse(this.seq, { error, stopped: true }));
   }
 }
