@@ -3,8 +3,9 @@
 // worker — much faster, with include/use resolved from disk. Presents the same
 // interface as `Engine` so `App` can use either transparently.
 import type { RenderResponse } from "./engineWorker";
-import { RENDER_TIMEOUT_MS, type EngineOptions } from "./engine";
+import { OpenscadEngine, RENDER_TIMEOUT_MS, type EngineOptions } from "./engine";
 import { blankResponse } from "./renderResponse";
+import { assembleOpenscadResponse } from "./openscadGeometry";
 
 /** True when running inside the Tauri desktop shell. */
 export function isTauri(): boolean {
@@ -212,6 +213,167 @@ export class DesktopEngine {
   }
 }
 
+/** Shape returned by the Rust `render_openscad` command (serde camelCase). */
+interface NativeOpenscadRun {
+  /** False when no local OpenSCAD binary was found — trigger the wasm fallback. */
+  available: boolean;
+  ok: boolean;
+  error: string;
+  echo: string;
+  warnings: string;
+  version: string;
+  preview: boolean;
+  /** Exported bytes (OFF when `preview`, else binary STL) as a byte array. */
+  data: number[];
+}
+
+/**
+ * Desktop OpenSCAD engine: renders with a *locally-installed* OpenSCAD binary
+ * (its fast Manifold backend) over IPC, then parses the exported bytes with the
+ * same helpers the in-browser wasm OpenSCAD engine uses, so both emit identical
+ * geometry/preview/stats channels. Presents the same interface as
+ * `DesktopEngine`/`Engine` so `App` drives it transparently.
+ *
+ * If no local binary is found (`available: false`), it transparently and
+ * permanently falls back to the vendored wasm `OpenscadEngine` — still real
+ * OpenSCAD, just slower — so the toggle works whether or not OpenSCAD is
+ * installed. Set `QUITO_OPENSCAD=/path/to/openscad` to point at a specific build.
+ */
+export class DesktopOpenscadEngine {
+  private seq = 0;
+  /** Directory of the opened file, added to OPENSCADPATH for disk include/use. */
+  dir = ".";
+  private busy = false;
+  private timer: number | undefined;
+  private readonly timeoutMs: number;
+  /** Lazily-created wasm fallback; once set, all renders delegate to it. */
+  private fallback: OpenscadEngine | null = null;
+
+  constructor(
+    private onResult: (r: RenderResponse) => void,
+    private opts: EngineOptions = {},
+  ) {
+    this.timeoutMs = opts.timeoutMs ?? RENDER_TIMEOUT_MS;
+  }
+
+  private setBusy(busy: boolean) {
+    if (this.busy === busy) return;
+    this.busy = busy;
+    this.opts.onBusyChange?.(busy);
+  }
+
+  private clearTimer() {
+    if (this.timer !== undefined) {
+      window.clearTimeout(this.timer);
+      this.timer = undefined;
+    }
+  }
+
+  render(
+    source: string,
+    names: string[] = [],
+    values: string[] = [],
+    fileNames: string[] = [],
+    fileContents: string[] = [],
+    preview = false,
+  ) {
+    if (this.fallback) {
+      this.fallback.render(source, names, values, fileNames, fileContents, preview);
+      return;
+    }
+    const seq = ++this.seq;
+    this.setBusy(true);
+    this.clearTimer();
+    if (this.timeoutMs > 0) {
+      this.timer = window.setTimeout(() => this.onTimeout(seq), this.timeoutMs);
+    }
+    const t0 = performance.now();
+    import("@tauri-apps/api/core")
+      .then(({ invoke }) =>
+        invoke<NativeOpenscadRun>("render_openscad", {
+          source,
+          dir: this.dir,
+          paramNames: names,
+          paramValues: values,
+          fileNames,
+          fileContents,
+          preview,
+        }),
+      )
+      .then((run) => {
+        if (seq !== this.seq) return; // superseded by a newer render
+        if (!run.available) {
+          // No local OpenSCAD binary — switch to the vendored wasm engine for
+          // this and all future renders (it manages its own busy/watchdog).
+          this.clearTimer();
+          this.fallback = new OpenscadEngine(this.onResult, this.opts);
+          this.fallback.render(source, names, values, fileNames, fileContents, preview);
+          return;
+        }
+        this.clearTimer();
+        this.setBusy(false);
+        const data = run.data.length ? Uint8Array.from(run.data) : null;
+        const { message } = assembleOpenscadResponse(seq, {
+          ok: run.ok,
+          data,
+          preview: run.preview,
+          echo: run.echo,
+          warnings: run.warnings,
+          error: run.error,
+          version: run.version,
+          ms: performance.now() - t0,
+        });
+        this.onResult(message);
+      })
+      .catch((e) => {
+        if (seq !== this.seq) return;
+        this.clearTimer();
+        this.setBusy(false);
+        this.onResult(
+          blankResponse(seq, {
+            error: `OpenSCAD engine error: ${String(e)}`,
+            version: "OpenSCAD (local)",
+          }),
+        );
+      });
+  }
+
+  /** Stop waiting on the in-flight render and idle the UI. Like `DesktopEngine`,
+   *  the native process runs out-of-process and can't be killed from JS. */
+  cancel() {
+    if (this.fallback) {
+      this.fallback.cancel();
+      return;
+    }
+    if (!this.busy) return;
+    this.abort("Render stopped. (OpenSCAD may still be finishing in the background.)");
+  }
+
+  dispose() {
+    this.fallback?.dispose();
+    this.clearTimer();
+    this.seq += 1;
+    this.setBusy(false);
+  }
+
+  private onTimeout(seq: number) {
+    if (seq !== this.seq) return;
+    this.timer = undefined;
+    this.abort(
+      `Render stopped after ${Math.round(this.timeoutMs / 1000)}s — the model may be too ` +
+        `complex. Simplify it, then press Render. (OpenSCAD may still be finishing in the ` +
+        `background.)`,
+    );
+  }
+
+  private abort(error: string) {
+    this.clearTimer();
+    this.seq += 1; // ignore the in-flight native result when it lands
+    this.setBusy(false);
+    this.onResult(blankResponse(this.seq, { error, version: "OpenSCAD (local)", stopped: true }));
+  }
+}
+
 /** A file opened from disk (native). */
 export interface OpenedFile {
   path: string;
@@ -299,6 +461,24 @@ export async function onFileChanged(
 ): Promise<() => void> {
   const { listen } = await import("@tauri-apps/api/event");
   return listen<{ path: string; content: string }>("file-changed", (e) => cb(e.payload));
+}
+
+/** Save already-built export bytes via a native save dialog. Used when a wasm
+ *  engine (e.g. OpenSCAD) produced the geometry on desktop, so the native
+ *  re-render path (`save_model`) — which would use the native Quito engine —
+ *  doesn't apply and we write the bytes we already have. */
+export async function saveBytesNative(
+  bytes: Uint8Array,
+  format: string,
+): Promise<void> {
+  const { save } = await import("@tauri-apps/plugin-dialog");
+  const { invoke } = await import("@tauri-apps/api/core");
+  const path = await save({
+    defaultPath: `quito.${format}`,
+    filters: [{ name: format.toUpperCase(), extensions: [format] }],
+  });
+  if (!path) return; // cancelled
+  await invoke("save_bytes", { path, bytes: Array.from(bytes) });
 }
 
 /** Native save via a Tauri save dialog + the `save_model` command. */

@@ -1,7 +1,12 @@
-// Pure geometry helpers for the OpenSCAD engine worker: parse OpenSCAD's export
-// output (binary STL, colored OFF) into the viewer's mesh channels, and measure
-// a triangle soup. Kept separate from openscadWorker.ts (which has the worker
-// side-effect `self.onmessage`) so this logic is unit-testable in plain Node.
+// Pure geometry helpers for the OpenSCAD engine: parse OpenSCAD's export output
+// (binary STL, colored OFF) into the viewer's mesh channels, measure a triangle
+// soup, and assemble a RenderResponse from a completed OpenSCAD run. Shared by
+// both OpenSCAD paths — the in-browser wasm worker (openscadWorker.ts) and the
+// native desktop engine that shells out to a local OpenSCAD (desktopEngine.ts) —
+// so they emit identical geometry, preview, and stats channels. Kept free of
+// worker side-effects so it's unit-testable in plain Node.
+import type { RenderResponse } from "./engineWorker";
+import { blankResponse } from "./renderResponse";
 
 /** A per-face colored group in the viewer's colored-mesh channel (mirrors
  *  `PreviewGroup` in viewer.ts). `start`/`count` are vertex indices into the
@@ -25,8 +30,8 @@ export const DEFAULT_COLOR: [number, number, number, number] = [
 /** Parse a binary STL blob into flat vertex + per-face-normal arrays (three's
  *  non-indexed layout). Throws if the byte length doesn't match the header. */
 export function parseBinaryStl(buf: ArrayBuffer): {
-  positions: Float32Array;
-  normals: Float32Array;
+  positions: Float32Array<ArrayBuffer>;
+  normals: Float32Array<ArrayBuffer>;
 } {
   if (buf.byteLength < 84) throw new Error("STL too short");
   const dv = new DataView(buf);
@@ -63,8 +68,8 @@ export function parseBinaryStl(buf: ArrayBuffer): {
  *  shows. Faces without an explicit color fall back to the default gold. Faces
  *  may be polygons, so they're fan-triangulated. */
 export function buildColoredFromOff(text: string): {
-  positions: Float32Array;
-  normals: Float32Array;
+  positions: Float32Array<ArrayBuffer>;
+  normals: Float32Array<ArrayBuffer>;
   groups: ColorGroup[];
 } {
   const lines = text
@@ -154,6 +159,91 @@ export function buildColoredFromOff(text: string): {
     groups.push({ start, count: g.tris.length * 3, color: g.color, mode: "solid" });
   }
   return { positions, normals, groups };
+}
+
+/** A completed OpenSCAD run: the exported bytes plus captured logs. `preview`
+ *  selects how `data` is parsed — OFF (F5-style colored) vs binary STL (F6). */
+export interface OpenscadRun {
+  ok: boolean;
+  /** Exported bytes: colored OFF when `preview`, else binary STL. */
+  data: Uint8Array | null;
+  preview: boolean;
+  echo: string;
+  warnings: string;
+  /** Failure detail when `!ok` (empty output, non-zero exit, 2D model, …). */
+  error: string;
+  /** Engine version string for the status bar (differs wasm vs local build). */
+  version: string;
+  ms: number;
+}
+
+/** Assemble a `RenderResponse` from a completed OpenSCAD run, plus the list of
+ *  buffers to transfer (empty on failure). Geometry is exact (F6) either way —
+ *  only color/preview-mode differs — so exports reuse `positions` directly. */
+export function assembleOpenscadResponse(
+  seq: number,
+  run: OpenscadRun,
+): { message: RenderResponse; transfer: ArrayBuffer[] } {
+  const { ok, data, preview, echo, warnings, error, version, ms } = run;
+  if (!ok || !data || data.byteLength === 0) {
+    return { message: blankResponse(seq, { error, echo, warnings, version, ms }), transfer: [] };
+  }
+
+  let positions: Float32Array<ArrayBuffer>;
+  let normals: Float32Array<ArrayBuffer>;
+  let previewPositions: Float32Array<ArrayBuffer> = new Float32Array(0);
+  let previewNormals: Float32Array<ArrayBuffer> = new Float32Array(0);
+  let groups = "";
+  if (preview) {
+    // Colored F5-style preview: parse the colored OFF into a grouped soup for the
+    // viewer's colored channel. `positions`/`normals` carry the same geometry
+    // (distinct buffers) so stats and exports work unchanged.
+    const built = buildColoredFromOff(new TextDecoder().decode(data));
+    previewPositions = built.positions;
+    previewNormals = built.normals;
+    groups = JSON.stringify(built.groups);
+    positions = new Float32Array(built.positions);
+    normals = new Float32Array(built.normals);
+  } else {
+    // Copy into a standalone ArrayBuffer (the source view may alias wasm memory).
+    const parsed = parseBinaryStl(data.slice().buffer);
+    positions = parsed.positions;
+    normals = parsed.normals;
+  }
+  const { volume, area } = measure(positions);
+
+  const message: RenderResponse = {
+    seq,
+    ok: true,
+    error: "",
+    geomErrors: "",
+    echo,
+    warnings,
+    positions,
+    normals,
+    triangleCount: positions.length / 9,
+    vertexCount: positions.length / 3,
+    volume,
+    area,
+    is2D: false,
+    ms,
+    version,
+    params: `{"params":[]}`,
+    diagnostics: "[]",
+    previewPositions,
+    previewNormals,
+    groups,
+    provenancePositions: new Float32Array(0),
+    provenanceNormals: new Float32Array(0),
+    provenance: "",
+    viewport: "",
+    // Geometry is exact (F6) either way, so exports use it directly (no re-render).
+    preview: false,
+  };
+  const transfer = preview
+    ? [positions.buffer, normals.buffer, previewPositions.buffer, previewNormals.buffer]
+    : [positions.buffer, normals.buffer];
+  return { message, transfer };
 }
 
 /** Volume (via the divergence theorem) and surface area of a triangle soup. */

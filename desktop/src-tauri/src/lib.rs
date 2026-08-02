@@ -10,6 +10,7 @@ use quito_eval::{FileResolver, LoadedFile};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::Emitter;
 
@@ -30,6 +31,9 @@ struct AppState {
     /// A `.scad` path passed at launch (double-click / open-with) before the
     /// webview is ready to listen; the frontend drains it via `take_pending_open`.
     pending_open: Mutex<Option<String>>,
+    /// Cached OpenSCAD version string (from `openscad --version`), so the
+    /// `render_openscad` path doesn't spawn a probe process on every render.
+    openscad_version: Mutex<Option<String>>,
 }
 
 /// A file opened from disk.
@@ -644,6 +648,311 @@ fn take_pending_open(state: tauri::State<'_, AppState>) -> Option<String> {
     state.pending_open.lock().unwrap().take()
 }
 
+// ---------------------------------------------------------------------------
+// Native OpenSCAD engine (uses a locally-installed OpenSCAD, if available)
+//
+// The desktop app can render with *actual* OpenSCAD (its fast Manifold backend)
+// instead of Quito. We shell out to a locally-installed OpenSCAD binary,
+// exporting a binary STL (exact) or colored OFF ($preview, F5-style), and hand
+// the bytes back to the frontend, which parses them with the same helpers the
+// in-browser wasm OpenSCAD engine uses. If no local binary is found,
+// `available: false` tells the frontend to fall back to the vendored wasm build.
+// We do NOT bundle OpenSCAD — this only uses what the user already has installed.
+// ---------------------------------------------------------------------------
+
+/// Monotonic counter making each render's temp dir unique across concurrent runs.
+static OPENSCAD_RUN_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Result of a native OpenSCAD run, handed to the frontend for parsing.
+#[derive(Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct OpenscadRun {
+    /// False when no local OpenSCAD binary could be located — the frontend then
+    /// falls back to the vendored wasm build. When false, other fields are empty.
+    available: bool,
+    ok: bool,
+    error: String,
+    echo: String,
+    warnings: String,
+    version: String,
+    /// Echoed back so the frontend knows whether `data` is OFF (colored preview)
+    /// or binary STL, without re-deriving it.
+    preview: bool,
+    /// Exported bytes: colored OFF when `preview`, else binary STL.
+    data: Vec<u8>,
+}
+
+/// Delete a directory tree when dropped — cleans up a render's temp workspace
+/// even on early return / error.
+struct DirGuard(PathBuf);
+impl Drop for DirGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Find an executable by name on `PATH` (adding `.exe` on Windows).
+fn find_on_path(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        let cand = dir.join(name);
+        if cand.is_file() {
+            return Some(cand);
+        }
+        #[cfg(windows)]
+        {
+            let exe = dir.join(format!("{name}.exe"));
+            if exe.is_file() {
+                return Some(exe);
+            }
+        }
+    }
+    None
+}
+
+/// Locate a locally-installed OpenSCAD executable, preferring, in order: an
+/// explicit `QUITO_OPENSCAD` override, `PATH`, then the standard per-platform
+/// install locations (including the separate nightly builds). Returns `None`
+/// when nothing is found, which drives the wasm fallback.
+fn resolve_openscad() -> Option<PathBuf> {
+    // 1. Explicit override (dev / power users pointing at a specific build).
+    if let Some(p) = std::env::var_os("QUITO_OPENSCAD") {
+        let p = PathBuf::from(p);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    // 2. On PATH (covers Linux/*nix installs and anyone who added it themselves).
+    if let Some(p) = find_on_path("openscad") {
+        return Some(p);
+    }
+    // 3. Standard install locations per platform (release + nightly).
+    let fixed: &[&str] = if cfg!(target_os = "macos") {
+        &[
+            "/Applications/OpenSCAD.app/Contents/MacOS/OpenSCAD",
+            "/Applications/OpenSCAD-nightly.app/Contents/MacOS/OpenSCAD",
+        ]
+    } else if cfg!(target_os = "windows") {
+        &[
+            r"C:\Program Files\OpenSCAD\openscad.exe",
+            r"C:\Program Files\OpenSCAD (Nightly)\openscad.exe",
+        ]
+    } else {
+        &[
+            "/usr/local/bin/openscad",
+            "/var/lib/flatpak/exports/bin/org.openscad.OpenSCAD",
+        ]
+    };
+    fixed.iter().map(PathBuf::from).find(|p| p.is_file())
+}
+
+/// OpenSCAD version string for the status bar, cached for the session. Probes
+/// `openscad --version` (which prints to stderr); falls back to a generic label.
+fn openscad_version(bin: &Path, state: &AppState) -> String {
+    if let Some(v) = state.openscad_version.lock().unwrap().clone() {
+        return v;
+    }
+    let v = std::process::Command::new(bin)
+        .arg("--version")
+        .output()
+        .ok()
+        .map(|o| {
+            let s = if o.stderr.is_empty() {
+                o.stdout
+            } else {
+                o.stderr
+            };
+            String::from_utf8_lossy(&s)
+                .lines()
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_string()
+        })
+        .filter(|s| !s.is_empty())
+        .map(|s| format!("{s} (Manifold, local)"))
+        .unwrap_or_else(|| "OpenSCAD (local, Manifold)".to_string());
+    *state.openscad_version.lock().unwrap() = Some(v.clone());
+    v
+}
+
+/// Run OpenSCAD once in a throwaway temp workspace and collect its output.
+#[allow(clippy::too_many_arguments)]
+fn run_openscad(
+    bin: &Path,
+    state: &AppState,
+    source: &str,
+    dir: &str,
+    param_names: &[String],
+    param_values: &[String],
+    file_names: &[String],
+    file_contents: &[String],
+    preview: bool,
+) -> Result<OpenscadRun, String> {
+    let base = std::env::temp_dir().join(format!(
+        "quito_openscad_{}_{}",
+        std::process::id(),
+        OPENSCAD_RUN_SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&base).map_err(|e| format!("temp dir: {e}"))?;
+    let _guard = DirGuard(base.clone());
+
+    // Materialize the include/use closure (open tabs / fetched libs) at relative
+    // paths so `include <foo.scad>` in the main file resolves against the temp dir.
+    for (name, content) in file_names.iter().zip(file_contents) {
+        let p = base.join(name.trim_start_matches(['/', '\\']));
+        if let Some(parent) = p.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        std::fs::write(&p, content).map_err(|e| format!("write {name}: {e}"))?;
+    }
+    // Preview mirrors OpenSCAD's F5: set `$preview` and export colored OFF so
+    // `color(...)` shows. Exact (preview off) exports a plain binary STL (F6).
+    let main = base.join("main.scad");
+    let src = if preview {
+        format!("$preview=true;\n{source}")
+    } else {
+        source.to_string()
+    };
+    std::fs::write(&main, src).map_err(|e| format!("write main.scad: {e}"))?;
+
+    let out_path = base.join(if preview { "out.off" } else { "out.stl" });
+    let export_format = if preview { "off" } else { "binstl" };
+
+    // OPENSCADPATH resolves libraries: the temp dir (in-memory tabs) first, then
+    // the opened file's directory (disk includes), then any pre-set entries.
+    let mut search: Vec<PathBuf> = vec![base.clone()];
+    if !dir.is_empty() && dir != "." {
+        search.push(PathBuf::from(dir));
+    }
+    if let Some(existing) = std::env::var_os("OPENSCADPATH") {
+        search.extend(std::env::split_paths(&existing));
+    }
+    let openscadpath = std::env::join_paths(search).map_err(|e| format!("OPENSCADPATH: {e}"))?;
+
+    let mut cmd = std::process::Command::new(bin);
+    cmd.arg(&main)
+        .arg("-o")
+        .arg(&out_path)
+        .arg("--backend=manifold")
+        .arg(format!("--export-format={export_format}"))
+        .env("OPENSCADPATH", openscadpath);
+    for (n, v) in param_names.iter().zip(param_values) {
+        cmd.arg(format!("-D{n}={v}"));
+    }
+
+    let output = cmd
+        .output()
+        .map_err(|e| format!("failed to launch OpenSCAD: {e}"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let lines: Vec<&str> = stdout.lines().chain(stderr.lines()).collect();
+    let echo = lines
+        .iter()
+        .filter(|l| l.starts_with("ECHO:"))
+        .copied()
+        .collect::<Vec<_>>()
+        .join("\n");
+    let warnings = lines
+        .iter()
+        .filter(|l| l.contains("WARNING:"))
+        .copied()
+        .collect::<Vec<_>>()
+        .join("\n");
+    let error_lines: Vec<&str> = lines
+        .iter()
+        .filter(|l| l.contains("ERROR:"))
+        .copied()
+        .collect();
+
+    let data = std::fs::read(&out_path).unwrap_or_default();
+    let version = openscad_version(bin, state);
+
+    if !output.status.success() || data.is_empty() {
+        let error = if !error_lines.is_empty() {
+            error_lines.join("\n")
+        } else if stderr.contains("not a 3D object") {
+            "OpenSCAD produced no 3D geometry. The OpenSCAD engine renders 3D \
+             models only; 2D shapes (e.g. bare square/circle) aren't previewed — \
+             extrude them, or switch to the Quito engine."
+                .to_string()
+        } else {
+            format!(
+                "OpenSCAD exited with code {}.",
+                output.status.code().unwrap_or(-1)
+            )
+        };
+        return Ok(OpenscadRun {
+            available: true,
+            ok: false,
+            error,
+            echo,
+            warnings,
+            version,
+            preview,
+            data: Vec::new(),
+        });
+    }
+
+    Ok(OpenscadRun {
+        available: true,
+        ok: true,
+        error: String::new(),
+        echo,
+        warnings,
+        version,
+        preview,
+        data,
+    })
+}
+
+/// Render with a locally-installed OpenSCAD binary (Manifold backend). Returns
+/// the raw export bytes for the frontend to parse; `available: false` when no
+/// local binary is found, which triggers the wasm fallback.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+fn render_openscad(
+    state: tauri::State<'_, AppState>,
+    source: String,
+    dir: Option<String>,
+    param_names: Vec<String>,
+    param_values: Vec<String>,
+    file_names: Vec<String>,
+    file_contents: Vec<String>,
+    preview: Option<bool>,
+) -> OpenscadRun {
+    let preview = preview.unwrap_or(false);
+    let Some(bin) = resolve_openscad() else {
+        return OpenscadRun {
+            available: false,
+            ..Default::default()
+        };
+    };
+    let dir = dir.unwrap_or_else(|| ".".to_string());
+    match run_openscad(
+        &bin,
+        &state,
+        &source,
+        &dir,
+        &param_names,
+        &param_values,
+        &file_names,
+        &file_contents,
+        preview,
+    ) {
+        Ok(run) => run,
+        Err(e) => OpenscadRun {
+            available: true,
+            ok: false,
+            error: e,
+            version: openscad_version(&bin, &state),
+            preview,
+            ..Default::default()
+        },
+    }
+}
+
 /// Run `f` on a worker thread with a large stack and return its result.
 fn run_big_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     std::thread::Builder::new()
@@ -749,6 +1058,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             render,
+            render_openscad,
             save_model,
             save_source,
             save_bytes,
@@ -820,6 +1130,7 @@ mod tests {
             &["5".into()],
             &[],
             &[],
+            false,
         )
         .unwrap();
         assert!((mesh.volume() - 60.0).abs() < 1e-6);
@@ -834,6 +1145,7 @@ mod tests {
             &[],
             &["lib.scad".into()],
             &["function side() = 3;".into()],
+            false,
         )
         .unwrap();
         assert!((mesh.volume() - 27.0).abs() < 1e-6);
@@ -862,6 +1174,102 @@ mod tests {
                 "{src} provenance json: {json}"
             );
         }
+    }
+
+    /// Locate an OpenSCAD binary for the tests below (the resolver's search
+    /// order). `None` skips — CI runners without OpenSCAD shouldn't fail.
+    fn test_openscad_bin() -> Option<PathBuf> {
+        resolve_openscad()
+    }
+
+    #[test]
+    fn native_openscad_exports_binary_stl() {
+        let Some(bin) = test_openscad_bin() else {
+            eprintln!("skipping native_openscad_exports_binary_stl: no OpenSCAD binary");
+            return;
+        };
+        let state = AppState::default();
+        let run = run_openscad(
+            &bin,
+            &state,
+            "cube([2,3,4]);",
+            ".",
+            &[],
+            &[],
+            &[],
+            &[],
+            false,
+        )
+        .unwrap();
+        assert!(run.available && run.ok, "run failed: {}", run.error);
+        // Binary STL: 80-byte header + u32 triangle count; a cube has 12 facets.
+        assert!(
+            run.data.len() > 84,
+            "expected STL bytes, got {}",
+            run.data.len()
+        );
+        let facets = u32::from_le_bytes(run.data[80..84].try_into().unwrap());
+        assert_eq!(facets, 12, "cube should export 12 STL facets");
+    }
+
+    #[test]
+    fn native_openscad_preview_exports_colored_off() {
+        let Some(bin) = test_openscad_bin() else {
+            eprintln!("skipping native_openscad_preview_exports_colored_off: no OpenSCAD binary");
+            return;
+        };
+        let state = AppState::default();
+        // Preview mode: colored OFF with per-face RGB reflecting `color(...)`.
+        let run = run_openscad(
+            &bin,
+            &state,
+            "color(\"red\") cube(2);",
+            ".",
+            &[],
+            &[],
+            &[],
+            &[],
+            true,
+        )
+        .unwrap();
+        assert!(run.available && run.ok, "run failed: {}", run.error);
+        let text = String::from_utf8_lossy(&run.data);
+        assert!(
+            text.starts_with("OFF"),
+            "expected OFF export, got: {:.20}",
+            text
+        );
+        assert!(
+            text.contains("255 0 0"),
+            "expected red per-face color in OFF"
+        );
+    }
+
+    #[test]
+    fn native_openscad_customizer_override_applies() {
+        let Some(bin) = test_openscad_bin() else {
+            eprintln!("skipping native_openscad_customizer_override_applies: no OpenSCAD binary");
+            return;
+        };
+        let state = AppState::default();
+        let run = run_openscad(
+            &bin,
+            &state,
+            "w = 1;\necho(w);\ncube(w);",
+            ".",
+            &["w".into()],
+            &["5".into()],
+            &[],
+            &[],
+            false,
+        )
+        .unwrap();
+        assert!(run.ok, "run failed: {}", run.error);
+        assert!(
+            run.echo.contains("ECHO: 5"),
+            "override echo missing: {}",
+            run.echo
+        );
     }
 
     #[test]
