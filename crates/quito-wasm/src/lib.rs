@@ -338,6 +338,33 @@ pub fn render_with_files(
     file_names: Vec<String>,
     file_contents: Vec<String>,
 ) -> RenderResult {
+    render_impl(source, names, values, file_names, file_contents, false)
+}
+
+/// Like [`render_with_files`], but renders the fast, **non-watertight** preview
+/// (see `quito_geom::render_preview_cached_diag`): unions are concatenated rather
+/// than run through the CSG kernel. Suitable for opaque on-screen display only —
+/// stats and export still use the exact path. Differences/intersections/hulls
+/// still resolve exactly, so holes and clips look correct.
+#[wasm_bindgen]
+pub fn render_preview_with_files(
+    source: &str,
+    names: Vec<String>,
+    values: Vec<String>,
+    file_names: Vec<String>,
+    file_contents: Vec<String>,
+) -> RenderResult {
+    render_impl(source, names, values, file_names, file_contents, true)
+}
+
+fn render_impl(
+    source: &str,
+    names: Vec<String>,
+    values: Vec<String>,
+    file_names: Vec<String>,
+    file_contents: Vec<String>,
+    preview: bool,
+) -> RenderResult {
     // Parse.
     let program = match quito_syntax::parse(source) {
         Ok(p) => p,
@@ -396,7 +423,12 @@ pub fn render_with_files(
         if cache.len() > CACHE_CAP {
             cache.clear();
         }
-        quito_geom::render_cached_diag(&eval.node, &kernel, &mut cache)
+        if preview {
+            // Fast path: skip the union kernel; result is not watertight.
+            quito_geom::render_preview_cached_diag(&eval.node, &kernel, &mut cache)
+        } else {
+            quito_geom::render_cached_diag(&eval.node, &kernel, &mut cache)
+        }
     });
     let (mesh, diag) = match mesh {
         Ok(v) => v,
@@ -524,6 +556,27 @@ mod tests {
         let g = colored.groups();
         assert!(g.contains("\"mode\":\"solid\""), "{g}");
         assert!(g.contains("\"color\":[1,0,0,1]"), "{g}");
+    }
+
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+    fn preview_render_skips_the_union() {
+        // Two overlapping cubes. The exact render unions them (re-meshing the
+        // seam); the preview render concatenates (12 + 12 triangles, no boolean).
+        let src = "cube(2); translate([1,0,0]) cube(2);";
+        let exact = render_with_files(src, vec![], vec![], vec![], vec![]);
+        let preview = render_preview_with_files(src, vec![], vec![], vec![], vec![]);
+        assert!(exact.ok() && preview.ok());
+        assert_eq!(
+            preview.triangle_count(),
+            24,
+            "preview should not run the union"
+        );
+        assert_ne!(
+            preview.triangle_count(),
+            exact.triangle_count(),
+            "the exact union re-meshes the overlap; preview does not"
+        );
     }
 
     #[cfg_attr(not(target_arch = "wasm32"), test)]

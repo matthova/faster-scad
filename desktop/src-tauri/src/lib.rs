@@ -211,6 +211,7 @@ fn overrides(names: &[String], values: &[String]) -> Vec<(String, quito_eval::Va
 
 /// Parse → eval → render, returning the mesh plus console output.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn eval_and_render(
     cache: &Arc<Mutex<quito_geom::GeomCache>>,
     source: &str,
@@ -219,6 +220,7 @@ fn eval_and_render(
     values: &[String],
     file_names: &[String],
     file_contents: &[String],
+    preview: bool,
 ) -> Result<
     (
         quito_geom::Mesh,
@@ -253,7 +255,13 @@ fn eval_and_render(
     let kernel = quito_geom::ManifoldKernel::new();
     let (mesh, diag) = {
         let mut cache = cache.lock().unwrap();
-        quito_geom::render_cached_diag(&out.node, &kernel, &mut cache).map_err(|e| {
+        let render = if preview {
+            // Fast preview: unions are concatenated, not unioned (non-watertight).
+            quito_geom::render_preview_cached_diag
+        } else {
+            quito_geom::render_cached_diag
+        };
+        render(&out.node, &kernel, &mut cache).map_err(|e| {
             let message = format!("geometry error: {e}");
             EngineError {
                 diagnostic: quito_eval::eval_error_diagnostic(&quito_eval::EvalError::new(
@@ -276,9 +284,11 @@ fn render(
     param_values: Vec<String>,
     file_names: Vec<String>,
     file_contents: Vec<String>,
+    preview: Option<bool>,
 ) -> RenderResult {
     let cache = state.cache.clone();
     let dir = dir.unwrap_or_else(|| ".".to_string());
+    let preview = preview.unwrap_or(false);
     let work = move || {
         let params = quito_syntax::customizer::extract(&source).to_json();
         match eval_and_render(
@@ -289,6 +299,7 @@ fn render(
             &param_values,
             &file_names,
             &file_contents,
+            preview,
         ) {
             Ok((mesh, out, is_2d, diag)) => {
                 let (positions, normals) = mesh.to_triangle_soup_f32();
@@ -416,6 +427,7 @@ fn save_model(
             };
             return std::fs::write(&path, text).map_err(|e| format!("write {path}: {e}"));
         }
+        // Export always uses the exact (watertight) render, never the preview.
         let (mesh, out, _, _) = eval_and_render(
             &cache,
             &source,
@@ -424,6 +436,7 @@ fn save_model(
             &param_values,
             &file_names,
             &file_contents,
+            false,
         )
         .map_err(|e| e.message)?;
         // 3MF carries per-object color when the model uses color/`#`/`%`.
@@ -778,11 +791,12 @@ mod tests {
     fn engine_error_carries_span_for_parse_only() {
         let cache = Arc::new(Mutex::new(quito_geom::GeomCache::new()));
         // Parse error → the diagnostic carries a byte span.
-        let e = eval_and_render(&cache, "cube(", ".", &[], &[], &[], &[]).unwrap_err();
+        let e = eval_and_render(&cache, "cube(", ".", &[], &[], &[], &[], false).unwrap_err();
         assert!(e.message.starts_with("parse error"));
         assert!(e.diagnostic.start >= 0 && e.diagnostic.end >= e.diagnostic.start);
         // Eval error (assert) → still surfaced, with the offending statement span.
-        let e = eval_and_render(&cache, "assert(false);", ".", &[], &[], &[], &[]).unwrap_err();
+        let e =
+            eval_and_render(&cache, "assert(false);", ".", &[], &[], &[], &[], false).unwrap_err();
         assert!(e.message.starts_with("evaluation error"));
         assert!(
             e.diagnostic.start >= 0,
@@ -794,7 +808,7 @@ mod tests {
     fn native_render_command_logic() {
         let cache = Arc::new(Mutex::new(quito_geom::GeomCache::new()));
         let (mesh, _, _, _) =
-            eval_and_render(&cache, "cube([2,3,4]);", ".", &[], &[], &[], &[]).unwrap();
+            eval_and_render(&cache, "cube([2,3,4]);", ".", &[], &[], &[], &[], false).unwrap();
         assert!((mesh.volume() - 24.0).abs() < 1e-6);
 
         // Overrides apply, like the customizer.
@@ -833,7 +847,8 @@ mod tests {
         // for both a 3D solid and a 2D shape.
         for src in ["cube(2); translate([5,0,0]) sphere(2);", "square(4);"] {
             let cache = Arc::new(Mutex::new(quito_geom::GeomCache::new()));
-            let (mesh, out, _, _) = eval_and_render(&cache, src, ".", &[], &[], &[], &[]).unwrap();
+            let (mesh, out, _, _) =
+                eval_and_render(&cache, src, ".", &[], &[], &[], &[], false).unwrap();
             assert!(!mesh.tris.is_empty(), "{src} produced no geometry");
             let kernel = quito_geom::ManifoldKernel::new();
             let groups = {

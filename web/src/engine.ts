@@ -40,6 +40,31 @@ export function export2dBrowser(req: Export2DRequest): Promise<string> {
   });
 }
 
+/** Positions from a one-shot **exact** (watertight) render, for export when the
+ *  live viewer is showing a fast preview. Spawns a throwaway engine worker so it
+ *  never disturbs the interactive render loop. */
+export function renderMeshExactBrowser(job: {
+  source: string;
+  names: string[];
+  values: string[];
+  fileNames: string[];
+  fileContents: string[];
+}): Promise<Float32Array> {
+  return new Promise((resolve, reject) => {
+    const w = new Worker(new URL("./engineWorker.ts", import.meta.url), { type: "module" });
+    w.onmessage = (e: MessageEvent<RenderResponse>) => {
+      w.terminate();
+      if (!e.data.ok) reject(new Error(e.data.error || "render failed"));
+      else resolve(e.data.positions);
+    };
+    w.onerror = (e) => {
+      w.terminate();
+      reject(new Error(e.message || "engine worker error"));
+    };
+    w.postMessage({ seq: 0, preview: false, ...job } satisfies RenderRequest);
+  });
+}
+
 /** A pending render request: source, overrides, and extra files. */
 interface Job {
   source: string;
@@ -47,6 +72,7 @@ interface Job {
   values: string[];
   fileNames: string[];
   fileContents: string[];
+  preview: boolean;
 }
 
 export class Engine {
@@ -89,7 +115,7 @@ export class Engine {
       if (this.pending !== null) {
         const job = this.pending;
         this.pending = null;
-        this.render(job.source, job.names, job.values, job.fileNames, job.fileContents);
+        this.render(job.source, job.names, job.values, job.fileNames, job.fileContents, job.preview);
       }
     };
   }
@@ -100,6 +126,7 @@ export class Engine {
     values: string[] = [],
     fileNames: string[] = [],
     fileContents: string[] = [],
+    preview = false,
   ) {
     if (this.busy) {
       // Cancel the in-flight render by terminating; respawn fresh.
@@ -119,6 +146,7 @@ export class Engine {
       values,
       fileNames,
       fileContents,
+      preview,
     } satisfies RenderRequest);
   }
 

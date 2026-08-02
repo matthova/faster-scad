@@ -16,7 +16,7 @@ import {
   type ThemeMode,
   type Span,
 } from "./viewer";
-import { Engine, export2dBrowser } from "./engine";
+import { Engine, export2dBrowser, renderMeshExactBrowser } from "./engine";
 import type { RenderResponse } from "./engineWorker";
 import {
   buildBinarySTL,
@@ -222,6 +222,9 @@ interface Status {
   /** Recoverable geometry errors (degraded render): a mesh is shown but a CSG op
    *  failed and was replaced by a fallback. Empty when geometry is exact. */
   geomErrors: string;
+  /** The shown mesh came from the fast, non-watertight preview path, so `volume`
+   *  is approximate (it counts skipped-union interior walls). */
+  preview: boolean;
 }
 
 export function App() {
@@ -254,6 +257,9 @@ export function App() {
   // Editor↔preview highlighting toggle. Mirrored to a ref so the once-wired pick
   // handler (in useEffect) reads the live value, not a stale closure.
   const linkHighlightRef = useRef(loadPrefs().linkHighlight);
+  // Fast (non-watertight) preview toggle. Mirrored to a ref so the once-wired
+  // `renderNow` closure reads the live value.
+  const fastPreviewRef = useRef(loadPrefs().fastPreview);
 
   // File + customizer state. A `#code/…` share link (browser only) wins over
   // the autosaved localStorage project, so opening a shared URL always shows
@@ -313,6 +319,7 @@ export function App() {
     warnings: "",
     error: "",
     geomErrors: "",
+    preview: false,
   });
   const [version, setVersion] = useState("");
   // A render is in flight (drives the "rendering…" indicator + Stop button).
@@ -326,6 +333,7 @@ export function App() {
   const [dims, setDims] = useState<MeshInfo | null>(null);
   const [ortho, setOrtho] = useState(false);
   const [linkHighlight, setLinkHighlight] = useState(linkHighlightRef.current);
+  const [fastPreview, setFastPreview] = useState(fastPreviewRef.current);
   // OS light/dark appearance. Auto-follows `prefers-color-scheme`; no toggle.
   const [mode, setMode] = useState<ThemeMode>(currentMode);
   const [time, setTime] = useState(sharedAnim?.t ?? 0);
@@ -435,6 +443,7 @@ export function App() {
           values,
           libs.map((f) => f.name),
           libs.map((f) => f.content),
+          fastPreviewRef.current,
         );
       } else {
         // Browser: resolve the include/use closure (fetching libraries), then
@@ -444,7 +453,7 @@ export function App() {
           libs,
           LIB_BASE,
         );
-        engine.render(fs[0].content, names, values, fileNames, fileContents);
+        engine.render(fs[0].content, names, values, fileNames, fileContents, fastPreviewRef.current);
       }
     };
     const requestRender = () => {
@@ -829,6 +838,16 @@ export function App() {
     else viewerRef.current?.highlightSpan(null);
   }
 
+  /** Toggle the fast (non-watertight) preview and re-render so the change is
+   *  visible immediately. Remembered across sessions. */
+  function toggleFastPreview() {
+    const next = !fastPreviewRef.current;
+    fastPreviewRef.current = next;
+    setFastPreview(next);
+    savePrefs({ fastPreview: next });
+    renderNowRef.current?.();
+  }
+
   function switchTo(idx: number) {
     if (idx === activeRef.current || !viewRef.current) return;
     activeRef.current = idx;
@@ -1070,6 +1089,7 @@ export function App() {
         warnings: r.warnings,
         error: "",
         geomErrors: r.geomErrors,
+        preview: r.preview ?? false,
       });
       // A degraded render still shows a mesh, but the user should know it's
       // wrong somewhere — pop the console so the error is visible.
@@ -1322,9 +1342,31 @@ export function App() {
       return;
     }
 
-    // 3D mesh formats: build client-side from the last render soup.
-    const pos = lastPositions.current;
+    // 3D mesh formats: build client-side from the last render soup. But that soup
+    // may be a fast, non-watertight preview — never export that. Re-render exact
+    // in a throwaway worker so the file is watertight regardless of the toggle.
+    let pos = lastPositions.current;
     if (pos.length === 0) return;
+    if (status.preview) {
+      try {
+        const { names: fileNames, contents: fileContents } = await resolveClosure(
+          fs[0].content,
+          libs,
+          LIB_BASE,
+        );
+        pos = await renderMeshExactBrowser({
+          source: fs[0].content,
+          names,
+          values,
+          fileNames,
+          fileContents,
+        });
+      } catch (err) {
+        setStatus((s) => ({ ...s, error: `export failed: ${String(err)}` }));
+        setConsoleOpen(true);
+        return;
+      }
+    }
     // Colored 3MF: one object per non-`%` color group (falls back to fused 3MF).
     if (format === "3mf") {
       const { positions, groups } = lastPreview.current;
@@ -1431,6 +1473,17 @@ export function App() {
             }
           >
             Link
+          </button>
+          <button
+            className={fastPreview ? "active" : undefined}
+            onClick={toggleFastPreview}
+            title={
+              fastPreview
+                ? "Fast preview on — unions are skipped (not watertight); much faster to render. Exports & volume stay exact. Click to disable."
+                : "Fast preview off — exact, watertight render. Click to enable a faster, non-watertight preview."
+            }
+          >
+            Fast
           </button>
           <button onClick={onSavePng} title="Save the current view as a PNG image">
             PNG
@@ -1654,7 +1707,14 @@ export function App() {
         {status.ok && !rendering && (
           <span className="status-meta">
             {dims && `${fmtDim(dims.x)} × ${fmtDim(dims.y)} × ${fmtDim(dims.z)} mm · `}
-            vol {status.volume.toFixed(2)} · {status.ms.toFixed(0)} ms
+            {status.preview ? (
+              <span title="Fast preview is on: unions are skipped, so volume is approximate. Turn off Fast (or export) for the exact value.">
+                vol ≈ {status.volume.toFixed(2)} (preview)
+              </span>
+            ) : (
+              <>vol {status.volume.toFixed(2)}</>
+            )}{" "}
+            · {status.ms.toFixed(0)} ms
           </span>
         )}
         {rendering ? (
