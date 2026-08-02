@@ -1,6 +1,6 @@
 {
   "name": "quito-desktop",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Quito desktop app (Tauri v2) — native OpenSCAD-compatible renderer.",
   "scripts": {
