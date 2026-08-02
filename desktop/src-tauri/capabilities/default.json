@@ -10,6 +10,10 @@
     "updater:default",
     "process:allow-restart",
     {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "https://github.com/*" }]
+    },
+    {
       "identifier": "fs:allow-write-file",
       "allow": [{ "path": "**" }]
     },
