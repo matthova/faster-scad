@@ -2063,6 +2063,56 @@ mod tests {
     }
 
     #[test]
+    fn extrude_polygon_with_duplicate_vertices_is_manifold() {
+        // A profile with consecutive duplicate points (a zero-length edge) must
+        // still extrude to a clean manifold solid — `prepare` drops the repeat
+        // so no degenerate side wall is emitted. Generated profiles (e.g.
+        // BOSL2's rack2d) routinely contain such duplicates; before the fix the
+        // extrusion was non-manifold and any union over it degraded.
+        let points = vec![
+            [0.0, 0.0],
+            [10.0, 0.0],
+            [10.0, 0.0], // duplicate of the previous vertex
+            [10.0, 10.0],
+            [0.0, 10.0],
+            [0.0, 0.0], // closing repeat of the first vertex
+        ];
+        let plate = Node::LinearExtrude {
+            height: 5.0,
+            center: false,
+            twist: 0.0,
+            scale: [1.0, 1.0],
+            slices: 1,
+            child: Box::new(Node::Polygon {
+                points,
+                paths: None,
+            }),
+        };
+        // Volume is exactly the 10×10×5 box — the duplicates change nothing.
+        let m = render(&plate).unwrap();
+        assert!((m.volume() - 500.0).abs() < 1e-6, "vol {}", m.volume());
+
+        // Unioning it with a disjoint cube must run the boolean cleanly (a
+        // non-manifold operand would degrade and report a "union" error).
+        let node = Node::Union(vec![
+            plate,
+            Node::Cube {
+                size: [1.0, 1.0, 1.0],
+                center: false,
+            },
+        ]);
+        let kernel = RustManifoldKernel::new();
+        let mut cache = GeomCache::new();
+        let (mesh, diag) = render_cached_diag(&node, &kernel, &mut cache).unwrap();
+        assert!(
+            diag.errors.is_empty(),
+            "unexpected degradation: {:?}",
+            diag.errors
+        );
+        assert!(!mesh.tris.is_empty());
+    }
+
+    #[test]
     fn rust_kernel_handles_coincident_union_surfaces() {
         // Honeycomb borders commonly union two solids that share the same
         // cylindrical outer skin. The former browser kernel panicked while

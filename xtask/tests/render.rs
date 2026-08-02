@@ -135,6 +135,30 @@ fn renders_bosl2_rounded_cuboid() {
     );
 }
 
+/// BOSL2 gears.scad: a spur gear meshed with a rack. This exercises
+/// `gear_dist(..., teeth2=0)` (the rack center-distance path) with a top-level
+/// variable named `circ_pitch` — the exact shape of the gear-train demo. That
+/// name used to leak into `circular_pitch()`'s omitted `circ_pitch` parameter
+/// through its `assert(...) expr` guard and trip a spurious assertion. The gear
+/// alone (spur_gear vol) plus the rack must both render to non-empty solids.
+#[test]
+fn renders_bosl2_gear_and_rack() {
+    let Some(mesh) = render_with_bosl2(
+        "include <BOSL2/gears.scad>\n\
+         circ_pitch = 9;\n\
+         spur_gear(circ_pitch, 11, 6, 3);\n\
+         d = gear_dist(circ_pitch = circ_pitch, teeth1 = 11, teeth2 = 0);\n\
+         fwd(d) rack(pitch = circ_pitch, teeth = 9, thickness = 6, width = 12, anchor = CENTER, orient = BACK);",
+    ) else {
+        return;
+    };
+    assert!(
+        mesh.volume() > 1000.0,
+        "gear+rack volume {} unexpectedly small",
+        mesh.volume()
+    );
+}
+
 /// `surface()` builds a heightmap solid (top follows the data, bottom flat).
 /// A 3×4 ramp has volume 21 (sum of cell-average heights) and must be
 /// outward-facing.
