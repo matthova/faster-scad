@@ -1548,10 +1548,11 @@ export function App() {
           <button
             className={fastPreview ? "active" : undefined}
             onClick={toggleFastPreview}
-            disabled={engineKind === "openscad"}
             title={
               engineKind === "openscad"
-                ? "Fast preview is a Quito-only feature — switch to the Quito engine to use it."
+                ? fastPreview
+                  ? "Preview on — OpenSCAD F5-style colored render (shows color(...)). Click for a plain exact render."
+                  : "Preview off — plain exact (F6-style) render. Click for an F5-style colored preview."
                 : fastPreview
                   ? "Fast preview on — unions are skipped (not watertight); much faster to render. Exports & volume stay exact. Click to disable."
                   : "Fast preview off — exact, watertight render. Click to enable a faster, non-watertight preview."

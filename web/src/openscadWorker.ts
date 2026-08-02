@@ -12,14 +12,19 @@
 // clean instance sidesteps any main()-re-entry / stale-FS issues. Cancellation
 // still works because `Engine` terminates the whole worker.
 //
+// The "Fast" toggle maps to OpenSCAD's F5 preview: the model is exported as
+// colored OFF (with `$preview=true`) so `color(...)` shows, mirroring the
+// OpenSCAD web playground. Fast off exports a plain binary STL (F6-style, single
+// color). Geometry is exact (Manifold) in both modes; only color differs.
+//
 // Deliberate limitations of this path (documented, not bugs): no customizer
-// schema (params is empty), no editor↔preview provenance/color channels, 3D
-// meshes only (2D models export empty), and no fast-preview mode. This is the
-// official nightly WebAssembly build (OpenSCAD 2025.03.25), rendered with the
-// Manifold backend (`--backend=manifold`) — the same build the OpenSCAD web
-// playground ships.
+// schema (params is empty), no editor↔preview provenance channel, and 3D meshes
+// only (2D models export empty). This is the official nightly WebAssembly build
+// (OpenSCAD 2025.03.25), rendered with the Manifold backend (`--backend=manifold`)
+// — the same build the OpenSCAD web playground ships.
 import type { RenderRequest, RenderResponse } from "./engineWorker";
 import { blankResponse } from "./renderResponse";
+import { buildColoredFromOff, measure, parseBinaryStl } from "./openscadGeometry";
 
 const OPENSCAD_VERSION = "OpenSCAD 2025.03.25 (Manifold)";
 
@@ -50,68 +55,8 @@ function mkdirp(FS: OpenSCADFS, path: string) {
   }
 }
 
-/** Parse a binary STL blob into flat vertex + per-face-normal arrays (three's
- *  non-indexed layout). Throws if the byte length doesn't match the header. */
-function parseBinaryStl(buf: ArrayBuffer): {
-  positions: Float32Array;
-  normals: Float32Array;
-} {
-  if (buf.byteLength < 84) throw new Error("STL too short");
-  const dv = new DataView(buf);
-  const n = dv.getUint32(80, true);
-  if (buf.byteLength !== 84 + n * 50) {
-    throw new Error("unexpected STL layout (not binary?)");
-  }
-  const positions = new Float32Array(n * 9);
-  const normals = new Float32Array(n * 9);
-  let off = 84;
-  for (let i = 0; i < n; i++) {
-    const nx = dv.getFloat32(off, true);
-    const ny = dv.getFloat32(off + 4, true);
-    const nz = dv.getFloat32(off + 8, true);
-    off += 12;
-    for (let v = 0; v < 3; v++) {
-      const p = i * 9 + v * 3;
-      positions[p] = dv.getFloat32(off, true);
-      positions[p + 1] = dv.getFloat32(off + 4, true);
-      positions[p + 2] = dv.getFloat32(off + 8, true);
-      normals[p] = nx;
-      normals[p + 1] = ny;
-      normals[p + 2] = nz;
-      off += 12;
-    }
-    off += 2; // attribute byte count
-  }
-  return { positions, normals };
-}
-
-/** Volume (via the divergence theorem) and surface area of a triangle soup. */
-function measure(positions: Float32Array): { volume: number; area: number } {
-  let vol = 0;
-  let area = 0;
-  for (let i = 0; i < positions.length; i += 9) {
-    const ax = positions[i], ay = positions[i + 1], az = positions[i + 2];
-    const bx = positions[i + 3], by = positions[i + 4], bz = positions[i + 5];
-    const cx = positions[i + 6], cy = positions[i + 7], cz = positions[i + 8];
-    // signed volume of the tetrahedron (origin, a, b, c)
-    vol +=
-      (ax * (by * cz - bz * cy) -
-        ay * (bx * cz - bz * cx) +
-        az * (bx * cy - by * cx)) /
-      6;
-    // triangle area = |(b-a) × (c-a)| / 2
-    const ux = bx - ax, uy = by - ay, uz = bz - az;
-    const vx = cx - ax, vy = cy - ay, vz = cz - az;
-    const wx = uy * vz - uz * vy;
-    const wy = uz * vx - ux * vz;
-    const wz = ux * vy - uy * vx;
-    area += Math.sqrt(wx * wx + wy * wy + wz * wz) / 2;
-  }
-  return { volume: Math.abs(vol), area };
-}
-
 self.onmessage = async (e: MessageEvent<RenderRequest>) => {
-  const { seq, source, names, values, fileNames, fileContents, openscadUrl } = e.data;
+  const { seq, source, names, values, fileNames, fileContents, openscadUrl, preview } = e.data;
   const t0 = performance.now();
 
   const fail = (error: string) => {
@@ -156,14 +101,19 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
       if (slash > 0) mkdirp(FS, path.slice(0, slash));
       FS.writeFile(path, fileContents[i]);
     }
-    FS.writeFile("/main.scad", source);
+    // Preview (Fast) mode mirrors OpenSCAD's F5: set `$preview` so `$preview`-
+    // aware scripts render their preview form, and export colored OFF so
+    // `color(...)` shows. Exact (Fast off) mode exports a plain binary STL — the
+    // final F6-style render. Geometry is exact either way; only color differs.
+    FS.writeFile("/main.scad", preview ? `$preview=true;\n${source}` : source);
 
+    const outPath = preview ? "/out.off" : "/out.stl";
     const args: string[] = [
       "/main.scad",
       "-o",
-      "/out.stl",
+      outPath,
       "--backend=manifold",
-      "--export-format=binstl",
+      `--export-format=${preview ? "off" : "binstl"}`,
     ];
     // Customizer / camera overrides (values are already OpenSCAD literals). One
     // `-Dname=value` arg each, matching the OpenSCAD playground's invocation.
@@ -178,14 +128,14 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
     const warnings = allLines.filter((l) => /WARNING:/.test(l)).join("\n");
     const errorLines = allLines.filter((l) => /ERROR:/.test(l));
 
-    let stl: Uint8Array | null = null;
+    let data: Uint8Array | null = null;
     try {
-      stl = FS.readFile("/out.stl", { encoding: "binary" });
+      data = FS.readFile(outPath, { encoding: "binary" });
     } catch {
-      stl = null;
+      data = null;
     }
 
-    if (code !== 0 || !stl || stl.byteLength === 0) {
+    if (code !== 0 || !data || data.byteLength === 0) {
       const detail = errorLines.length
         ? errorLines.join("\n")
         : /not a 3D object/.test(err.join("\n"))
@@ -203,9 +153,27 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
       return;
     }
 
-    // Copy into a standalone ArrayBuffer (the FS view may alias wasm memory).
-    const buf = stl.slice().buffer;
-    const { positions, normals } = parseBinaryStl(buf);
+    let positions: Float32Array;
+    let normals: Float32Array;
+    let previewPositions: Float32Array = new Float32Array(0);
+    let previewNormals: Float32Array = new Float32Array(0);
+    let groups = "";
+    if (preview) {
+      // Colored F5-style preview: parse the colored OFF into a grouped soup and
+      // feed the viewer's colored channel. `positions`/`normals` carry the same
+      // geometry (distinct buffers) so stats and exports work unchanged.
+      const built = buildColoredFromOff(new TextDecoder().decode(data));
+      previewPositions = built.positions;
+      previewNormals = built.normals;
+      groups = JSON.stringify(built.groups);
+      positions = new Float32Array(built.positions);
+      normals = new Float32Array(built.normals);
+    } else {
+      // Copy into a standalone ArrayBuffer (the FS view may alias wasm memory).
+      const parsed = parseBinaryStl(data.slice().buffer);
+      positions = parsed.positions;
+      normals = parsed.normals;
+    }
     const { volume, area } = measure(positions);
 
     const msg: RenderResponse = {
@@ -226,16 +194,23 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
       version: OPENSCAD_VERSION,
       params: `{"params":[]}`,
       diagnostics: "[]",
-      previewPositions: new Float32Array(0),
-      previewNormals: new Float32Array(0),
-      groups: "",
+      previewPositions,
+      previewNormals,
+      groups,
       provenancePositions: new Float32Array(0),
       provenanceNormals: new Float32Array(0),
       provenance: "",
       viewport: "",
+      // Geometry is exact (F6) either way — only color/preview-mode differs — so
+      // exports use it directly (no re-render), unlike Quito's fast preview.
       preview: false,
     };
-    (self as unknown as Worker).postMessage(msg, [positions.buffer, normals.buffer]);
+    (self as unknown as Worker).postMessage(
+      msg,
+      preview
+        ? [positions.buffer, normals.buffer, previewPositions.buffer, previewNormals.buffer]
+        : [positions.buffer, normals.buffer],
+    );
   } catch (renderErr) {
     fail(`engine error: ${String(renderErr)}`);
   }
