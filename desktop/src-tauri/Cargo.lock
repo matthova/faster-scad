@@ -2758,7 +2758,7 @@ dependencies = [
 
 [[package]]
 name = "quito-desktop"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "notify",
  "quito-eval",
@@ -2776,7 +2776,7 @@ dependencies = [
 
 [[package]]
 name = "quito-eval"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "png 0.17.16",
  "quito-ir",
@@ -2790,7 +2790,7 @@ dependencies = [
 
 [[package]]
 name = "quito-geom"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "earcutr",
  "geo",
@@ -2803,11 +2803,11 @@ dependencies = [
 
 [[package]]
 name = "quito-ir"
-version = "0.3.0"
+version = "0.4.0"
 
 [[package]]
 name = "quito-syntax"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "logos",
  "serde_json",
