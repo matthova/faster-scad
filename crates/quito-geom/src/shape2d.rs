@@ -798,7 +798,7 @@ fn prepare(contours: &[Contour]) -> PreparedContours {
     // degenerate side wall — a quad with two coincident corners — which the
     // manifold kernel rejects as non-manifold. Generated profiles routinely
     // emit such duplicates (e.g. BOSL2's `rack2d`).
-    let cleaned: Vec<Contour> = contours.iter().map(|c| dedup_consecutive(c)).collect();
+    let cleaned: Vec<Contour> = contours.iter().map(dedup_consecutive).collect();
     let valid: Vec<&Contour> = cleaned.iter().filter(|c| c.len() >= 3).collect();
     let n = valid.len();
     if n == 0 {
