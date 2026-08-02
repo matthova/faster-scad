@@ -56,3 +56,35 @@ export function clearProject(): void {
     // ignore
   }
 }
+
+// Crash-recovery sentinel. Set while a render is in flight and cleared once it
+// finishes (mesh applied). If it's still set at the next startup, the previous
+// render never completed — it froze or crashed the tab (the "too much geometry"
+// death spiral) — so the app skips auto-rendering the offending project and lets
+// the user recover instead of re-triggering the freeze on every reload.
+const RENDER_KEY = "quito.render.pending.v1";
+
+export function markRenderPending(): void {
+  try {
+    localStorage.setItem(RENDER_KEY, "1");
+  } catch {
+    // ignore
+  }
+}
+
+export function clearRenderPending(): void {
+  try {
+    localStorage.removeItem(RENDER_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+/** True when the last session left a render in flight (froze/crashed mid-render). */
+export function wasRenderPending(): boolean {
+  try {
+    return localStorage.getItem(RENDER_KEY) === "1";
+  } catch {
+    return false;
+  }
+}

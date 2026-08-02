@@ -3,6 +3,8 @@
 // worker — much faster, with include/use resolved from disk. Presents the same
 // interface as `Engine` so `App` can use either transparently.
 import type { RenderResponse } from "./engineWorker";
+import { RENDER_TIMEOUT_MS, type EngineOptions } from "./engine";
+import { blankResponse } from "./renderResponse";
 
 /** True when running inside the Tauri desktop shell. */
 export function isTauri(): boolean {
@@ -43,8 +45,29 @@ export class DesktopEngine {
   private seq = 0;
   /** Directory of the opened file, used for disk include/use resolution. */
   dir = ".";
+  private busy = false;
+  private timer: number | undefined;
+  private readonly timeoutMs: number;
 
-  constructor(private onResult: (r: RenderResponse) => void) {}
+  constructor(
+    private onResult: (r: RenderResponse) => void,
+    private opts: EngineOptions = {},
+  ) {
+    this.timeoutMs = opts.timeoutMs ?? RENDER_TIMEOUT_MS;
+  }
+
+  private setBusy(busy: boolean) {
+    if (this.busy === busy) return;
+    this.busy = busy;
+    this.opts.onBusyChange?.(busy);
+  }
+
+  private clearTimer() {
+    if (this.timer !== undefined) {
+      window.clearTimeout(this.timer);
+      this.timer = undefined;
+    }
+  }
 
   render(
     source: string,
@@ -54,6 +77,11 @@ export class DesktopEngine {
     fileContents: string[] = [],
   ) {
     const seq = ++this.seq;
+    this.setBusy(true);
+    this.clearTimer();
+    if (this.timeoutMs > 0) {
+      this.timer = window.setTimeout(() => this.onTimeout(seq), this.timeoutMs);
+    }
     const t0 = performance.now();
     // Lazy import so the browser bundle never evaluates the Tauri API.
     import("@tauri-apps/api/core")
@@ -69,6 +97,8 @@ export class DesktopEngine {
       )
       .then((res) => {
         if (seq !== this.seq) return; // superseded by a newer render
+        this.clearTimer();
+        this.setBusy(false);
         this.onResult({
           seq,
           ok: res.ok,
@@ -98,6 +128,8 @@ export class DesktopEngine {
       })
       .catch((e) => {
         if (seq !== this.seq) return;
+        this.clearTimer();
+        this.setBusy(false);
         this.onResult({
           seq,
           ok: false,
@@ -125,6 +157,32 @@ export class DesktopEngine {
           viewport: "",
         });
       });
+  }
+
+  /** Stop waiting on the in-flight render and idle the UI. Bumping `seq` makes
+   *  the native result a no-op when it eventually lands. NOTE: the native engine
+   *  runs out-of-process and can't be killed from JS, so it keeps computing in
+   *  the background; this frees the UI, not the CPU. */
+  cancel() {
+    if (!this.busy) return;
+    this.abort("Render stopped. (The native engine may still be finishing in the background.)");
+  }
+
+  private onTimeout(seq: number) {
+    if (seq !== this.seq) return;
+    this.timer = undefined;
+    this.abort(
+      `Render stopped after ${Math.round(this.timeoutMs / 1000)}s — the model may be too ` +
+        `complex. Simplify it, then press Render. (The native engine may still be finishing ` +
+        `in the background.)`,
+    );
+  }
+
+  private abort(error: string) {
+    this.clearTimer();
+    this.seq += 1; // ignore the in-flight native result when it lands
+    this.setBusy(false);
+    this.onResult(blankResponse(this.seq, { error, version: "native" }));
   }
 }
 

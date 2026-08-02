@@ -37,7 +37,15 @@ import {
   type Param,
   type ParamValue,
 } from "./customizer";
-import { loadProject, saveProject, clearProject, type File } from "./project";
+import {
+  loadProject,
+  saveProject,
+  clearProject,
+  markRenderPending,
+  clearRenderPending,
+  wasRenderPending,
+  type File,
+} from "./project";
 import { loadPrefs, savePrefs } from "./prefs";
 import { EXAMPLES } from "./examples";
 import { decodeSharedProject, shareUrl } from "./share";
@@ -194,6 +202,11 @@ function toCmDiagnostics(diags: EngineDiag[], source: string): Diagnostic[] {
 const FORMATS_3D: ExportFmt[] = ["stl", "off", "obj", "3mf", "amf"];
 const FORMATS_2D: ExportFmt[] = ["dxf", "svg"];
 
+// A render running longer than this is considered a death-spiral candidate and
+// arms the crash-recovery sentinel (see project.ts). Fast renders never trip it,
+// so an ordinary reload mid-render doesn't force recovery mode on next load.
+const SLOW_RENDER_MS = 3000;
+
 interface Status {
   ok: boolean;
   message: string;
@@ -221,6 +234,9 @@ export function App() {
     groups: [],
   });
   const debounceTimer = useRef<number | undefined>(undefined);
+  // Crash-recovery: a render still running after SLOW_RENDER_MS arms the sentinel
+  // so a force-reload during a hang recovers instead of re-triggering the freeze.
+  const slowTimer = useRef<number | undefined>(undefined);
   // Editor theme lives in a Compartment so it can be reconfigured live when the
   // OS appearance flips, without recreating the editor.
   const themeComp = useRef(new Compartment());
@@ -242,6 +258,12 @@ export function App() {
   // stale closure.
   const sharedRef = useRef(TAURI ? null : decodeSharedProject());
   const saved = useRef(sharedRef.current ?? loadProject()).current;
+  // Death-spiral recovery: if the previous session left a render in flight (it
+  // froze/crashed on too-heavy geometry), don't auto-render the restored project
+  // on load — that just re-triggers the freeze. A share link is fresh, chosen
+  // content, so it always renders. Read once at startup, before any render arms
+  // the sentinel again.
+  const wasStuck = useRef(!sharedRef.current && wasRenderPending()).current;
   const filesRef = useRef<File[]>(saved?.files ?? DEFAULT_FILES.map((f) => ({ ...f })));
   const activeRef = useRef(saved?.active ?? 0);
   const suppressRef = useRef(false);
@@ -290,6 +312,11 @@ export function App() {
     geomErrors: "",
   });
   const [version, setVersion] = useState("");
+  // A render is in flight (drives the "rendering…" indicator + Stop button).
+  const [rendering, setRendering] = useState(false);
+  // Recovery mode: the restored project wasn't auto-rendered because the last
+  // render never finished. Shows a banner and waits for the user to press Render.
+  const [recovering, setRecovering] = useState(wasStuck);
   const [consoleOpen, setConsoleOpen] = useState(false);
   const [exportFmt, setExportFmt] = useState<ExportFmt>("stl");
   const [is2D, setIs2D] = useState(false);
@@ -356,9 +383,22 @@ export function App() {
       highlightFromCursorRef.current();
     });
 
+    // Busy transitions drive the Stop/rendering UI and arm crash-recovery. The
+    // sentinel is armed only once a render has run past SLOW_RENDER_MS (so a fast
+    // render closed mid-flight never trips it); onResult also arms it
+    // synchronously before applying the mesh, to catch a freeze while uploading a
+    // huge mesh (the worker already returned, so the slow timer wouldn't fire).
+    const onBusyChange = (busy: boolean) => {
+      setRendering(busy);
+      window.clearTimeout(slowTimer.current);
+      if (busy) {
+        setRecovering(false);
+        slowTimer.current = window.setTimeout(markRenderPending, SLOW_RENDER_MS);
+      }
+    };
     const engine = TAURI
-      ? new DesktopEngine((r: RenderResponse) => onResult(r))
-      : new Engine((r: RenderResponse) => onResult(r));
+      ? new DesktopEngine((r: RenderResponse) => onResult(r), { onBusyChange })
+      : new Engine((r: RenderResponse) => onResult(r), { onBusyChange });
     engineRef.current = engine;
 
     const renderNow = async () => {
@@ -474,7 +514,19 @@ export function App() {
     });
     viewRef.current = view;
 
-    renderNow(); // initial render
+    if (wasStuck) {
+      // The last render never finished (froze/crashed the tab). Clear the
+      // sentinel and stay idle instead of re-triggering it; the recovery banner
+      // lets the user simplify the script or render on demand.
+      clearRenderPending();
+      setStatus((s) => ({
+        ...s,
+        ok: false,
+        message: "render paused — the last render didn't finish",
+      }));
+    } else {
+      renderNow(); // initial render
+    }
 
     // A project opened from a share link isn't in localStorage yet — persist it
     // now so a plain reload (or losing the hash) keeps the shared work.
@@ -562,6 +614,7 @@ export function App() {
       unsubCamera();
       unsubPick();
       viewer.dispose();
+      window.clearTimeout(slowTimer.current);
       window.removeEventListener("keydown", onKeyDown);
       for (const u of unlisteners) u();
     };
@@ -905,6 +958,13 @@ export function App() {
   }
 
   function onResult(r: RenderResponse) {
+    // Arm crash-recovery before touching the mesh: applying a very large mesh can
+    // freeze the main thread here (the worker already returned), and a set-then-
+    // cleared sentinel across this synchronous block persists only if we never
+    // reach the clear below — i.e. exactly when the tab froze/crashed applying it.
+    window.clearTimeout(slowTimer.current);
+    markRenderPending();
+
     if (r.version) setVersion(r.version);
 
     // Unblock a frame-export step waiting on this render (mesh is applied below).
@@ -1021,6 +1081,12 @@ export function App() {
       frameWaiterRef.current = null;
       frameWaiter();
     }
+
+    // The render (and its mesh application) completed without freezing the tab —
+    // disarm the crash-recovery sentinel. Last statement on purpose: if applying
+    // a huge mesh above hangs the main thread, the sentinel stays set so the next
+    // load recovers instead of re-freezing.
+    clearRenderPending();
   }
 
   const consoleLines: { kind: "error" | "warn" | "echo"; text: string }[] = [];
@@ -1429,6 +1495,36 @@ export function App() {
         </div>
       </header>
 
+      {recovering && (
+        <div className="update-banner error recovery-banner" role="alert">
+          <div className="update-banner-row">
+            <span className="update-banner-msg">
+              The last render didn't finish — this model may be too heavy and could freeze the
+              app. Your script is loaded but not rendered. Simplify it (e.g. lower <code>$fn</code>
+              ), or render anyway.
+            </span>
+            <div className="update-banner-actions">
+              <button
+                className="update-primary"
+                onClick={() => {
+                  setRecovering(false);
+                  renderNowRef.current();
+                }}
+              >
+                Render anyway
+              </button>
+              <button
+                className="update-dismiss"
+                onClick={() => setRecovering(false)}
+                aria-label="Dismiss"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {TAURI && (
         <UpdateBanner
           state={updater.state}
@@ -1529,11 +1625,31 @@ export function App() {
 
       <footer className={`statusbar ${status.ok ? "ok" : "err"}`}>
         <span className="status-main">{status.message}</span>
-        {status.ok && (
+        {status.ok && !rendering && (
           <span className="status-meta">
             {dims && `${fmtDim(dims.x)} × ${fmtDim(dims.y)} × ${fmtDim(dims.z)} mm · `}
             vol {status.volume.toFixed(2)} · {status.ms.toFixed(0)} ms
           </span>
+        )}
+        {rendering ? (
+          <>
+            <span className="status-rendering">rendering…</span>
+            <button
+              className="status-stop"
+              onClick={() => engineRef.current?.cancel()}
+              title="Stop the current render"
+            >
+              Stop
+            </button>
+          </>
+        ) : (
+          <button
+            className="status-render"
+            onClick={() => renderNowRef.current()}
+            title="Render the current model"
+          >
+            Render
+          </button>
         )}
         <button
           className={`console-toggle ${consoleLines.some((l) => l.kind !== "echo") ? "alert" : ""}`}
