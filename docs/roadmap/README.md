@@ -19,6 +19,7 @@ this directory.
 | **A (recommended M6)** | [track-a-trustworthy-geometry.md](track-a-trustworthy-geometry.md) | Fix silent-wrong-geometry bugs; build the geometry oracle | ~3–4 weeks | `xtask geom` 60/60 golden cases vs OpenSCAD 2024.12 + `xtask bosl2` 16/16 with assertion checking, both in CI |
 | **B (proposed M7)** | [track-b-switcher-experience.md](track-b-switcher-experience.md) | Product parity for daily use: desktop Save, inline diagnostics, color/#/% rendering, PNG export | ~3 weeks | An OpenSCAD user can run a real project on Quito desktop without a workflow wall |
 | **C (fold into A/B)** | [track-c-ci-hardening.md](track-c-ci-hardening.md) | Make every headline claim machine-enforced on every PR | ~1.5–2 weeks | No claim in the README that CI doesn't check |
+| **D (M8)** | [track-d-ui-structure.md](track-d-ui-structure.md) | Web UI structure: token system, re-homed controls, and the missing code-CAD controls (`$fn`, quality, inspector, integrity) | six phases, incremental | Every feature has one obvious home; nothing fails silently; the topbar has room for the next feature |
 
 ## Why this ordering
 
