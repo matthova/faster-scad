@@ -7,18 +7,32 @@ export function buildBinarySTL(positions: Float32Array): Uint8Array {
   let off = 84;
   for (let i = 0; i < nTri; i++) {
     const b = i * 9;
-    const ax = positions[b], ay = positions[b + 1], az = positions[b + 2];
-    const bx = positions[b + 3], by = positions[b + 4], bz = positions[b + 5];
-    const cx = positions[b + 6], cy = positions[b + 7], cz = positions[b + 8];
+    const ax = positions[b],
+      ay = positions[b + 1],
+      az = positions[b + 2];
+    const bx = positions[b + 3],
+      by = positions[b + 4],
+      bz = positions[b + 5];
+    const cx = positions[b + 6],
+      cy = positions[b + 7],
+      cz = positions[b + 8];
     // face normal
-    const ux = bx - ax, uy = by - ay, uz = bz - az;
-    const vx = cx - ax, vy = cy - ay, vz = cz - az;
+    const ux = bx - ax,
+      uy = by - ay,
+      uz = bz - az;
+    const vx = cx - ax,
+      vy = cy - ay,
+      vz = cz - az;
     let nx = uy * vz - uz * vy;
     let ny = uz * vx - ux * vz;
     let nz = ux * vy - uy * vx;
     const len = Math.hypot(nx, ny, nz) || 1;
-    nx /= len; ny /= len; nz /= len;
-    dv.setFloat32(off, nx, true); dv.setFloat32(off + 4, ny, true); dv.setFloat32(off + 8, nz, true);
+    nx /= len;
+    ny /= len;
+    nz /= len;
+    dv.setFloat32(off, nx, true);
+    dv.setFloat32(off + 4, ny, true);
+    dv.setFloat32(off + 8, nz, true);
     off += 12;
     for (let k = 0; k < 9; k++) {
       dv.setFloat32(off, positions[b + k], true);
@@ -30,7 +44,10 @@ export function buildBinarySTL(positions: Float32Array): Uint8Array {
 }
 
 // Weld a triangle soup (9 floats/tri) into a unique vertex list + index faces.
-function weld(positions: Float32Array): { verts: number[]; faces: [number, number, number][] } {
+function weld(positions: Float32Array): {
+  verts: number[];
+  faces: [number, number, number][];
+} {
   const map = new Map<string, number>();
   const verts: number[] = [];
   const faces: [number, number, number][] = [];
@@ -60,7 +77,8 @@ function weld(positions: Float32Array): { verts: number[]; faces: [number, numbe
 export function buildOFF(positions: Float32Array): Uint8Array {
   const { verts, faces } = weld(positions);
   const out: string[] = ["OFF", `${verts.length / 3} ${faces.length} 0`];
-  for (let i = 0; i < verts.length; i += 3) out.push(`${verts[i]} ${verts[i + 1]} ${verts[i + 2]}`);
+  for (let i = 0; i < verts.length; i += 3)
+    out.push(`${verts[i]} ${verts[i + 1]} ${verts[i + 2]}`);
   for (const f of faces) out.push(`3 ${f[0]} ${f[1]} ${f[2]}`);
   return new TextEncoder().encode(out.join("\n") + "\n");
 }
@@ -69,7 +87,8 @@ export function buildOFF(positions: Float32Array): Uint8Array {
 export function buildOBJ(positions: Float32Array): Uint8Array {
   const { verts, faces } = weld(positions);
   const out: string[] = ["# exported by Quito"];
-  for (let i = 0; i < verts.length; i += 3) out.push(`v ${verts[i]} ${verts[i + 1]} ${verts[i + 2]}`);
+  for (let i = 0; i < verts.length; i += 3)
+    out.push(`v ${verts[i]} ${verts[i + 1]} ${verts[i + 2]}`);
   for (const f of faces) out.push(`f ${f[0] + 1} ${f[1] + 1} ${f[2] + 1}`);
   return new TextEncoder().encode(out.join("\n") + "\n");
 }
@@ -77,11 +96,22 @@ export function buildOBJ(positions: Float32Array): Uint8Array {
 /** AMF (Additive Manufacturing Format): plain XML, welded indexed mesh. */
 export function buildAMF(positions: Float32Array): Uint8Array {
   const { verts, faces } = weld(positions);
-  const out: string[] = ['<?xml version="1.0" encoding="UTF-8"?>', '<amf unit="millimeter">', ' <object id="0">', '  <mesh>', '   <vertices>'];
+  const out: string[] = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<amf unit="millimeter">',
+    ' <object id="0">',
+    "  <mesh>",
+    "   <vertices>",
+  ];
   for (let i = 0; i < verts.length; i += 3)
-    out.push(`   <vertex><coordinates><x>${verts[i]}</x><y>${verts[i + 1]}</y><z>${verts[i + 2]}</z></coordinates></vertex>`);
+    out.push(
+      `   <vertex><coordinates><x>${verts[i]}</x><y>${verts[i + 1]}</y><z>${verts[i + 2]}</z></coordinates></vertex>`,
+    );
   out.push("   </vertices>", "   <volume>");
-  for (const f of faces) out.push(`    <triangle><v1>${f[0]}</v1><v2>${f[1]}</v2><v3>${f[2]}</v3></triangle>`);
+  for (const f of faces)
+    out.push(
+      `    <triangle><v1>${f[0]}</v1><v2>${f[1]}</v2><v3>${f[2]}</v3></triangle>`,
+    );
   out.push("   </volume>", "  </mesh>", " </object>", "</amf>", "");
   return new TextEncoder().encode(out.join("\n"));
 }
@@ -98,10 +128,23 @@ function threeMFModel(positions: Float32Array): string {
     "    <vertices>",
   ];
   for (let i = 0; i < verts.length; i += 3)
-    out.push(`     <vertex x="${verts[i]}" y="${verts[i + 1]}" z="${verts[i + 2]}"/>`);
+    out.push(
+      `     <vertex x="${verts[i]}" y="${verts[i + 1]}" z="${verts[i + 2]}"/>`,
+    );
   out.push("    </vertices>", "    <triangles>");
-  for (const f of faces) out.push(`     <triangle v1="${f[0]}" v2="${f[1]}" v3="${f[2]}"/>`);
-  out.push("    </triangles>", "   </mesh>", "  </object>", " </resources>", " <build>", '  <item objectid="1"/>', " </build>", "</model>", "");
+  for (const f of faces)
+    out.push(`     <triangle v1="${f[0]}" v2="${f[1]}" v3="${f[2]}"/>`);
+  out.push(
+    "    </triangles>",
+    "   </mesh>",
+    "  </object>",
+    " </resources>",
+    " <build>",
+    '  <item objectid="1"/>',
+    " </build>",
+    "</model>",
+    "",
+  );
   return out.join("\n");
 }
 
@@ -140,24 +183,39 @@ function colorHex(c: [number, number, number, number]): string {
 /** The `3D/3dmodel.model` XML for a colored 3MF: one object per group, each
  *  bound to a `<base displaycolor>`. `groups` index into the preview soup by
  *  vertex offset (`start`/`count`). */
-function threeMFColoredModel(previewPositions: Float32Array, groups: ColorGroup[]): string {
+function threeMFColoredModel(
+  previewPositions: Float32Array,
+  groups: ColorGroup[],
+): string {
   const out: string[] = [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">',
     " <resources>",
     '  <basematerials id="1">',
   ];
-  groups.forEach((g, i) => out.push(`   <base name="c${i}" displaycolor="${colorHex(g.color)}"/>`));
+  groups.forEach((g, i) =>
+    out.push(`   <base name="c${i}" displaycolor="${colorHex(g.color)}"/>`),
+  );
   out.push("  </basematerials>");
   groups.forEach((g, i) => {
     const oid = i + 2;
-    const slice = previewPositions.subarray(g.start * 3, (g.start + g.count) * 3);
+    const slice = previewPositions.subarray(
+      g.start * 3,
+      (g.start + g.count) * 3,
+    );
     const { verts, faces } = weld(slice);
-    out.push(`  <object id="${oid}" type="model" pid="1" pindex="${i}">`, "   <mesh>", "    <vertices>");
+    out.push(
+      `  <object id="${oid}" type="model" pid="1" pindex="${i}">`,
+      "   <mesh>",
+      "    <vertices>",
+    );
     for (let j = 0; j < verts.length; j += 3)
-      out.push(`     <vertex x="${verts[j]}" y="${verts[j + 1]}" z="${verts[j + 2]}"/>`);
+      out.push(
+        `     <vertex x="${verts[j]}" y="${verts[j + 1]}" z="${verts[j + 2]}"/>`,
+      );
     out.push("    </vertices>", "    <triangles>");
-    for (const f of faces) out.push(`     <triangle v1="${f[0]}" v2="${f[1]}" v3="${f[2]}"/>`);
+    for (const f of faces)
+      out.push(`     <triangle v1="${f[0]}" v2="${f[1]}" v3="${f[2]}"/>`);
     out.push("    </triangles>", "   </mesh>", "  </object>");
   });
   out.push(" </resources>", " <build>");
@@ -167,12 +225,18 @@ function threeMFColoredModel(previewPositions: Float32Array, groups: ColorGroup[
 }
 
 /** Colored 3MF: one object per group (per-object `displaycolor`). */
-export function build3MFColored(previewPositions: Float32Array, groups: ColorGroup[]): Uint8Array {
+export function build3MFColored(
+  previewPositions: Float32Array,
+  groups: ColorGroup[],
+): Uint8Array {
   const enc = new TextEncoder();
   return storeZip([
     { name: "[Content_Types].xml", data: enc.encode(CT_XML) },
     { name: "_rels/.rels", data: enc.encode(RELS_XML) },
-    { name: "3D/3dmodel.model", data: enc.encode(threeMFColoredModel(previewPositions, groups)) },
+    {
+      name: "3D/3dmodel.model",
+      data: enc.encode(threeMFColoredModel(previewPositions, groups)),
+    },
   ]);
 }
 
@@ -188,12 +252,15 @@ const CRC_TABLE = (() => {
 })();
 function crc32(data: Uint8Array): number {
   let c = 0xffffffff;
-  for (let i = 0; i < data.length; i++) c = CRC_TABLE[(c ^ data[i]) & 0xff] ^ (c >>> 8);
+  for (let i = 0; i < data.length; i++)
+    c = CRC_TABLE[(c ^ data[i]) & 0xff] ^ (c >>> 8);
   return (c ^ 0xffffffff) >>> 0;
 }
 
 /** Bundle named files into a store-only ZIP (e.g. animation frames). */
-export function zipFiles(files: { name: string; data: Uint8Array }[]): Uint8Array {
+export function zipFiles(
+  files: { name: string; data: Uint8Array }[],
+): Uint8Array {
   return storeZip(files);
 }
 
@@ -250,7 +317,9 @@ function concat(parts: Uint8Array[]): Uint8Array {
 }
 
 export function downloadBlob(data: Uint8Array, filename: string) {
-  const blob = new Blob([data as BlobPart], { type: "application/octet-stream" });
+  const blob = new Blob([data as BlobPart], {
+    type: "application/octet-stream",
+  });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;

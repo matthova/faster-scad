@@ -80,7 +80,8 @@ export interface RenderResponse {
 const ready = init();
 
 self.onmessage = async (e: MessageEvent<RenderRequest>) => {
-  const { seq, source, names, values, fileNames, fileContents, preview } = e.data;
+  const { seq, source, names, values, fileNames, fileContents, preview } =
+    e.data;
   await ready;
 
   const t0 = performance.now();
@@ -94,7 +95,13 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
   let res;
   try {
     res = preview
-      ? render_preview_with_files(source, names, values, fileNames, fileContents)
+      ? render_preview_with_files(
+          source,
+          names,
+          values,
+          fileNames,
+          fileContents,
+        )
       : render_with_files(source, names, values, fileNames, fileContents);
   } catch (err) {
     // A wasm call-stack overflow (V8's limit) surfaces as a RangeError; give a

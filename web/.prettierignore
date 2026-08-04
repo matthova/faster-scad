@@ -1,0 +1,8 @@
+dist
+engine
+node_modules
+test-results
+playwright-report
+e2e/**/*-snapshots
+src/lang/parser.js
+src/lang/parser.terms.js

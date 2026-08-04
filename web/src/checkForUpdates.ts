@@ -22,7 +22,9 @@ type UpdateHandle = {
   version: string;
   currentVersion: string;
   body?: string;
-  downloadAndInstall: (onEvent?: (event: DownloadEvent) => void) => Promise<void>;
+  downloadAndInstall: (
+    onEvent?: (event: DownloadEvent) => void,
+  ) => Promise<void>;
 };
 
 /** Progress events emitted by `downloadAndInstall`. */
@@ -39,7 +41,12 @@ type DownloadEvent =
 export type UpdaterState =
   | { kind: "idle" }
   | { kind: "checking" }
-  | { kind: "available"; version: string; currentVersion: string; notes: string }
+  | {
+      kind: "available";
+      version: string;
+      currentVersion: string;
+      notes: string;
+    }
   | { kind: "downloading"; version: string; pct: number | null }
   | { kind: "installing"; version: string }
   | { kind: "uptodate" }
@@ -60,7 +67,10 @@ export interface Updater {
  * when the total is unknown (the server didn't send a Content-Length) — the
  * banner renders that as an indeterminate bar. Pure: unit-testable without Tauri.
  */
-export function progressPct(downloaded: number, total: number | null): number | null {
+export function progressPct(
+  downloaded: number,
+  total: number | null,
+): number | null {
   if (!total || total <= 0) return null;
   return Math.min(100, Math.round((downloaded / total) * 100));
 }
@@ -97,7 +107,11 @@ export function useUpdater(): Updater {
     } catch (err) {
       handleRef.current = null;
       // Silent startup checks swallow errors (offline, rate-limited, etc.).
-      setState(interactive ? { kind: "error", message: String(err) } : { kind: "idle" });
+      setState(
+        interactive
+          ? { kind: "error", message: String(err) }
+          : { kind: "idle" },
+      );
     }
   }, []);
 
@@ -114,11 +128,19 @@ export function useUpdater(): Updater {
           case "Started":
             total = event.data.contentLength ?? null;
             downloaded = 0;
-            setState({ kind: "downloading", version, pct: progressPct(0, total) });
+            setState({
+              kind: "downloading",
+              version,
+              pct: progressPct(0, total),
+            });
             break;
           case "Progress":
             downloaded += event.data.chunkLength;
-            setState({ kind: "downloading", version, pct: progressPct(downloaded, total) });
+            setState({
+              kind: "downloading",
+              version,
+              pct: progressPct(downloaded, total),
+            });
             break;
           case "Finished":
             setState({ kind: "installing", version });

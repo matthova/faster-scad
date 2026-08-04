@@ -51,7 +51,11 @@ export function CustomizerPanel({
     <aside className="params">
       <div className="params-head">
         <span>Parameters</span>
-        <button onClick={onReset} disabled={!dirty} title="Reset to source defaults">
+        <button
+          onClick={onReset}
+          disabled={!dirty}
+          title="Reset to source defaults"
+        >
           Reset
         </button>
       </div>
@@ -72,7 +76,10 @@ export function CustomizerPanel({
             </option>
           ))}
         </select>
-        <button onClick={onSavePreset} title="Save current values as a named set">
+        <button
+          onClick={onSavePreset}
+          title="Save current values as a named set"
+        >
           Save
         </button>
         <button
@@ -85,10 +92,17 @@ export function CustomizerPanel({
         >
           Delete
         </button>
-        <button onClick={() => fileInput.current?.click()} title="Import an OpenSCAD .json set file">
+        <button
+          onClick={() => fileInput.current?.click()}
+          title="Import an OpenSCAD .json set file"
+        >
           Import
         </button>
-        <button onClick={onExportPresets} disabled={presets.length === 0} title="Export sets as .json">
+        <button
+          onClick={onExportPresets}
+          disabled={presets.length === 0}
+          title="Export sets as .json"
+        >
           Export
         </button>
         <input
@@ -176,7 +190,9 @@ function Row({
         <input
           type="number"
           value={Number(value)}
-          onChange={(e) => onChange(e.target.value === "" ? 0 : parseFloat(e.target.value))}
+          onChange={(e) =>
+            onChange(e.target.value === "" ? 0 : parseFloat(e.target.value))
+          }
         />
       )}
 
@@ -193,7 +209,9 @@ function Row({
         <select
           value={String(value)}
           onChange={(e) => {
-            const opt = c.options.find((o) => String(o.value) === e.target.value);
+            const opt = c.options.find(
+              (o) => String(o.value) === e.target.value,
+            );
             onChange(opt ? opt.value : e.target.value);
           }}
         >
@@ -217,7 +235,8 @@ function Row({
                 onChange={(e) => {
                   const next = [...(Array.isArray(value) ? value : [])];
                   while (next.length < c.length) next.push(0);
-                  next[i] = e.target.value === "" ? 0 : parseFloat(e.target.value);
+                  next[i] =
+                    e.target.value === "" ? 0 : parseFloat(e.target.value);
                   onChange(next);
                 }}
               />

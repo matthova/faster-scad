@@ -10,7 +10,8 @@ export interface MeshInfo {
 }
 
 /** A named camera orientation. */
-export type ViewPreset = "iso" | "front" | "back" | "top" | "bottom" | "right" | "left";
+export type ViewPreset =
+  "iso" | "front" | "back" | "top" | "bottom" | "right" | "left";
 
 /** Light/dark appearance, following the OS `prefers-color-scheme`. */
 export type ThemeMode = "light" | "dark";
@@ -165,7 +166,9 @@ export class Viewer {
     // Background + grid colors follow the OS appearance; setTheme builds the
     // initial adaptive grid (with axes + labels) so the first frame matches.
     this.setTheme(
-      window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light",
+      window.matchMedia("(prefers-color-scheme: dark)").matches
+        ? "dark"
+        : "light",
     );
 
     // Provenance picking: a click (not an orbit drag) selects the source
@@ -198,7 +201,8 @@ export class Viewer {
     // Re-derive the grid spacing/extent from the new camera state whenever the
     // view moves (throttled by updateGrid's cache key).
     controls.addEventListener("change", () => this.updateGrid());
-    for (const cb of this.changeListeners) controls.addEventListener("change", cb);
+    for (const cb of this.changeListeners)
+      controls.addEventListener("change", cb);
     return controls;
   }
 
@@ -245,7 +249,9 @@ export class Viewer {
    *  to call repeatedly on flips. */
   setTheme(mode: ThemeMode) {
     this.themeDark = mode === "dark";
-    this.scene.background = new THREE.Color(this.themeDark ? 0x1a1d23 : 0xf3f3f3);
+    this.scene.background = new THREE.Color(
+      this.themeDark ? 0x1a1d23 : 0xf3f3f3,
+    );
     this.updateGrid(true);
     this.rebuildCubeFaces();
   }
@@ -266,7 +272,8 @@ export class Viewer {
   private updateGrid(force = false) {
     const visH = Math.max(this.visibleWorldHeight(), 1e-4);
     const el = this.renderer.domElement;
-    const aspect = el.clientWidth && el.clientHeight ? el.clientWidth / el.clientHeight : 1;
+    const aspect =
+      el.clientWidth && el.clientHeight ? el.clientWidth / el.clientHeight : 1;
     const span = Math.max(visH, visH * aspect);
     // Nearest power of ten that puts ~10 major cells across the view: 1000mm
     // visible → 100mm cells, ~100mm → 10mm, ~10mm → 1mm, and so on.
@@ -280,7 +287,10 @@ export class Viewer {
     const cy = Math.round(this.controls.target.y / spacing);
     // Looking straight down an axis collapses that axis's tick labels onto the
     // origin; drop them (only near exact top/front/side views, so iso keeps all).
-    const dir = this.camera.position.clone().sub(this.controls.target).normalize();
+    const dir = this.camera.position
+      .clone()
+      .sub(this.controls.target)
+      .normalize();
     const suppress = {
       x: Math.abs(dir.x) > 0.95,
       y: Math.abs(dir.y) > 0.95,
@@ -301,7 +311,8 @@ export class Viewer {
     this.gridGroup.traverse((o) => {
       const obj = o as THREE.Mesh & { material?: THREE.Material };
       obj.geometry?.dispose();
-      const mat = obj.material as (THREE.Material & { map?: THREE.Texture }) | undefined;
+      const mat = obj.material as
+        (THREE.Material & { map?: THREE.Texture }) | undefined;
       if (mat) {
         mat.map?.dispose();
         mat.dispose();
@@ -319,13 +330,20 @@ export class Viewer {
     halfCells: number,
     ox: number,
     oy: number,
-    suppress: { x: boolean; y: boolean; z: boolean } = { x: false, y: false, z: false },
+    suppress: { x: boolean; y: boolean; z: boolean } = {
+      x: false,
+      y: false,
+      z: false,
+    },
   ) {
     this.disposeGrid();
     const g = new THREE.Group();
     const dark = this.themeDark;
     const half = halfCells * spacing;
-    const loX = ox - half, hiX = ox + half, loY = oy - half, hiY = oy + half;
+    const loX = ox - half,
+      hiX = ox + half,
+      loY = oy - half,
+      hiY = oy + half;
 
     // --- grid lines ---
     const pts: number[] = [];
@@ -357,25 +375,49 @@ export class Viewer {
     };
     const lh = spacing * 0.24; // label height in mm → ~constant on screen
     const numCol = dark ? "#ced3dc" : "#3a3a3a";
-    const addLabel = (text: string, color: string, x: number, y: number, z: number, scale = 1) => {
+    const addLabel = (
+      text: string,
+      color: string,
+      x: number,
+      y: number,
+      z: number,
+      scale = 1,
+    ) => {
       const s = this.makeTickLabel(text, color, lh * scale);
       s.position.set(x, y, z);
       g.add(s);
     };
 
     // --- world axes + tick labels (only where the axis crosses the grid) ---
-    const X_COL = 0xd9584f, Y_COL = 0x59a14f, Z_COL = 0x4f83d9;
+    const X_COL = 0xd9584f,
+      Y_COL = 0x59a14f,
+      Z_COL = 0x4f83d9;
     const line = (a: number[], b: number[], color: number) => {
       const geo = new THREE.BufferGeometry();
-      geo.setAttribute("position", new THREE.Float32BufferAttribute([...a, ...b], 3));
-      g.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color })));
+      geo.setAttribute(
+        "position",
+        new THREE.Float32BufferAttribute([...a, ...b], 3),
+      );
+      g.add(
+        new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color })),
+      );
     };
     // Ruler ticks perpendicular to an axis: a longer (major) mark at every
     // labeled line and a shorter (minor) mark halfway to the next label.
-    const majorH = spacing * 0.28, minorH = spacing * 0.15;
-    const ticks = (axis: "x" | "y" | "z", lo: number, hi: number, color: number) => {
+    const majorH = spacing * 0.28,
+      minorH = spacing * 0.15;
+    const ticks = (
+      axis: "x" | "y" | "z",
+      lo: number,
+      hi: number,
+      color: number,
+    ) => {
       const pts: number[] = [];
-      for (let v = Math.ceil(lo / spacing) * spacing; v <= hi + 1e-6; v += spacing) {
+      for (
+        let v = Math.ceil(lo / spacing) * spacing;
+        v <= hi + 1e-6;
+        v += spacing
+      ) {
         const h = Math.round(v / spacing) % 2 === 0 ? majorH : minorH;
         if (axis === "x") pts.push(v, -h, 0, v, h, 0);
         else if (axis === "y") pts.push(-h, v, 0, h, v, 0);
@@ -384,7 +426,9 @@ export class Viewer {
       if (pts.length) {
         const geo = new THREE.BufferGeometry();
         geo.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
-        g.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color })));
+        g.add(
+          new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color })),
+        );
       }
     };
     const xAxisOnGrid = loY <= 0 && 0 <= hiY; // the X axis (y=0) is within the grid
@@ -400,7 +444,11 @@ export class Viewer {
       addLabel("X", "#d9584f", hiX + lh * 1.8, -lh * 1.4, 0, 1.5);
       if (!suppress.x) {
         ticks("x", loX, hiX, X_COL);
-        for (let x = Math.ceil(loX / spacing) * spacing; x <= hiX + 1e-6; x += spacing) {
+        for (
+          let x = Math.ceil(loX / spacing) * spacing;
+          x <= hiX + 1e-6;
+          x += spacing
+        ) {
           if (Math.abs(x) < spacing / 2 || !labeled(x)) continue; // origin labeled below
           addLabel(fmt(x), numCol, x, -lh * 1.6, 0);
         }
@@ -411,7 +459,11 @@ export class Viewer {
       addLabel("Y", "#59a14f", -lh * 1.4, hiY + lh * 1.8, 0, 1.5);
       if (!suppress.y) {
         ticks("y", loY, hiY, Y_COL);
-        for (let y = Math.ceil(loY / spacing) * spacing; y <= hiY + 1e-6; y += spacing) {
+        for (
+          let y = Math.ceil(loY / spacing) * spacing;
+          y <= hiY + 1e-6;
+          y += spacing
+        ) {
           if (Math.abs(y) < spacing / 2 || !labeled(y)) continue;
           addLabel(fmt(y), numCol, -lh * 1.6, y, 0);
         }
@@ -424,10 +476,17 @@ export class Viewer {
       if (!suppress.z) {
         ticks("z", 0, half, Z_COL);
         for (let i = 2; i <= halfCells; i += 2) {
-          addLabel(fmt(i * spacing), dark ? "#9cc0ec" : "#3f73c9", -lh * 1.6, -lh * 1.6, i * spacing);
+          addLabel(
+            fmt(i * spacing),
+            dark ? "#9cc0ec" : "#3f73c9",
+            -lh * 1.6,
+            -lh * 1.6,
+            i * spacing,
+          );
         }
         // Origin label, shown only when the flat X/Y ticks aren't stacking on it.
-        if (!suppress.x && !suppress.y) addLabel("0", numCol, -lh * 1.6, -lh * 1.6, 0);
+        if (!suppress.x && !suppress.y)
+          addLabel("0", numCol, -lh * 1.6, -lh * 1.6, 0);
       }
     }
 
@@ -438,7 +497,11 @@ export class Viewer {
   /** A camera-facing text sprite `worldHeight` mm tall. Because the grid spacing
    *  (and thus label height) scales with the zoom level, labels stay roughly
    *  constant in screen size across zooms. */
-  private makeTickLabel(text: string, color: string, worldHeight: number): THREE.Sprite {
+  private makeTickLabel(
+    text: string,
+    color: string,
+    worldHeight: number,
+  ): THREE.Sprite {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const fontPx = 64;
     const font = `bold ${fontPx}px sans-serif`;
@@ -459,7 +522,11 @@ export class Viewer {
     tex.minFilter = THREE.LinearFilter;
     tex.magFilter = THREE.LinearFilter;
     const sprite = new THREE.Sprite(
-      new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }),
+      new THREE.SpriteMaterial({
+        map: tex,
+        transparent: true,
+        depthWrite: false,
+      }),
     );
     sprite.scale.set(worldHeight * (w / h), worldHeight, 1);
     sprite.renderOrder = 10;
@@ -478,7 +545,10 @@ export class Viewer {
     }
   }
 
-  private buildGeom(positions: Float32Array, normals: Float32Array): THREE.BufferGeometry {
+  private buildGeom(
+    positions: Float32Array,
+    normals: Float32Array,
+  ): THREE.BufferGeometry {
     const geom = new THREE.BufferGeometry();
     geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
     geom.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
@@ -489,11 +559,18 @@ export class Viewer {
   /** Add the mesh to the scene with a black edge overlay, report its size, and
    *  frame it on first display. `material` may be a single material or a
    *  per-group array (for colored geometry). */
-  private mountMesh(geom: THREE.BufferGeometry, material: THREE.Material | THREE.Material[]) {
+  private mountMesh(
+    geom: THREE.BufferGeometry,
+    material: THREE.Material | THREE.Material[],
+  ) {
     const mesh = new THREE.Mesh(geom, material);
     const edges = new THREE.LineSegments(
       new THREE.EdgesGeometry(geom, 20),
-      new THREE.LineBasicMaterial({ color: 0x000000, opacity: 0.15, transparent: true }),
+      new THREE.LineBasicMaterial({
+        color: 0x000000,
+        opacity: 0.15,
+        transparent: true,
+      }),
     );
     mesh.add(edges);
 
@@ -532,7 +609,11 @@ export class Viewer {
   /** Render `color()`/`#`/`%` groups: one geometry, one material per group via
    *  geometry groups. `#` highlight → translucent red, `%` background →
    *  translucent gray, solid → the group's color (transparent when alpha < 1). */
-  setColoredMesh(positions: Float32Array, normals: Float32Array, groups: PreviewGroup[]) {
+  setColoredMesh(
+    positions: Float32Array,
+    normals: Float32Array,
+    groups: PreviewGroup[],
+  ) {
     this.clearMesh();
     if (positions.length === 0 || groups.length === 0) {
       this.setMesh(positions, normals);
@@ -552,7 +633,11 @@ export class Viewer {
    *  (off-scene) pick mesh used for model→code selection and code→model
    *  highlighting, and clears any stale highlight. Pass empty data to disable
    *  picking (e.g. a model with no geometry, which has no provenance channel). */
-  setProvenance(positions: Float32Array, normals: Float32Array, groups: ProvenanceGroup[]) {
+  setProvenance(
+    positions: Float32Array,
+    normals: Float32Array,
+    groups: ProvenanceGroup[],
+  ) {
     this.highlightSpan(null);
     this.pickGeometry?.dispose();
     this.pickGeometry = null;
@@ -648,7 +733,10 @@ export class Viewer {
   }
 
   /** Unit view direction (camera → target points opposite this) + up vector. */
-  private presetVectors(p: ViewPreset): { dir: THREE.Vector3; up: THREE.Vector3 } {
+  private presetVectors(p: ViewPreset): {
+    dir: THREE.Vector3;
+    up: THREE.Vector3;
+  } {
     const Z = new THREE.Vector3(0, 0, 1);
     const Y = new THREE.Vector3(0, 1, 0);
     switch (p) {
@@ -694,8 +782,11 @@ export class Viewer {
     const dist = radius / Math.sin((this.perspCamera.fov * Math.PI) / 360);
     const { dir, up } = this.presetVectors(this.preset);
     this.camera.up.copy(up);
-    this.camera.position.copy(center.clone().add(dir.clone().normalize().multiplyScalar(dist)));
-    if (this.camera instanceof THREE.OrthographicCamera) this.setOrthoFrustum(radius);
+    this.camera.position.copy(
+      center.clone().add(dir.clone().normalize().multiplyScalar(dist)),
+    );
+    if (this.camera instanceof THREE.OrthographicCamera)
+      this.setOrthoFrustum(radius);
     this.controls.target.copy(center);
     this.controls.update();
   }
@@ -720,7 +811,10 @@ export class Viewer {
       this.setOrthoFrustum(dist * Math.tan(halfFov));
     } else {
       // Move the eye so the perspective frustum spans the ortho view's height.
-      const halfH = ((this.orthoCamera.top - this.orthoCamera.bottom) / 2) / this.orthoCamera.zoom;
+      const halfH =
+        (this.orthoCamera.top - this.orthoCamera.bottom) /
+        2 /
+        this.orthoCamera.zoom;
       const d = halfH / Math.tan(halfFov);
       to.position.copy(target.clone().add(dir.normalize().multiplyScalar(d)));
       to.updateProjectionMatrix();
@@ -756,14 +850,15 @@ export class Viewer {
   // ---------------------------------------------------------------------------
 
   /** Material order of a `BoxGeometry`'s faces → the world direction each shows. */
-  private static readonly CUBE_FACES: { label: string; preset: ViewPreset }[] = [
-    { label: "RIGHT", preset: "right" }, // +X
-    { label: "LEFT", preset: "left" }, //  -X
-    { label: "BACK", preset: "back" }, //  +Y
-    { label: "FRONT", preset: "front" }, // -Y
-    { label: "TOP", preset: "top" }, //   +Z
-    { label: "BOTTOM", preset: "bottom" }, // -Z
-  ];
+  private static readonly CUBE_FACES: { label: string; preset: ViewPreset }[] =
+    [
+      { label: "RIGHT", preset: "right" }, // +X
+      { label: "LEFT", preset: "left" }, //  -X
+      { label: "BACK", preset: "back" }, //  +Y
+      { label: "FRONT", preset: "front" }, // -Y
+      { label: "TOP", preset: "top" }, //   +Z
+      { label: "BOTTOM", preset: "bottom" }, // -Z
+    ];
 
   /** Build the top-right navigation cube: a small transparent WebGL overlay whose
    *  orientation tracks the main camera. Drag it to orbit; click a face to fly to
@@ -784,7 +879,11 @@ export class Viewer {
     } as CSSStyleDeclaration);
     parent.appendChild(canvas);
 
-    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+    const renderer = new THREE.WebGLRenderer({
+      canvas,
+      antialias: true,
+      alpha: true,
+    });
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(SIZE, SIZE, false);
     renderer.setClearColor(0x000000, 0);
@@ -796,7 +895,11 @@ export class Viewer {
     const cube = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), []);
     const edges = new THREE.LineSegments(
       new THREE.EdgesGeometry(cube.geometry),
-      new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.25 }),
+      new THREE.LineBasicMaterial({
+        color: 0x000000,
+        transparent: true,
+        opacity: 0.25,
+      }),
     );
     cube.add(edges);
     // Hover highlight: an accent box reshaped over the hovered face/edge/corner,
@@ -875,7 +978,10 @@ export class Viewer {
       }
     this.cube.material = Viewer.CUBE_FACES.map(
       (f) =>
-        new THREE.MeshBasicMaterial({ map: this.makeCubeFaceTexture(f.label), transparent: true }),
+        new THREE.MeshBasicMaterial({
+          map: this.makeCubeFaceTexture(f.label),
+          transparent: true,
+        }),
     );
   }
 
@@ -909,7 +1015,12 @@ export class Viewer {
   private cubePick(
     clientX: number,
     clientY: number,
-  ): { faceIndex: number; region: THREE.Vector3; dir: THREE.Vector3; up: THREE.Vector3 } | null {
+  ): {
+    faceIndex: number;
+    region: THREE.Vector3;
+    dir: THREE.Vector3;
+    up: THREE.Vector3;
+  } | null {
     if (!this.cube || !this.cubeCamera || !this.cubeRenderer) return null;
     const rect = this.cubeRenderer.domElement.getBoundingClientRect();
     this.cubePointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
@@ -920,8 +1031,24 @@ export class Viewer {
     // The cube is axis-aligned (only the camera moves), so the local face normal
     // is a world axis → the material index of the hovered face.
     const n = hit.face.normal;
-    const ax = Math.abs(n.x) > Math.abs(n.y) && Math.abs(n.x) > Math.abs(n.z) ? 0 : Math.abs(n.y) > Math.abs(n.z) ? 1 : 2;
-    const faceIndex = ax === 0 ? (n.x > 0 ? 0 : 1) : ax === 1 ? (n.y > 0 ? 2 : 3) : n.z > 0 ? 4 : 5;
+    const ax =
+      Math.abs(n.x) > Math.abs(n.y) && Math.abs(n.x) > Math.abs(n.z)
+        ? 0
+        : Math.abs(n.y) > Math.abs(n.z)
+          ? 1
+          : 2;
+    const faceIndex =
+      ax === 0
+        ? n.x > 0
+          ? 0
+          : 1
+        : ax === 1
+          ? n.y > 0
+            ? 2
+            : 3
+          : n.z > 0
+            ? 4
+            : 5;
     // hit.point is world == local (cube at the origin, unit size), so each
     // component is in [-0.5, 0.5]. Components near an extreme (|c| > T) become
     // ±1: one → a face, two → an edge, three → a corner (isometric) direction.
@@ -939,7 +1066,8 @@ export class Viewer {
     // azimuth about Z. Straight top/bottom is the Z-up pole (OrbitControls can't
     // orbit there — left/right drag would spin about Y), so nudge a hair off it.
     const dir = region.clone().normalize();
-    if (region.x === 0 && region.y === 0) dir.set(0, -0.05, region.z).normalize();
+    if (region.x === 0 && region.y === 0)
+      dir.set(0, -0.05, region.z).normalize();
     return { faceIndex, region, dir, up: new THREE.Vector3(0, 0, 1) };
   }
 
@@ -949,7 +1077,9 @@ export class Viewer {
   private setCubeHover(region: THREE.Vector3 | null) {
     const hl = this.cubeHighlight;
     if (!hl) return;
-    const key = region ? `${Math.sign(region.x)},${Math.sign(region.y)},${Math.sign(region.z)}` : "";
+    const key = region
+      ? `${Math.sign(region.x)},${Math.sign(region.y)},${Math.sign(region.z)}`
+      : "";
     if (key === this.cubeHover) return;
     this.cubeHover = key;
     if (!region) {
@@ -958,8 +1088,11 @@ export class Viewer {
     }
     // Per axis: a pinned side (±1) → a thin slab hugging that face; a free axis
     // (0) → span the middle. The pinned bands poke slightly proud of the surface.
-    const band = (s: number) => (s === 0 ? { c: 0, h: 0.3 } : { c: 0.41 * s, h: 0.11 });
-    const bx = band(Math.sign(region.x)), by = band(Math.sign(region.y)), bz = band(Math.sign(region.z));
+    const band = (s: number) =>
+      s === 0 ? { c: 0, h: 0.3 } : { c: 0.41 * s, h: 0.11 };
+    const bx = band(Math.sign(region.x)),
+      by = band(Math.sign(region.y)),
+      bz = band(Math.sign(region.z));
     hl.position.set(bx.c, by.c, bz.c);
     hl.scale.set(bx.h * 2, by.h * 2, bz.h * 2);
     hl.visible = true;
@@ -972,7 +1105,11 @@ export class Viewer {
     const off = this.camera.position.clone().sub(target);
     const r = off.length();
     if (r === 0) return;
-    const polar = THREE.MathUtils.clamp(Math.acos(off.z / r) - dPolar, 1e-3, Math.PI - 1e-3);
+    const polar = THREE.MathUtils.clamp(
+      Math.acos(off.z / r) - dPolar,
+      1e-3,
+      Math.PI - 1e-3,
+    );
     const az = Math.atan2(off.y, off.x) - dAz;
     off.set(
       r * Math.sin(polar) * Math.cos(az),
@@ -1027,7 +1164,12 @@ export class Viewer {
   /** The current camera as OpenSCAD `$vp*` values. `vpt`/`vpd`/`vpf` are exact;
    *  `vpr` is a best-effort Euler (roll = 0) matching the gimbal convention used
    *  by `setCamera` and the CLI rasterizer. */
-  getCamera(): { vpr: [number, number, number]; vpt: [number, number, number]; vpd: number; vpf: number } {
+  getCamera(): {
+    vpr: [number, number, number];
+    vpt: [number, number, number];
+    vpd: number;
+    vpf: number;
+  } {
     const t = this.controls.target;
     const dir = this.camera.position.clone().sub(t).normalize(); // target → eye
     const vpd = this.camera.position.distanceTo(t);
@@ -1067,7 +1209,9 @@ export class Viewer {
         .applyAxisAngle(Y, rad(vpr[1]))
         .applyAxisAngle(Z, rad(vpr[2]));
     const target = new THREE.Vector3(vpt[0], vpt[1], vpt[2]);
-    const eye = target.clone().add(rot(new THREE.Vector3(0, 0, 1)).multiplyScalar(vpd));
+    const eye = target
+      .clone()
+      .add(rot(new THREE.Vector3(0, 0, 1)).multiplyScalar(vpd));
     this.camera.position.copy(eye);
     this.camera.up.copy(rot(new THREE.Vector3(0, 1, 0)).normalize());
     this.controls.target.copy(target);
@@ -1102,13 +1246,20 @@ export class Viewer {
 }
 
 /** Spherical interpolation between two unit vectors (returns a unit vector). */
-function slerpUnit(a: THREE.Vector3, b: THREE.Vector3, t: number): THREE.Vector3 {
+function slerpUnit(
+  a: THREE.Vector3,
+  b: THREE.Vector3,
+  t: number,
+): THREE.Vector3 {
   const dot = THREE.MathUtils.clamp(a.dot(b), -1, 1);
   const theta = Math.acos(dot) * t;
   const rel = b.clone().sub(a.clone().multiplyScalar(dot));
   if (rel.lengthSq() < 1e-10) return a.clone().lerp(b, t).normalize();
   rel.normalize();
-  return a.clone().multiplyScalar(Math.cos(theta)).add(rel.multiplyScalar(Math.sin(theta)));
+  return a
+    .clone()
+    .multiplyScalar(Math.cos(theta))
+    .add(rel.multiplyScalar(Math.sin(theta)));
 }
 
 /** The three.js material for a preview group: `#` → translucent red, `%` →
@@ -1116,10 +1267,20 @@ function slerpUnit(a: THREE.Vector3, b: THREE.Vector3, t: number): THREE.Vector3
 function materialForGroup(g: PreviewGroup): THREE.Material {
   const base = { flatShading: true, side: THREE.DoubleSide as THREE.Side };
   if (g.mode === "highlight") {
-    return new THREE.MeshStandardMaterial({ ...base, color: 0xff3b30, transparent: true, opacity: 0.5 });
+    return new THREE.MeshStandardMaterial({
+      ...base,
+      color: 0xff3b30,
+      transparent: true,
+      opacity: 0.5,
+    });
   }
   if (g.mode === "background") {
-    return new THREE.MeshStandardMaterial({ ...base, color: 0x888888, transparent: true, opacity: 0.3 });
+    return new THREE.MeshStandardMaterial({
+      ...base,
+      color: 0x888888,
+      transparent: true,
+      opacity: 0.3,
+    });
   }
   const [r, gr, b, a] = g.color;
   return new THREE.MeshStandardMaterial({

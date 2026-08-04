@@ -39,7 +39,11 @@ body,
 body {
   background: var(--bg);
   color: var(--text);
-  font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    sans-serif;
 }
 
 .app {
@@ -644,12 +648,26 @@ body {
   font-size: 12px;
   line-height: 1.5;
 }
-.update-notes > :first-child { margin-top: 0; }
-.update-notes > :last-child { margin-bottom: 0; }
-.update-notes p { margin: 4px 0; }
-.update-notes ul, .update-notes ol { margin: 4px 0; padding-left: 20px; }
-.update-notes li { margin: 2px 0; }
-.update-notes h1, .update-notes h2, .update-notes h3 {
+.update-notes > :first-child {
+  margin-top: 0;
+}
+.update-notes > :last-child {
+  margin-bottom: 0;
+}
+.update-notes p {
+  margin: 4px 0;
+}
+.update-notes ul,
+.update-notes ol {
+  margin: 4px 0;
+  padding-left: 20px;
+}
+.update-notes li {
+  margin: 2px 0;
+}
+.update-notes h1,
+.update-notes h2,
+.update-notes h3 {
   font-size: 12px;
   font-weight: 600;
   margin: 6px 0 2px;
@@ -668,4 +686,7 @@ body {
   overflow: auto;
   font-family: ui-monospace, Menlo, monospace;
 }
-.update-notes a { color: var(--accent); text-decoration: underline; }
+.update-notes a {
+  color: var(--accent);
+  text-decoration: underline;
+}

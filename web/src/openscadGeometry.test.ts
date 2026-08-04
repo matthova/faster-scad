@@ -1,13 +1,20 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { buildColoredFromOff, DEFAULT_COLOR, parseBinaryStl, measure } from "./openscadGeometry";
+import {
+  buildColoredFromOff,
+  DEFAULT_COLOR,
+  parseBinaryStl,
+  measure,
+} from "./openscadGeometry";
 
 // A real OpenSCAD (Manifold backend) OFF export of three cubes — red, a
 // semi-transparent blue, and one uncolored — captured verbatim from the vendored
 // wasm. Guards that the F5-style colored-preview parsing keeps working.
 const OFF = readFileSync(
-  fileURLToPath(new URL("./__fixtures__/openscad-colored.off", import.meta.url)),
+  fileURLToPath(
+    new URL("./__fixtures__/openscad-colored.off", import.meta.url),
+  ),
   "utf8",
 );
 
@@ -19,7 +26,9 @@ describe("buildColoredFromOff", () => {
   });
 
   it("recovers the color() colors (0–1) including alpha", () => {
-    const colors = built.groups.map((g) => g.color.map((c) => Math.round(c * 100) / 100));
+    const colors = built.groups.map((g) =>
+      g.color.map((c) => Math.round(c * 100) / 100),
+    );
     // red opaque, blue at ~0.5 alpha, and the default gold for the uncolored cube
     expect(colors).toContainEqual([1, 0, 0, 1]);
     expect(colors).toContainEqual([0, 0, 1, 0.5]);

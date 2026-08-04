@@ -26,7 +26,9 @@ export interface EngineOptions {
 /** Render a 2D model to DXF/SVG text via a dedicated one-shot worker. */
 export function export2dBrowser(req: Export2DRequest): Promise<string> {
   return new Promise((resolve, reject) => {
-    const w = new Worker(new URL("./exportWorker.ts", import.meta.url), { type: "module" });
+    const w = new Worker(new URL("./exportWorker.ts", import.meta.url), {
+      type: "module",
+    });
     w.onmessage = (e: MessageEvent<Export2DResponse>) => {
       w.terminate();
       if (e.data.error) reject(new Error(e.data.error));
@@ -51,7 +53,9 @@ export function renderMeshExactBrowser(job: {
   fileContents: string[];
 }): Promise<Float32Array> {
   return new Promise((resolve, reject) => {
-    const w = new Worker(new URL("./engineWorker.ts", import.meta.url), { type: "module" });
+    const w = new Worker(new URL("./engineWorker.ts", import.meta.url), {
+      type: "module",
+    });
     w.onmessage = (e: MessageEvent<RenderResponse>) => {
       w.terminate();
       if (!e.data.ok) reject(new Error(e.data.error || "render failed"));
@@ -128,7 +132,14 @@ export class Engine {
       if (this.pending !== null) {
         const job = this.pending;
         this.pending = null;
-        this.render(job.source, job.names, job.values, job.fileNames, job.fileContents, job.preview);
+        this.render(
+          job.source,
+          job.names,
+          job.values,
+          job.fileNames,
+          job.fileContents,
+          job.preview,
+        );
       }
     };
   }

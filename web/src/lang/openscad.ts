@@ -30,7 +30,9 @@ const parserWithMetadata = parser.configure({
       ModuleName: t.function(t.variableName),
       "CallExpression/VariableName": t.function(t.variableName),
       "ModuleDefinition/VariableName": t.function(t.definition(t.variableName)),
-      "FunctionDefinition/VariableName": t.function(t.definition(t.variableName)),
+      "FunctionDefinition/VariableName": t.function(
+        t.definition(t.variableName),
+      ),
       VariableName: t.variableName,
       Modifier: t.modifier,
       '"(" ")"': t.paren,

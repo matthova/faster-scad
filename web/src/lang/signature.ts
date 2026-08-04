@@ -3,7 +3,11 @@
 // signature and doc. Distinct from autocomplete (which offers word completions
 // and closes once you're no longer typing an identifier); the two coexist —
 // completion below the cursor, this hint above.
-import { StateField, type EditorState, type Extension } from "@codemirror/state";
+import {
+  StateField,
+  type EditorState,
+  type Extension,
+} from "@codemirror/state";
 import { EditorView, showTooltip, type Tooltip } from "@codemirror/view";
 import { syntaxTree } from "@codemirror/language";
 import type { SyntaxNode } from "@lezer/common";
@@ -20,18 +24,29 @@ export interface SignatureInfo {
 /** Slice a user-defined module/function's signature (`name(params)`) from the
  *  tree, or null if no matching definition exists. Mirrors the tree-cursor scan
  *  in complete.ts's collectUserSymbols. */
-function findUserSignature(state: EditorState, name: string): SignatureInfo | null {
+function findUserSignature(
+  state: EditorState,
+  name: string,
+): SignatureInfo | null {
   const cursor = syntaxTree(state).cursor();
   do {
-    if (cursor.name === "ModuleDefinition" || cursor.name === "FunctionDefinition") {
+    if (
+      cursor.name === "ModuleDefinition" ||
+      cursor.name === "FunctionDefinition"
+    ) {
       const node = cursor.node;
       const nameNode = node.getChild("VariableName");
-      if (nameNode && state.doc.sliceString(nameNode.from, nameNode.to) === name) {
+      if (
+        nameNode &&
+        state.doc.sliceString(nameNode.from, nameNode.to) === name
+      ) {
         const params = node.getChild("ParamList");
         const kind = cursor.name === "ModuleDefinition" ? "module" : "function";
         return {
           name,
-          signature: name + (params ? state.doc.sliceString(params.from, params.to) : "()"),
+          signature:
+            name +
+            (params ? state.doc.sliceString(params.from, params.to) : "()"),
           doc: `user-defined ${kind}`,
         };
       }
@@ -49,7 +64,11 @@ export function signatureAt(state: EditorState): SignatureInfo | null {
 
   // Nearest enclosing ArgList (walk up from the node at the cursor).
   let argList: SyntaxNode | null = null;
-  for (let n: SyntaxNode | null = tree.resolveInner(head, -1); n; n = n.parent) {
+  for (
+    let n: SyntaxNode | null = tree.resolveInner(head, -1);
+    n;
+    n = n.parent
+  ) {
     if (n.name === "ArgList") {
       argList = n;
       break;
@@ -122,7 +141,11 @@ const signatureTheme = EditorView.baseTheme({
     fontFamily: "ui-monospace, Menlo, monospace",
     whiteSpace: "pre-wrap",
   },
-  ".cm-signature-doc": { marginTop: "3px", opacity: "0.75", fontStyle: "italic" },
+  ".cm-signature-doc": {
+    marginTop: "3px",
+    opacity: "0.75",
+    fontStyle: "italic",
+  },
 });
 
 /** The signature-help extension: a cursor-driven tooltip + its structural CSS. */

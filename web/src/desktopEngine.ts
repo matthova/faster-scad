@@ -3,7 +3,11 @@
 // worker — much faster, with include/use resolved from disk. Presents the same
 // interface as `Engine` so `App` can use either transparently.
 import type { RenderResponse } from "./engineWorker";
-import { OpenscadEngine, RENDER_TIMEOUT_MS, type EngineOptions } from "./engine";
+import {
+  OpenscadEngine,
+  RENDER_TIMEOUT_MS,
+  type EngineOptions,
+} from "./engine";
 import { blankResponse } from "./renderResponse";
 import { assembleOpenscadResponse } from "./openscadGeometry";
 
@@ -184,7 +188,9 @@ export class DesktopEngine {
    *  the background; this frees the UI, not the CPU. */
   cancel() {
     if (!this.busy) return;
-    this.abort("Render stopped. (The native engine may still be finishing in the background.)");
+    this.abort(
+      "Render stopped. (The native engine may still be finishing in the background.)",
+    );
   }
 
   /** Tear down (parity with `Engine.dispose`). The native render runs
@@ -209,7 +215,9 @@ export class DesktopEngine {
     this.clearTimer();
     this.seq += 1; // ignore the in-flight native result when it lands
     this.setBusy(false);
-    this.onResult(blankResponse(this.seq, { error, version: "native", stopped: true }));
+    this.onResult(
+      blankResponse(this.seq, { error, version: "native", stopped: true }),
+    );
   }
 }
 
@@ -278,7 +286,14 @@ export class DesktopOpenscadEngine {
     preview = false,
   ) {
     if (this.fallback) {
-      this.fallback.render(source, names, values, fileNames, fileContents, preview);
+      this.fallback.render(
+        source,
+        names,
+        values,
+        fileNames,
+        fileContents,
+        preview,
+      );
       return;
     }
     const seq = ++this.seq;
@@ -307,7 +322,14 @@ export class DesktopOpenscadEngine {
           // this and all future renders (it manages its own busy/watchdog).
           this.clearTimer();
           this.fallback = new OpenscadEngine(this.onResult, this.opts);
-          this.fallback.render(source, names, values, fileNames, fileContents, preview);
+          this.fallback.render(
+            source,
+            names,
+            values,
+            fileNames,
+            fileContents,
+            preview,
+          );
           return;
         }
         this.clearTimer();
@@ -346,7 +368,9 @@ export class DesktopOpenscadEngine {
       return;
     }
     if (!this.busy) return;
-    this.abort("Render stopped. (OpenSCAD may still be finishing in the background.)");
+    this.abort(
+      "Render stopped. (OpenSCAD may still be finishing in the background.)",
+    );
   }
 
   dispose() {
@@ -370,7 +394,13 @@ export class DesktopOpenscadEngine {
     this.clearTimer();
     this.seq += 1; // ignore the in-flight native result when it lands
     this.setBusy(false);
-    this.onResult(blankResponse(this.seq, { error, version: "OpenSCAD (local)", stopped: true }));
+    this.onResult(
+      blankResponse(this.seq, {
+        error,
+        version: "OpenSCAD (local)",
+        stopped: true,
+      }),
+    );
   }
 }
 
@@ -413,7 +443,10 @@ export async function saveSource(path: string, content: string): Promise<void> {
 }
 
 /** Show a Save dialog (default `.scad`) and write; returns the chosen path or null. */
-export async function saveSourceAs(content: string, defaultName = "untitled.scad"): Promise<string | null> {
+export async function saveSourceAs(
+  content: string,
+  defaultName = "untitled.scad",
+): Promise<string | null> {
   const { save } = await import("@tauri-apps/plugin-dialog");
   const { invoke } = await import("@tauri-apps/api/core");
   const path = await save({
@@ -426,7 +459,10 @@ export async function saveSourceAs(content: string, defaultName = "untitled.scad
 }
 
 /** Save binary bytes (e.g. a captured PNG) via a native save dialog. */
-export async function saveImageNative(bytes: Uint8Array, defaultName = "quito.png"): Promise<void> {
+export async function saveImageNative(
+  bytes: Uint8Array,
+  defaultName = "quito.png",
+): Promise<void> {
   const { save } = await import("@tauri-apps/plugin-dialog");
   const { invoke } = await import("@tauri-apps/api/core");
   const path = await save({
@@ -444,13 +480,17 @@ export async function watchFiles(paths: string[]): Promise<void> {
 }
 
 /** Subscribe to `open-path` (warm open-with). Returns an unlisten fn. */
-export async function onOpenPath(cb: (path: string) => void): Promise<() => void> {
+export async function onOpenPath(
+  cb: (path: string) => void,
+): Promise<() => void> {
   const { listen } = await import("@tauri-apps/api/event");
   return listen<string>("open-path", (e) => cb(e.payload));
 }
 
 /** Subscribe to native menu actions. Returns an unlisten fn. */
-export async function onMenuAction(cb: (action: string) => void): Promise<() => void> {
+export async function onMenuAction(
+  cb: (action: string) => void,
+): Promise<() => void> {
   const { listen } = await import("@tauri-apps/api/event");
   return listen<string>("menu-action", (e) => cb(e.payload));
 }
@@ -460,7 +500,9 @@ export async function onFileChanged(
   cb: (payload: { path: string; content: string }) => void,
 ): Promise<() => void> {
   const { listen } = await import("@tauri-apps/api/event");
-  return listen<{ path: string; content: string }>("file-changed", (e) => cb(e.payload));
+  return listen<{ path: string; content: string }>("file-changed", (e) =>
+    cb(e.payload),
+  );
 }
 
 /** Save already-built export bytes via a native save dialog. Used when a wasm

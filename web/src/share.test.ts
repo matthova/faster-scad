@@ -25,20 +25,32 @@ describe("encodeProject / decodeSharedProject", () => {
   });
 
   it("round-trips animation state when present", () => {
-    const p: Project = { files: [{ name: "a.scad", content: "sphere(1);" }], overrides: {}, active: 0 };
+    const p: Project = {
+      files: [{ name: "a.scad", content: "sphere(1);" }],
+      overrides: {},
+      active: 0,
+    };
     const out = roundTrip(p, { t: 0.25, fps: 30, steps: 100, playing: true });
     expect(out!.anim).toEqual({ t: 0.25, fps: 30, steps: 100, playing: true });
   });
 
   it("drops a malformed anim payload", () => {
-    const p: Project = { files: [{ name: "a.scad", content: "x" }], overrides: {}, active: 0 };
+    const p: Project = {
+      files: [{ name: "a.scad", content: "x" }],
+      overrides: {},
+      active: 0,
+    };
     // fps as a string is invalid → the whole (now empty) anim is undefined.
     const out = roundTrip(p, { fps: "fast" } as unknown as { fps: number });
     expect(out!.anim).toBeUndefined();
   });
 
   it("preserves unicode content exactly", () => {
-    const p: Project = { files: [{ name: "u.scad", content: "// 日本語 🎉\ncube(1);" }], overrides: {}, active: 0 };
+    const p: Project = {
+      files: [{ name: "u.scad", content: "// 日本語 🎉\ncube(1);" }],
+      overrides: {},
+      active: 0,
+    };
     expect(roundTrip(p)!.files[0].content).toBe(p.files[0].content);
   });
 

@@ -31,5 +31,8 @@ self.onmessage = async (e: MessageEvent<Export2DRequest>) => {
   } catch (err) {
     error = String(err);
   }
-  (self as unknown as Worker).postMessage({ data, error } satisfies Export2DResponse);
+  (self as unknown as Worker).postMessage({
+    data,
+    error,
+  } satisfies Export2DResponse);
 };

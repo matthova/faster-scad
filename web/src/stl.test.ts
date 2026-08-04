@@ -32,18 +32,38 @@ describe("buildBinarySTL", () => {
 
 describe("buildOFF / buildOBJ (welded, exact golden)", () => {
   it("emits exact OFF for one triangle", () => {
-    expect(text(buildOFF(TRI))).toBe("OFF\n3 1 0\n0 0 0\n1 0 0\n0 1 0\n3 0 1 2\n");
+    expect(text(buildOFF(TRI))).toBe(
+      "OFF\n3 1 0\n0 0 0\n1 0 0\n0 1 0\n3 0 1 2\n",
+    );
   });
 
   it("emits exact OBJ (1-based faces) for one triangle", () => {
-    expect(text(buildOBJ(TRI))).toBe("# exported by Quito\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+    expect(text(buildOBJ(TRI))).toBe(
+      "# exported by Quito\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n",
+    );
   });
 
   it("welds shared vertices across triangles", () => {
     // Two triangles forming a unit quad share two vertices → 4 unique verts.
     const quad = new Float32Array([
-      0, 0, 0, 1, 0, 0, 1, 1, 0, // t0
-      0, 0, 0, 1, 1, 0, 0, 1, 0, // t1 (shares (0,0,0) and (1,1,0))
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      1,
+      1,
+      0, // t0
+      0,
+      0,
+      0,
+      1,
+      1,
+      0,
+      0,
+      1,
+      0, // t1 (shares (0,0,0) and (1,1,0))
     ]);
     expect(text(buildOFF(quad)).split("\n")[1]).toBe("4 2 0"); // 4 verts, 2 faces
   });
@@ -52,8 +72,14 @@ describe("buildOFF / buildOBJ (welded, exact golden)", () => {
 describe("buildAMF", () => {
   it("emits welded indexed XML", () => {
     const s = text(buildAMF(TRI));
-    expect(s.startsWith('<?xml version="1.0" encoding="UTF-8"?>\n<amf unit="millimeter">')).toBe(true);
-    expect(s).toContain("<vertex><coordinates><x>0</x><y>0</y><z>0</z></coordinates></vertex>");
+    expect(
+      s.startsWith(
+        '<?xml version="1.0" encoding="UTF-8"?>\n<amf unit="millimeter">',
+      ),
+    ).toBe(true);
+    expect(s).toContain(
+      "<vertex><coordinates><x>0</x><y>0</y><z>0</z></coordinates></vertex>",
+    );
     expect(s).toContain("<triangle><v1>0</v1><v2>1</v2><v3>2</v3></triangle>");
     expect(s.trimEnd().endsWith("</amf>")).toBe(true);
   });

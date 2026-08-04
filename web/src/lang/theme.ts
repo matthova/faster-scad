@@ -12,26 +12,40 @@ import { tags as t } from "@lezer/highlight";
 // three. The colors mirror VSCode's Dark+ / Light+ themes.
 
 export const darkHighlight = HighlightStyle.define([
-  { tag: [t.definitionKeyword, t.moduleKeyword, t.bool, t.null, t.modifier], color: "#569CD6" },
+  {
+    tag: [t.definitionKeyword, t.moduleKeyword, t.bool, t.null, t.modifier],
+    color: "#569CD6",
+  },
   { tag: t.controlKeyword, color: "#C586C0" },
   { tag: t.function(t.variableName), color: "#DCDCAA" },
   { tag: t.special(t.variableName), color: "#4EC9B0" },
   { tag: t.variableName, color: "#9CDCFE" },
   { tag: t.string, color: "#CE9178" },
   { tag: t.number, color: "#B5CEA8" },
-  { tag: [t.lineComment, t.blockComment], color: "#6A9955", fontStyle: "italic" },
+  {
+    tag: [t.lineComment, t.blockComment],
+    color: "#6A9955",
+    fontStyle: "italic",
+  },
   { tag: [t.operator, t.definitionOperator], color: "#D4D4D4" },
 ]);
 
 export const lightHighlight = HighlightStyle.define([
-  { tag: [t.definitionKeyword, t.moduleKeyword, t.bool, t.null, t.modifier], color: "#0000FF" },
+  {
+    tag: [t.definitionKeyword, t.moduleKeyword, t.bool, t.null, t.modifier],
+    color: "#0000FF",
+  },
   { tag: t.controlKeyword, color: "#AF00DB" },
   { tag: t.function(t.variableName), color: "#795E26" },
   { tag: t.special(t.variableName), color: "#267F99" },
   { tag: t.variableName, color: "#001080" },
   { tag: t.string, color: "#A31515" },
   { tag: t.number, color: "#098658" },
-  { tag: [t.lineComment, t.blockComment], color: "#008000", fontStyle: "italic" },
+  {
+    tag: [t.lineComment, t.blockComment],
+    color: "#008000",
+    fontStyle: "italic",
+  },
   { tag: [t.operator, t.definitionOperator], color: "#000000" },
 ]);
 
@@ -42,14 +56,24 @@ export const lightHighlight = HighlightStyle.define([
 
 export const darkTheme = EditorView.theme(
   {
-    "&": { height: "100%", fontSize: "13px", color: "#D4D4D4", backgroundColor: "#1E1E1E" },
+    "&": {
+      height: "100%",
+      fontSize: "13px",
+      color: "#D4D4D4",
+      backgroundColor: "#1E1E1E",
+    },
     ".cm-scroller": { fontFamily: "ui-monospace, Menlo, monospace" },
     ".cm-content": { caretColor: "#AEAFAD" },
     ".cm-cursor, .cm-dropCursor": { borderLeftColor: "#AEAFAD" },
-    "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": {
-      backgroundColor: "#264F78",
+    "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection":
+      {
+        backgroundColor: "#264F78",
+      },
+    ".cm-gutters": {
+      backgroundColor: "#1E1E1E",
+      color: "#858585",
+      border: "none",
     },
-    ".cm-gutters": { backgroundColor: "#1E1E1E", color: "#858585", border: "none" },
     ".cm-activeLine": { backgroundColor: "#2A2A2A" },
     ".cm-activeLineGutter": { backgroundColor: "#2A2A2A" },
     ".cm-matchingBracket, &.cm-focused .cm-matchingBracket": {
@@ -79,14 +103,24 @@ export const darkTheme = EditorView.theme(
 
 export const lightTheme = EditorView.theme(
   {
-    "&": { height: "100%", fontSize: "13px", color: "#000000", backgroundColor: "#FFFFFF" },
+    "&": {
+      height: "100%",
+      fontSize: "13px",
+      color: "#000000",
+      backgroundColor: "#FFFFFF",
+    },
     ".cm-scroller": { fontFamily: "ui-monospace, Menlo, monospace" },
     ".cm-content": { caretColor: "#000000" },
     ".cm-cursor, .cm-dropCursor": { borderLeftColor: "#000000" },
-    "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": {
-      backgroundColor: "#ADD6FF",
+    "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection":
+      {
+        backgroundColor: "#ADD6FF",
+      },
+    ".cm-gutters": {
+      backgroundColor: "#F3F3F3",
+      color: "#858585",
+      border: "none",
     },
-    ".cm-gutters": { backgroundColor: "#F3F3F3", color: "#858585", border: "none" },
     ".cm-activeLine": { backgroundColor: "#F5F5F5" },
     ".cm-activeLineGutter": { backgroundColor: "#F5F5F5" },
     ".cm-matchingBracket, &.cm-focused .cm-matchingBracket": {

@@ -106,7 +106,10 @@ export function buildColoredFromOff(text: string): {
   idx += numVerts;
 
   // Collect triangles grouped by color (dedup colors into stable groups).
-  const byColor = new Map<string, { color: [number, number, number, number]; tris: number[][] }>();
+  const byColor = new Map<
+    string,
+    { color: [number, number, number, number]; tris: number[][] }
+  >();
   for (let i = 0; i < numFaces; i++) {
     const p = lines[idx + i].split(/\s+/).map(Number);
     const n = p[0];
@@ -115,7 +118,12 @@ export function buildColoredFromOff(text: string): {
     let color: [number, number, number, number] = DEFAULT_COLOR;
     if (p.length >= n + 4) {
       const c = p.slice(n + 1);
-      color = [c[0] / 255, c[1] / 255, c[2] / 255, c.length >= 4 ? c[3] / 255 : 1];
+      color = [
+        c[0] / 255,
+        c[1] / 255,
+        c[2] / 255,
+        c.length >= 4 ? c[3] / 255 : 1,
+      ];
     }
     const key = color.join(",");
     let g = byColor.get(key);
@@ -123,7 +131,8 @@ export function buildColoredFromOff(text: string): {
       g = { color, tris: [] };
       byColor.set(key, g);
     }
-    for (let j = 1; j < vi.length - 1; j++) g.tris.push([vi[0], vi[j], vi[j + 1]]);
+    for (let j = 1; j < vi.length - 1; j++)
+      g.tris.push([vi[0], vi[j], vi[j + 1]]);
   }
 
   let totalTris = 0;
@@ -136,18 +145,32 @@ export function buildColoredFromOff(text: string): {
   for (const g of byColor.values()) {
     const start = v;
     for (const [a, b, c] of g.tris) {
-      const ax = verts[a * 3], ay = verts[a * 3 + 1], az = verts[a * 3 + 2];
-      const bx = verts[b * 3], by = verts[b * 3 + 1], bz = verts[b * 3 + 2];
-      const cx = verts[c * 3], cy = verts[c * 3 + 1], cz = verts[c * 3 + 2];
+      const ax = verts[a * 3],
+        ay = verts[a * 3 + 1],
+        az = verts[a * 3 + 2];
+      const bx = verts[b * 3],
+        by = verts[b * 3 + 1],
+        bz = verts[b * 3 + 2];
+      const cx = verts[c * 3],
+        cy = verts[c * 3 + 1],
+        cz = verts[c * 3 + 2];
       // Flat (per-face) normal, shared by the triangle's three vertices.
       let nx = (by - ay) * (cz - az) - (bz - az) * (cy - ay);
       let ny = (bz - az) * (cx - ax) - (bx - ax) * (cz - az);
       let nz = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
       const len = Math.hypot(nx, ny, nz) || 1;
-      nx /= len; ny /= len; nz /= len;
-      positions[f] = ax; positions[f + 1] = ay; positions[f + 2] = az;
-      positions[f + 3] = bx; positions[f + 4] = by; positions[f + 5] = bz;
-      positions[f + 6] = cx; positions[f + 7] = cy; positions[f + 8] = cz;
+      nx /= len;
+      ny /= len;
+      nz /= len;
+      positions[f] = ax;
+      positions[f + 1] = ay;
+      positions[f + 2] = az;
+      positions[f + 3] = bx;
+      positions[f + 4] = by;
+      positions[f + 5] = bz;
+      positions[f + 6] = cx;
+      positions[f + 7] = cy;
+      positions[f + 8] = cz;
       for (let k = 0; k < 3; k++) {
         normals[f + k * 3] = nx;
         normals[f + k * 3 + 1] = ny;
@@ -156,7 +179,12 @@ export function buildColoredFromOff(text: string): {
       f += 9;
       v += 3;
     }
-    groups.push({ start, count: g.tris.length * 3, color: g.color, mode: "solid" });
+    groups.push({
+      start,
+      count: g.tris.length * 3,
+      color: g.color,
+      mode: "solid",
+    });
   }
   return { positions, normals, groups };
 }
@@ -186,7 +214,10 @@ export function assembleOpenscadResponse(
 ): { message: RenderResponse; transfer: ArrayBuffer[] } {
   const { ok, data, preview, echo, warnings, error, version, ms } = run;
   if (!ok || !data || data.byteLength === 0) {
-    return { message: blankResponse(seq, { error, echo, warnings, version, ms }), transfer: [] };
+    return {
+      message: blankResponse(seq, { error, echo, warnings, version, ms }),
+      transfer: [],
+    };
   }
 
   let positions: Float32Array<ArrayBuffer>;
@@ -241,19 +272,33 @@ export function assembleOpenscadResponse(
     preview: false,
   };
   const transfer = preview
-    ? [positions.buffer, normals.buffer, previewPositions.buffer, previewNormals.buffer]
+    ? [
+        positions.buffer,
+        normals.buffer,
+        previewPositions.buffer,
+        previewNormals.buffer,
+      ]
     : [positions.buffer, normals.buffer];
   return { message, transfer };
 }
 
 /** Volume (via the divergence theorem) and surface area of a triangle soup. */
-export function measure(positions: Float32Array): { volume: number; area: number } {
+export function measure(positions: Float32Array): {
+  volume: number;
+  area: number;
+} {
   let vol = 0;
   let area = 0;
   for (let i = 0; i < positions.length; i += 9) {
-    const ax = positions[i], ay = positions[i + 1], az = positions[i + 2];
-    const bx = positions[i + 3], by = positions[i + 4], bz = positions[i + 5];
-    const cx = positions[i + 6], cy = positions[i + 7], cz = positions[i + 8];
+    const ax = positions[i],
+      ay = positions[i + 1],
+      az = positions[i + 2];
+    const bx = positions[i + 3],
+      by = positions[i + 4],
+      bz = positions[i + 5];
+    const cx = positions[i + 6],
+      cy = positions[i + 7],
+      cz = positions[i + 8];
     // signed volume of the tetrahedron (origin, a, b, c)
     vol +=
       (ax * (by * cz - bz * cy) -
@@ -261,8 +306,12 @@ export function measure(positions: Float32Array): { volume: number; area: number
         az * (bx * cy - by * cx)) /
       6;
     // triangle area = |(b-a) × (c-a)| / 2
-    const ux = bx - ax, uy = by - ay, uz = bz - az;
-    const vx = cx - ax, vy = cy - ay, vz = cz - az;
+    const ux = bx - ax,
+      uy = by - ay,
+      uz = bz - az;
+    const vx = cx - ax,
+      vy = cy - ay,
+      vz = cz - az;
     const wx = uy * vz - uz * vy;
     const wy = uz * vx - ux * vz;
     const wz = ux * vy - uy * vx;

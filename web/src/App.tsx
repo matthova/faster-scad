@@ -6,7 +6,12 @@ import { setDiagnostics, type Diagnostic } from "@codemirror/lint";
 import { basicSetup } from "codemirror";
 import { indentWithTab } from "@codemirror/commands";
 import { openscad } from "./lang/openscad";
-import { darkTheme, lightTheme, darkHighlight, lightHighlight } from "./lang/theme";
+import {
+  darkTheme,
+  lightTheme,
+  darkHighlight,
+  lightHighlight,
+} from "./lang/theme";
 import {
   Viewer,
   type MeshInfo,
@@ -16,7 +21,12 @@ import {
   type ThemeMode,
   type Span,
 } from "./viewer";
-import { Engine, OpenscadEngine, export2dBrowser, renderMeshExactBrowser } from "./engine";
+import {
+  Engine,
+  OpenscadEngine,
+  export2dBrowser,
+  renderMeshExactBrowser,
+} from "./engine";
 import type { RenderResponse } from "./engineWorker";
 import {
   buildBinarySTL,
@@ -80,7 +90,9 @@ const LIB_BASE = new URL("lib/", document.baseURI).href;
 
 /** The current OS appearance from `prefers-color-scheme`. */
 function currentMode(): ThemeMode {
-  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  return window.matchMedia("(prefers-color-scheme: dark)").matches
+    ? "dark"
+    : "light";
 }
 
 /** Editor theme + syntax-highlighting extensions for a given appearance. Placed
@@ -246,7 +258,9 @@ export function App() {
   const editorHost = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const viewerRef = useRef<Viewer | null>(null);
-  const engineRef = useRef<Engine | DesktopEngine | DesktopOpenscadEngine | null>(null);
+  const engineRef = useRef<
+    Engine | DesktopEngine | DesktopOpenscadEngine | null
+  >(null);
   // Directory of the opened file, for the native engine's disk include/use
   // resolution. Held here (not just on the engine instance) so it survives an
   // engine swap: switching to OpenSCAD and back rebuilds the DesktopEngine, and
@@ -255,7 +269,10 @@ export function App() {
   const viewRef = useRef<EditorView | null>(null);
   const lastPositions = useRef<Float32Array>(new Float32Array(0));
   // Preview color channel from the last render, for colored 3MF export.
-  const lastPreview = useRef<{ positions: Float32Array; groups: PreviewGroup[] }>({
+  const lastPreview = useRef<{
+    positions: Float32Array;
+    groups: PreviewGroup[];
+  }>({
     positions: new Float32Array(0),
     groups: [],
   });
@@ -300,11 +317,17 @@ export function App() {
   // content, so it always renders. Read once at startup, before any render arms
   // the sentinel again.
   const wasStuck = useRef(!sharedRef.current && wasRenderPending()).current;
-  const filesRef = useRef<File[]>(saved?.files ?? DEFAULT_FILES.map((f) => ({ ...f })));
+  const filesRef = useRef<File[]>(
+    saved?.files ?? DEFAULT_FILES.map((f) => ({ ...f })),
+  );
   const activeRef = useRef(saved?.active ?? 0);
   const suppressRef = useRef(false);
-  const overridesRef = useRef<Record<string, ParamValue>>(saved?.overrides ?? {});
-  const paramSetsRef = useRef<Record<string, Record<string, ParamValue>>>(saved?.paramSets ?? {});
+  const overridesRef = useRef<Record<string, ParamValue>>(
+    saved?.overrides ?? {},
+  );
+  const paramSetsRef = useRef<Record<string, Record<string, ParamValue>>>(
+    saved?.paramSets ?? {},
+  );
   const paramsJsonRef = useRef("");
   const requestRenderRef = useRef<() => void>(() => {});
   const renderNowRef = useRef<() => void>(() => {}); // immediate render (animation frames bypass the debounce)
@@ -332,7 +355,9 @@ export function App() {
   // recipient opens on the same frame and speed.
   const sharedAnim = sharedRef.current?.anim;
   const timeRef = useRef(sharedAnim?.t ?? 0); // $t for animation
-  const stepRef = useRef(Math.round((sharedAnim?.t ?? 0) * (sharedAnim?.steps ?? 20))); // current animation frame index (0..steps-1)
+  const stepRef = useRef(
+    Math.round((sharedAnim?.t ?? 0) * (sharedAnim?.steps ?? 20)),
+  ); // current animation frame index (0..steps-1)
 
   const [files, setFiles] = useState<File[]>(filesRef.current);
   const [active, setActive] = useState(activeRef.current);
@@ -364,7 +389,9 @@ export function App() {
   const [ortho, setOrtho] = useState(false);
   const [linkHighlight, setLinkHighlight] = useState(linkHighlightRef.current);
   const [fastPreview, setFastPreview] = useState(fastPreviewRef.current);
-  const [engineKind, setEngineKind] = useState<EngineKind>(engineKindRef.current);
+  const [engineKind, setEngineKind] = useState<EngineKind>(
+    engineKindRef.current,
+  );
   // OS light/dark appearance. Auto-follows `prefers-color-scheme`; no toggle.
   const [mode, setMode] = useState<ThemeMode>(currentMode);
   const [time, setTime] = useState(sharedAnim?.t ?? 0);
@@ -372,13 +399,18 @@ export function App() {
   const [fps, setFps] = useState(sharedAnim?.fps ?? 15);
   const [steps, setSteps] = useState(sharedAnim?.steps ?? 20);
   const [schema, setSchema] = useState<Param[]>([]);
-  const [overrides, setOverrides] = useState<Record<string, ParamValue>>(overridesRef.current);
-  const [paramSets, setParamSets] = useState<Record<string, Record<string, ParamValue>>>(
-    paramSetsRef.current,
+  const [overrides, setOverrides] = useState<Record<string, ParamValue>>(
+    overridesRef.current,
   );
+  const [paramSets, setParamSets] = useState<
+    Record<string, Record<string, ParamValue>>
+  >(paramSetsRef.current);
   const [shareMsg, setShareMsg] = useState("");
   // Diagnostic counts for the main file (error/warning), for the tab badge.
-  const [diagCounts, setDiagCounts] = useState<{ errors: number; warnings: number }>({
+  const [diagCounts, setDiagCounts] = useState<{
+    errors: number;
+    warnings: number;
+  }>({
     errors: 0,
     warnings: 0,
   });
@@ -416,7 +448,10 @@ export function App() {
       const from = byteToChar(src, span[0]);
       const to = byteToChar(src, span[1]);
       const v = viewRef.current!;
-      v.dispatch({ selection: { anchor: from, head: to }, scrollIntoView: true });
+      v.dispatch({
+        selection: { anchor: from, head: to },
+        scrollIntoView: true,
+      });
       v.focus();
       // Re-enable and highlight the clicked item. An explicit call covers the
       // case where the selection didn't change (re-clicking the same item after a
@@ -435,7 +470,10 @@ export function App() {
       window.clearTimeout(slowTimer.current);
       if (busy) {
         setRecovering(false);
-        slowTimer.current = window.setTimeout(markRenderPending, SLOW_RENDER_MS);
+        slowTimer.current = window.setTimeout(
+          markRenderPending,
+          SLOW_RENDER_MS,
+        );
       }
     };
     // Build an engine for the given kind. "openscad" runs OpenSCAD — a locally-
@@ -507,11 +545,8 @@ export function App() {
         // include/use closure (fetching libraries), then render with the full
         // file set. Read `engineRef.current` (not a captured local) so a live
         // engine swap takes effect on the next render.
-        const { names: fileNames, contents: fileContents } = await resolveClosure(
-          fs[0].content,
-          libs,
-          LIB_BASE,
-        );
+        const { names: fileNames, contents: fileContents } =
+          await resolveClosure(fs[0].content, libs, LIB_BASE);
         engineRef.current?.render(
           fs[0].content,
           names,
@@ -536,7 +571,8 @@ export function App() {
     // camera to avoid a feedback loop.
     const unsubCamera = viewer.onCameraChange(() => {
       if (applyingCameraRef.current || exportingRef.current) return;
-      if (filesRef.current[0].content.includes("$vp")) requestRenderRef.current();
+      if (filesRef.current[0].content.includes("$vp"))
+        requestRenderRef.current();
     });
 
     const view = new EditorView({
@@ -618,8 +654,11 @@ export function App() {
     if (TAURI) {
       // Seed saved baselines for any restored files that already have a disk path,
       // and (re)arm watchers for them so external edits reload after a relaunch.
-      const paths = filesRef.current.map((f) => f.path).filter((p): p is string => !!p);
-      for (const f of filesRef.current) if (f.path) savedRef.current[f.name] = f.content;
+      const paths = filesRef.current
+        .map((f) => f.path)
+        .filter((p): p is string => !!p);
+      for (const f of filesRef.current)
+        if (f.path) savedRef.current[f.name] = f.content;
       if (paths.length) void watchFiles(paths);
 
       // Live-reload a file edited in an external editor. Route by path to the
@@ -720,7 +759,9 @@ export function App() {
     document.documentElement.style.colorScheme = mode;
     viewerRef.current?.setTheme(mode);
     if (viewRef.current) {
-      viewRef.current.dispatch({ effects: themeComp.current.reconfigure(themeExts(mode)) });
+      viewRef.current.dispatch({
+        effects: themeComp.current.reconfigure(themeExts(mode)),
+      });
     }
   }, [mode]);
 
@@ -756,7 +797,12 @@ export function App() {
    *  external-edit reload — updating the editor if that tab is active. When a
    *  disk `path` is given the tab remembers it (so ⌘S writes there) and the
    *  content becomes the new saved baseline (no unsaved-changes dot). */
-  function setMainFile(name: string, content: string, dir?: string, path?: string) {
+  function setMainFile(
+    name: string,
+    content: string,
+    dir?: string,
+    path?: string,
+  ) {
     const next = filesRef.current.slice();
     next[0] = { name, content, path: path ?? next[0].path };
     filesRef.current = next;
@@ -765,12 +811,15 @@ export function App() {
     if (dir) {
       engineDirRef.current = dir;
       const e = engineRef.current;
-      if (e instanceof DesktopEngine || e instanceof DesktopOpenscadEngine) e.dir = dir;
+      if (e instanceof DesktopEngine || e instanceof DesktopOpenscadEngine)
+        e.dir = dir;
     }
     if (activeRef.current === 0 && viewRef.current) {
       const view = viewRef.current;
       suppressRef.current = true;
-      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: content } });
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: content },
+      });
       suppressRef.current = false;
     }
     persist();
@@ -783,7 +832,12 @@ export function App() {
   function applyExternalEdit(path: string, content: string) {
     const idx = filesRef.current.findIndex((f) => f.path === path);
     if (idx <= 0) {
-      setMainFile(filesRef.current[0].name, content, undefined, filesRef.current[0].path);
+      setMainFile(
+        filesRef.current[0].name,
+        content,
+        undefined,
+        filesRef.current[0].path,
+      );
       return;
     }
     const next = filesRef.current.slice();
@@ -794,7 +848,9 @@ export function App() {
     if (activeRef.current === idx && viewRef.current) {
       const view = viewRef.current;
       suppressRef.current = true;
-      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: content } });
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: content },
+      });
       suppressRef.current = false;
     }
     persist();
@@ -845,12 +901,20 @@ export function App() {
           const d = path.slice(0, path.length - basename(path).length) || ".";
           engineDirRef.current = d;
           const e = engineRef.current;
-          if (e instanceof DesktopEngine || e instanceof DesktopOpenscadEngine) e.dir = d;
+          if (e instanceof DesktopEngine || e instanceof DesktopOpenscadEngine)
+            e.dir = d;
         }
-        void watchFiles(filesRef.current.map((x) => x.path).filter((p): p is string => !!p));
+        void watchFiles(
+          filesRef.current.map((x) => x.path).filter((p): p is string => !!p),
+        );
       }
     } catch (e) {
-      setStatus((s) => ({ ...s, ok: false, error: `save failed: ${String(e)}`, message: "save failed" }));
+      setStatus((s) => ({
+        ...s,
+        ok: false,
+        error: `save failed: ${String(e)}`,
+        message: "save failed",
+      }));
       setConsoleOpen(true);
     }
   }
@@ -875,7 +939,11 @@ export function App() {
     const viewer = viewerRef.current;
     const view = viewRef.current;
     if (!viewer || !view) return;
-    if (!linkHighlightRef.current || activeRef.current !== 0 || highlightDismissedRef.current) {
+    if (
+      !linkHighlightRef.current ||
+      activeRef.current !== 0 ||
+      highlightDismissedRef.current
+    ) {
       viewer.highlightSpan(null);
       return;
     }
@@ -892,7 +960,11 @@ export function App() {
     let best: Span | null = null;
     for (const g of provenanceRef.current) {
       for (const s of g.spans) {
-        if (byte >= s[0] && byte < s[1] && (!best || s[1] - s[0] < best[1] - best[0])) {
+        if (
+          byte >= s[0] &&
+          byte < s[1] &&
+          (!best || s[1] - s[0] < best[1] - best[0])
+        ) {
           best = s;
         }
       }
@@ -926,7 +998,8 @@ export function App() {
    *  re-render on the new engine. Remembered across sessions. On desktop, "quito"
    *  is the native engine and "openscad" runs the OpenSCAD wasm in-webview. */
   function toggleEngine() {
-    const next: EngineKind = engineKindRef.current === "openscad" ? "quito" : "openscad";
+    const next: EngineKind =
+      engineKindRef.current === "openscad" ? "quito" : "openscad";
     engineKindRef.current = next;
     setEngineKind(next);
     savePrefs({ engine: next });
@@ -940,7 +1013,11 @@ export function App() {
     const view = viewRef.current;
     suppressRef.current = true;
     view.dispatch({
-      changes: { from: 0, to: view.state.doc.length, insert: filesRef.current[idx].content },
+      changes: {
+        from: 0,
+        to: view.state.doc.length,
+        insert: filesRef.current[idx].content,
+      },
     });
     suppressRef.current = false;
     applyDiagnostics();
@@ -990,7 +1067,11 @@ export function App() {
     // Drop any share-link hash so a reload doesn't restore the shared project.
     sharedRef.current = null;
     try {
-      window.history.replaceState(null, "", window.location.pathname + window.location.search);
+      window.history.replaceState(
+        null,
+        "",
+        window.location.pathname + window.location.search,
+      );
     } catch {
       /* ignore */
     }
@@ -1008,11 +1089,19 @@ export function App() {
   function loadExample(idx: number) {
     const ex = EXAMPLES[idx];
     if (!ex) return;
-    if (!window.confirm(`Load the "${ex.label}" example? This replaces the current project.`))
+    if (
+      !window.confirm(
+        `Load the "${ex.label}" example? This replaces the current project.`,
+      )
+    )
       return;
     sharedRef.current = null;
     try {
-      window.history.replaceState(null, "", window.location.pathname + window.location.search);
+      window.history.replaceState(
+        null,
+        "",
+        window.location.pathname + window.location.search,
+      );
     } catch {
       /* ignore */
     }
@@ -1058,7 +1147,8 @@ export function App() {
     if (idx === 0) return; // keep main.scad stable
     const cur = filesRef.current[idx].name;
     const name = window.prompt("Rename file", cur);
-    if (!name || name === cur || filesRef.current.some((f) => f.name === name)) return;
+    if (!name || name === cur || filesRef.current.some((f) => f.name === name))
+      return;
     const next = filesRef.current.slice();
     next[idx] = { ...next[idx], name };
     filesRef.current = next;
@@ -1108,7 +1198,9 @@ export function App() {
       for (const [k, v] of Object.entries(overridesRef.current)) {
         if (next.some((p) => p.name === k)) kept[k] = v;
       }
-      if (Object.keys(kept).length !== Object.keys(overridesRef.current).length) {
+      if (
+        Object.keys(kept).length !== Object.keys(overridesRef.current).length
+      ) {
         overridesRef.current = kept;
         setOverrides(kept);
       }
@@ -1127,7 +1219,11 @@ export function App() {
       }
       lastPreview.current = { positions: r.previewPositions, groups };
       if (groups.length > 0) {
-        viewerRef.current?.setColoredMesh(r.previewPositions, r.previewNormals, groups);
+        viewerRef.current?.setColoredMesh(
+          r.previewPositions,
+          r.previewNormals,
+          groups,
+        );
       } else {
         viewerRef.current?.setMesh(r.positions, r.normals);
       }
@@ -1141,7 +1237,11 @@ export function App() {
         }
       }
       provenanceRef.current = prov;
-      viewerRef.current?.setProvenance(r.provenancePositions, r.provenanceNormals, prov);
+      viewerRef.current?.setProvenance(
+        r.provenancePositions,
+        r.provenanceNormals,
+        prov,
+      );
       // Re-apply the code→model highlight for the current cursor (setProvenance
       // cleared the stale overlay).
       highlightFromCursor();
@@ -1257,7 +1357,8 @@ export function App() {
     const name = window.prompt("Save parameter set as:");
     if (!name) return;
     const snapshot: Record<string, ParamValue> = {};
-    for (const p of schema) snapshot[p.name] = overridesRef.current[p.name] ?? p.value;
+    for (const p of schema)
+      snapshot[p.name] = overridesRef.current[p.name] ?? p.value;
     commitParamSets({ ...paramSetsRef.current, [name]: snapshot });
   }
 
@@ -1300,9 +1401,12 @@ export function App() {
       return;
     }
     const cur = viewer.getCamera();
-    const nearN = (a: number | null | undefined, b: number) => a == null || Math.abs(a - b) < 1e-3;
-    const nearV = (a: [number, number, number] | null | undefined, b: [number, number, number]) =>
-      !a || a.every((x, i) => Math.abs(x - b[i]) < 1e-3);
+    const nearN = (a: number | null | undefined, b: number) =>
+      a == null || Math.abs(a - b) < 1e-3;
+    const nearV = (
+      a: [number, number, number] | null | undefined,
+      b: [number, number, number],
+    ) => !a || a.every((x, i) => Math.abs(x - b[i]) < 1e-3);
     const changed =
       !nearV(vp.vpr, cur.vpr) ||
       !nearV(vp.vpt, cur.vpt) ||
@@ -1392,7 +1496,9 @@ export function App() {
     // in the browser, trigger an anchor download. Used by the wasm-engine export
     // paths below (the native engine has its own `save_model` re-render path).
     const saveExport = (data: Uint8Array, ext: string) =>
-      TAURI ? void saveBytesNative(data, ext) : downloadBlob(data, `quito.${ext}`);
+      TAURI
+        ? void saveBytesNative(data, ext)
+        : downloadBlob(data, `quito.${ext}`);
 
     // The native re-render export applies only when the native engine produced
     // what's on screen. With the OpenSCAD wasm engine active (even on desktop),
@@ -1414,11 +1520,8 @@ export function App() {
     // 2D vector formats need the exact contours, so re-render in a worker.
     if (format === "dxf" || format === "svg") {
       try {
-        const { names: fileNames, contents: fileContents } = await resolveClosure(
-          fs[0].content,
-          libs,
-          LIB_BASE,
-        );
+        const { names: fileNames, contents: fileContents } =
+          await resolveClosure(fs[0].content, libs, LIB_BASE);
         const text = await export2dBrowser({
           source: fs[0].content,
           names,
@@ -1442,11 +1545,8 @@ export function App() {
     if (pos.length === 0) return;
     if (status.preview) {
       try {
-        const { names: fileNames, contents: fileContents } = await resolveClosure(
-          fs[0].content,
-          libs,
-          LIB_BASE,
-        );
+        const { names: fileNames, contents: fileContents } =
+          await resolveClosure(fs[0].content, libs, LIB_BASE);
         pos = await renderMeshExactBrowser({
           source: fs[0].content,
           names,
@@ -1465,7 +1565,9 @@ export function App() {
       const { positions, groups } = lastPreview.current;
       const exportable = groups.filter((g) => g.mode !== "background");
       const data =
-        exportable.length > 0 ? build3MFColored(positions, exportable) : build3MF(pos);
+        exportable.length > 0
+          ? build3MFColored(positions, exportable)
+          : build3MF(pos);
       saveExport(data, "3mf");
       return;
     }
@@ -1515,17 +1617,26 @@ export function App() {
           </select>
           {TAURI && <button onClick={openNative}>Open…</button>}
           {TAURI && (
-            <button onClick={() => saveActiveRef.current()} title="Save the active file (⌘S)">
+            <button
+              onClick={() => saveActiveRef.current()}
+              title="Save the active file (⌘S)"
+            >
               Save
             </button>
           )}
           {!TAURI && (
-            <button onClick={onShare} title="Copy a shareable link to this project">
+            <button
+              onClick={onShare}
+              title="Copy a shareable link to this project"
+            >
               {shareMsg || "Share"}
             </button>
           )}
           {!TAURI && (
-            <button onClick={onDownloadScad} title="Download the active file as .scad">
+            <button
+              onClick={onDownloadScad}
+              title="Download the active file as .scad"
+            >
               .scad
             </button>
           )}
@@ -1540,12 +1651,16 @@ export function App() {
               </button>
             ))}
           </span>
-          <button onClick={() => viewerRef.current?.resetView()}>Reset view</button>
+          <button onClick={() => viewerRef.current?.resetView()}>
+            Reset view
+          </button>
           <button
             className={ortho ? "active" : undefined}
             onClick={() => {
               const next = !ortho;
-              viewerRef.current?.setProjection(next ? "orthographic" : "perspective");
+              viewerRef.current?.setProjection(
+                next ? "orthographic" : "perspective",
+              );
               setOrtho(next);
             }}
             title={
@@ -1597,7 +1712,10 @@ export function App() {
           >
             Fast
           </button>
-          <button onClick={onSavePng} title="Save the current view as a PNG image">
+          <button
+            onClick={onSavePng}
+            title="Save the current view as a PNG image"
+          >
             PNG
           </button>
           <div className="anim" title="Animation ($t sweeps 0→1)">
@@ -1629,11 +1747,19 @@ export function App() {
                 max={60}
                 value={fps}
                 onChange={(e) =>
-                  setFps(Math.max(1, Math.min(60, Math.round(parseFloat(e.target.value) || 1))))
+                  setFps(
+                    Math.max(
+                      1,
+                      Math.min(60, Math.round(parseFloat(e.target.value) || 1)),
+                    ),
+                  )
                 }
               />
             </label>
-            <label className="anim-field" title="Number of frames as $t goes 0→1">
+            <label
+              className="anim-field"
+              title="Number of frames as $t goes 0→1"
+            >
               Steps
               <input
                 type="number"
@@ -1641,7 +1767,15 @@ export function App() {
                 max={1000}
                 value={steps}
                 onChange={(e) =>
-                  setSteps(Math.max(1, Math.min(1000, Math.round(parseFloat(e.target.value) || 1))))
+                  setSteps(
+                    Math.max(
+                      1,
+                      Math.min(
+                        1000,
+                        Math.round(parseFloat(e.target.value) || 1),
+                      ),
+                    ),
+                  )
                 }
               />
             </label>
@@ -1654,7 +1788,10 @@ export function App() {
             </button>
           </div>
           <div className="export">
-            <button onClick={() => onDownload(exportFmt)} disabled={status.triangleCount === 0}>
+            <button
+              onClick={() => onDownload(exportFmt)}
+              disabled={status.triangleCount === 0}
+            >
               Export
             </button>
             <select
@@ -1693,8 +1830,9 @@ export function App() {
         <div className="update-banner error recovery-banner" role="alert">
           <div className="update-banner-row">
             <span className="update-banner-msg">
-              The last render didn't finish — this model may be too heavy and could freeze the
-              app. Your script is loaded but not rendered. Simplify it (e.g. lower <code>$fn</code>
+              The last render didn't finish — this model may be too heavy and
+              could freeze the app. Your script is loaded but not rendered.
+              Simplify it (e.g. lower <code>$fn</code>
               ), or render anyway.
             </span>
             <div className="update-banner-actions">
@@ -1731,7 +1869,8 @@ export function App() {
         <div className="editor-col">
           <div className="tabs">
             {files.map((f, i) => {
-              const dirty = TAURI && !!f.path && f.content !== savedRef.current[f.name];
+              const dirty =
+                TAURI && !!f.path && f.content !== savedRef.current[f.name];
               // The engine reports errors/warnings against the main file; when
               // it's not the active tab, badge it so the squiggles aren't missed.
               const diagKind =
@@ -1743,41 +1882,49 @@ export function App() {
                       : ""
                   : "";
               return (
-              <div
-                key={i}
-                className={`tab ${i === active ? "active" : ""}`}
-                onClick={() => switchTo(i)}
-                onDoubleClick={() => renameFile(i)}
-                title={i === 0 ? "main (rendered)" : "double-click to rename"}
-              >
-                {diagKind && (
-                  <span
-                    className={`tab-diag ${diagKind}`}
-                    title={diagKind === "error" ? "Errors in this file" : "Warnings in this file"}
-                    aria-label={diagKind === "error" ? "Errors" : "Warnings"}
-                  >
-                    ●
-                  </span>
-                )}
-                {dirty && (
-                  <span className="tab-dirty" title="Unsaved changes" aria-label="Unsaved changes">
-                    ●
-                  </span>
-                )}
-                <span>{f.name}</span>
-                {i > 0 && (
-                  <button
-                    className="tab-close"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      deleteFile(i);
-                    }}
-                    title="Delete file"
-                  >
-                    ×
-                  </button>
-                )}
-              </div>
+                <div
+                  key={i}
+                  className={`tab ${i === active ? "active" : ""}`}
+                  onClick={() => switchTo(i)}
+                  onDoubleClick={() => renameFile(i)}
+                  title={i === 0 ? "main (rendered)" : "double-click to rename"}
+                >
+                  {diagKind && (
+                    <span
+                      className={`tab-diag ${diagKind}`}
+                      title={
+                        diagKind === "error"
+                          ? "Errors in this file"
+                          : "Warnings in this file"
+                      }
+                      aria-label={diagKind === "error" ? "Errors" : "Warnings"}
+                    >
+                      ●
+                    </span>
+                  )}
+                  {dirty && (
+                    <span
+                      className="tab-dirty"
+                      title="Unsaved changes"
+                      aria-label="Unsaved changes"
+                    >
+                      ●
+                    </span>
+                  )}
+                  <span>{f.name}</span>
+                  {i > 0 && (
+                    <button
+                      className="tab-close"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        deleteFile(i);
+                      }}
+                      title="Delete file"
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
               );
             })}
             <button className="tab-add" onClick={addFile} title="Add file">
@@ -1821,7 +1968,8 @@ export function App() {
         <span className="status-main">{status.message}</span>
         {status.ok && !rendering && (
           <span className="status-meta">
-            {dims && `${fmtDim(dims.x)} × ${fmtDim(dims.y)} × ${fmtDim(dims.z)} mm · `}
+            {dims &&
+              `${fmtDim(dims.x)} × ${fmtDim(dims.y)} × ${fmtDim(dims.z)} mm · `}
             {status.preview ? (
               <span title="Fast preview is on: unions are skipped, so volume is approximate. Turn off Fast (or export) for the exact value.">
                 vol ≈ {status.volume.toFixed(2)} (preview)

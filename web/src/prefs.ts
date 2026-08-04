@@ -20,7 +20,11 @@ export interface Prefs {
   engine: EngineKind;
 }
 
-const DEFAULTS: Prefs = { linkHighlight: true, fastPreview: false, engine: "quito" };
+const DEFAULTS: Prefs = {
+  linkHighlight: true,
+  fastPreview: false,
+  engine: "quito",
+};
 
 export function loadPrefs(): Prefs {
   try {
@@ -29,8 +33,13 @@ export function loadPrefs(): Prefs {
     const p = JSON.parse(raw) as Partial<Prefs>;
     return {
       linkHighlight:
-        typeof p.linkHighlight === "boolean" ? p.linkHighlight : DEFAULTS.linkHighlight,
-      fastPreview: typeof p.fastPreview === "boolean" ? p.fastPreview : DEFAULTS.fastPreview,
+        typeof p.linkHighlight === "boolean"
+          ? p.linkHighlight
+          : DEFAULTS.linkHighlight,
+      fastPreview:
+        typeof p.fastPreview === "boolean"
+          ? p.fastPreview
+          : DEFAULTS.fastPreview,
       engine: p.engine === "openscad" ? "openscad" : DEFAULTS.engine,
     };
   } catch {
