@@ -17,3 +17,9 @@ packages/npm/*.tgz
 
 # TypeScript incremental build info
 *.tsbuildinfo
+
+# Playwright (web e2e) — keep committed baselines, drop run artifacts
+web/test-results/
+web/playwright-report/
+web/blob-report/
+web/.playwright/
