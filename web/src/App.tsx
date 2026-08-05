@@ -408,6 +408,9 @@ export function App() {
   // render never finished. Shows a banner and waits for the user to press Render.
   const [recovering, setRecovering] = useState(wasStuck);
   const [consoleOpen, setConsoleOpen] = useState(false);
+  const [consoleFilter, setConsoleFilter] = useState<
+    "all" | "error" | "warn" | "echo"
+  >("all");
   // Monotonic render counter, surfaced as data-render-rev on the status bar so a
   // completed render is observable even though the meta is always visible.
   const [renderRev, setRenderRev] = useState(0);
@@ -2212,30 +2215,62 @@ export function App() {
           title="Drag to resize the console"
         />
       )}
-      {consoleOpen && (
-        <div className="console" style={{ height: effConsoleH }}>
-          {consoleLines.length === 0 ? (
-            <div className="console-line muted">No output.</div>
-          ) : (
-            consoleLines.map((l, i) =>
-              l.span ? (
-                <button
-                  className={`console-line ${l.kind} clickable`}
-                  key={i}
-                  onClick={() => jumpToSpan(l.span!)}
-                  title="Jump to source"
-                >
-                  {l.text}
-                </button>
-              ) : (
-                <div className={`console-line ${l.kind}`} key={i}>
-                  {l.text}
-                </div>
-              ),
-            )
-          )}
-        </div>
-      )}
+      {consoleOpen &&
+        (() => {
+          const counts = {
+            error: consoleLines.filter((l) => l.kind === "error").length,
+            warn: consoleLines.filter((l) => l.kind === "warn").length,
+            echo: consoleLines.filter((l) => l.kind === "echo").length,
+          };
+          const shown = consoleLines.filter(
+            (l) => consoleFilter === "all" || l.kind === consoleFilter,
+          );
+          const chip = (
+            key: "all" | "error" | "warn" | "echo",
+            label: string,
+          ) => (
+            <button
+              className={`console-chip ${key} ${
+                consoleFilter === key ? "active" : ""
+              }`}
+              onClick={() => setConsoleFilter(key)}
+            >
+              {label}
+            </button>
+          );
+          return (
+            <div className="console" style={{ height: effConsoleH }}>
+              <div className="console-filters">
+                {chip("all", "All")}
+                {chip("error", `Errors ${counts.error}`)}
+                {chip("warn", `Warnings ${counts.warn}`)}
+                {chip("echo", `Echo ${counts.echo}`)}
+              </div>
+              <div className="console-body">
+                {shown.length === 0 ? (
+                  <div className="console-line muted">No output.</div>
+                ) : (
+                  shown.map((l, i) =>
+                    l.span ? (
+                      <button
+                        className={`console-line ${l.kind} clickable`}
+                        key={i}
+                        onClick={() => jumpToSpan(l.span!)}
+                        title="Jump to source"
+                      >
+                        {l.text}
+                      </button>
+                    ) : (
+                      <div className={`console-line ${l.kind}`} key={i}>
+                        {l.text}
+                      </div>
+                    ),
+                  )
+                )}
+              </div>
+            </div>
+          );
+        })()}
 
       <footer
         className={`statusbar ${status.ok ? "ok" : "err"}`}
