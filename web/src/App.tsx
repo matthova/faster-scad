@@ -696,6 +696,10 @@ export function App() {
       state: EditorState.create({
         doc: filesRef.current[activeRef.current].content,
         extensions: [
+          // The CodeMirror textbox needs an accessible name (WCAG 4.1.2).
+          EditorView.contentAttributes.of({
+            "aria-label": "OpenSCAD source editor",
+          }),
           // ⌘↵ renders. Highest precedence so it beats basicSetup's
           // defaultKeymap, where Mod-Enter is insertBlankLine.
           Prec.highest(
@@ -1982,6 +1986,7 @@ export function App() {
       }}
     >
       <header className="topbar">
+        <h1 className="sr-only">Quito playground</h1>
         <div className="brand">
           Quito <span className="tag">playground</span>
         </div>
@@ -2095,6 +2100,7 @@ export function App() {
           </Popover>
           <button
             className={engineKind === "openscad" ? "active" : undefined}
+            aria-pressed={engineKind === "openscad"}
             onClick={toggleEngine}
             title={
               engineKind === "openscad"
@@ -2110,6 +2116,7 @@ export function App() {
           </button>
           <button
             className={fastPreview ? "active" : undefined}
+            aria-pressed={fastPreview}
             onClick={toggleFastPreview}
             title={
               engineKind === "openscad"
@@ -2419,7 +2426,7 @@ export function App() {
         />
       )}
 
-      <div
+      <main
         className="workspace"
         style={{
           gridTemplateColumns: `${effEditorW}px 6px 1fr ${
@@ -2549,7 +2556,7 @@ export function App() {
           modelOpen={modelOpen}
           onToggleModel={toggleModelSection}
         />
-      </div>
+      </main>
 
       {consoleOpen && (
         <ResizeHandle
@@ -2644,7 +2651,9 @@ export function App() {
             </button>
           )}
         </span>
-        <span className="status-main">{status.message}</span>
+        <span className="status-main" aria-live="polite">
+          {status.message}
+        </span>
         {/* Hold the last-good numbers across renders (don't gate on !rendering)
             so they don't blink ~15×/s during animation playback. */}
         {status.ok && (

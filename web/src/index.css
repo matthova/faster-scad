@@ -98,6 +98,19 @@
   box-sizing: border-box;
 }
 
+/* Visually hidden but available to screen readers (labels, the page heading). */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* Keyboard focus is always visible (WCAG 2.4.7). :focus-visible keeps the ring
    off mouse/touch clicks. --focus clears 3:1 on --panel in both themes. Outlines
    don't affect layout, so this is safe to apply globally. */

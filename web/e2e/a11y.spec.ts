@@ -9,11 +9,8 @@ import { gotoApp, waitForRender, setEditor } from "./helpers";
 // list as each is fixed, so the gate tightens monotonically and can never
 // silently regress a rule that's already clean (e.g. color-contrast).
 const KNOWN_GAPS = [
-  "aria-input-field-name", // §8.2 — editor textbox has no aria-label
   "label-title-only", // §8.2 — section/scrub ranges labelled by title only
-  "landmark-one-main", // §8.2 — add <main>
-  "page-has-heading-one", // §8.2 — add an sr-only <h1>
-  "region", // §8.2 — wrap content in landmarks
+  "region", // §8.2 — console/banners not yet wrapped in a landmark
   "scrollable-region-focusable", // §8.2 — editor/console scroll regions
 ];
 
