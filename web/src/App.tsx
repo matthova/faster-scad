@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { EditorView, keymap } from "@codemirror/view";
-import { EditorState, Compartment } from "@codemirror/state";
+import { EditorState, Compartment, Prec } from "@codemirror/state";
 import { syntaxHighlighting } from "@codemirror/language";
 import { setDiagnostics, type Diagnostic } from "@codemirror/lint";
 import { basicSetup } from "codemirror";
@@ -40,6 +40,7 @@ import {
 import { Dock } from "./Dock";
 import { ResizeHandle } from "./ResizeHandle";
 import { Popover, PopoverToggle } from "./Popover";
+import { CommandPalette, type Command } from "./CommandPalette";
 import {
   parseSchema,
   toLiteral,
@@ -411,6 +412,7 @@ export function App() {
   const [consoleFilter, setConsoleFilter] = useState<
     "all" | "error" | "warn" | "echo"
   >("all");
+  const [paletteOpen, setPaletteOpen] = useState(false);
   // Monotonic render counter, surfaced as data-render-rev on the status bar so a
   // completed render is observable even though the meta is always visible.
   const [renderRev, setRenderRev] = useState(0);
@@ -653,6 +655,20 @@ export function App() {
       state: EditorState.create({
         doc: filesRef.current[activeRef.current].content,
         extensions: [
+          // ⌘↵ renders. Highest precedence so it beats basicSetup's
+          // defaultKeymap, where Mod-Enter is insertBlankLine.
+          Prec.highest(
+            keymap.of([
+              {
+                key: "Mod-Enter",
+                preventDefault: true,
+                run: () => {
+                  renderNowRef.current();
+                  return true;
+                },
+              },
+            ]),
+          ),
           basicSetup,
           keymap.of([
             // ⌘S / ⌘⇧S save the active tab to disk (desktop). preventDefault
@@ -794,8 +810,36 @@ export function App() {
       void checkUpdatesRef.current(false);
     }
 
-    // Escape deselects the highlighted item (like clicking empty preview space).
+    // App-level keyboard shortcuts (web actions). ⌘↵ inside the editor is caught
+    // by the high-precedence CM keymap above, so skip it here when the editor is
+    // focused to avoid rendering twice.
     const onKeyDown = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey;
+      const key = e.key.toLowerCase();
+      if (mod && key === "k") {
+        e.preventDefault();
+        setPaletteOpen((o) => !o);
+        return;
+      }
+      if (mod && key === "j") {
+        e.preventDefault();
+        setConsoleOpen((o) => !o);
+        return;
+      }
+      if (mod && e.shiftKey && key === "f") {
+        e.preventDefault();
+        viewerRef.current?.fit();
+        return;
+      }
+      if (mod && key === "enter") {
+        const inEditor = (e.target as HTMLElement)?.closest?.(".cm-editor");
+        if (!inEditor) {
+          e.preventDefault();
+          renderNowRef.current();
+        }
+        return;
+      }
+      // Escape deselects the highlighted item (like clicking empty preview).
       if (e.key === "Escape" && linkHighlightRef.current) {
         highlightDismissedRef.current = true;
         viewerRef.current?.highlightSpan(null);
@@ -1784,6 +1828,82 @@ export function App() {
   menuExportRef.current = () => void onDownload(exportFmt);
   highlightFromCursorRef.current = highlightFromCursor;
 
+  // Command registry (⌘K). Web actions only — the desktop native menu is a
+  // separate Rust-driven surface and isn't unified here.
+  const commands: Command[] = [
+    {
+      id: "render",
+      title: "Render",
+      shortcut: "⌘↵",
+      run: () => renderNowRef.current(),
+    },
+    {
+      id: "stop",
+      title: "Stop render",
+      when: rendering,
+      run: () => engineRef.current?.cancel(),
+    },
+    {
+      id: "fit",
+      title: "Zoom to fit",
+      shortcut: "⌘⇧F",
+      run: () => viewerRef.current?.fit(),
+    },
+    {
+      id: "reset-view",
+      title: "Reset view",
+      run: () => viewerRef.current?.resetView(),
+    },
+    {
+      id: "console",
+      title: "Toggle console",
+      shortcut: "⌘J",
+      run: () => setConsoleOpen((o) => !o),
+    },
+    { id: "dock", title: "Toggle dock", run: toggleDock },
+    {
+      id: "grid",
+      title: "Toggle grid & axes",
+      run: () => toggleGrid(!showGrid),
+    },
+    {
+      id: "edges",
+      title: "Toggle edge overlay",
+      run: () => toggleEdges(!showEdges),
+    },
+    { id: "fast", title: "Toggle fast preview", run: toggleFastPreview },
+    {
+      id: "engine",
+      title: `Switch engine (${engineKind === "openscad" ? "→ Quito" : "→ OpenSCAD"})`,
+      run: toggleEngine,
+    },
+    {
+      id: "q-draft",
+      title: "Quality: Draft",
+      run: () => setQualityPref({ quality: "draft" }),
+    },
+    {
+      id: "q-normal",
+      title: "Quality: Normal",
+      run: () => setQualityPref({ quality: "normal" }),
+    },
+    {
+      id: "q-fine",
+      title: "Quality: Fine",
+      run: () => setQualityPref({ quality: "fine" }),
+    },
+    { id: "png", title: "Save PNG", run: () => void onSavePng() },
+    {
+      id: "export",
+      title: `Export (${exportFmt.toUpperCase()})`,
+      run: () => void onDownload(exportFmt),
+    },
+    { id: "new", title: "New project", run: newProject },
+    ...(TAURI
+      ? []
+      : [{ id: "share", title: "Copy share link", run: () => void onShare() }]),
+  ];
+
   return (
     <div className="app">
       <header className="topbar">
@@ -2019,6 +2139,14 @@ export function App() {
               ))}
             </select>
           </div>
+          <button
+            className="cmdk"
+            onClick={() => setPaletteOpen(true)}
+            title="Command palette (⌘K)"
+            aria-label="Open command palette"
+          >
+            ⌘K
+          </button>
           <button
             className="github-link"
             onClick={() => openExternal(GITHUB_URL)}
@@ -2350,6 +2478,13 @@ export function App() {
         </button>
         <span className="status-version">{version && `engine ${version}`}</span>
       </footer>
+
+      {paletteOpen && (
+        <CommandPalette
+          commands={commands}
+          onClose={() => setPaletteOpen(false)}
+        />
+      )}
     </div>
   );
 }

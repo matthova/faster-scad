@@ -172,6 +172,72 @@ body {
   border-color: var(--accent);
 }
 
+/* ⌘K trigger button. */
+.cmdk {
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
+}
+
+/* Command palette. */
+.palette-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 12vh;
+}
+.palette {
+  width: min(560px, 90vw);
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+.palette-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--panel);
+  color: var(--text);
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  padding: var(--space-5) var(--space-6);
+  font-size: var(--text-lg);
+  outline: none;
+}
+.palette-list {
+  list-style: none;
+  margin: 0;
+  padding: var(--space-2);
+  max-height: 50vh;
+  overflow-y: auto;
+}
+.palette-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-5);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: var(--text-md);
+}
+.palette-item.active {
+  background: var(--accent);
+  color: var(--bg);
+}
+.palette-shortcut {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  opacity: 0.8;
+}
+.palette-empty {
+  padding: var(--space-5) var(--space-6);
+  color: var(--muted);
+}
+
 /* Toolbar popover (Display ▾). */
 .popover {
   position: relative;
