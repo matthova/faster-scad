@@ -1,6 +1,6 @@
 {
   "name": "quito-release-root",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "description": "Private root that drives changesets-based versioning for the whole repo. Never published; carries the canonical version that scripts/sync-versions.mjs propagates to Cargo, Tauri, and the npm package.",
   "scripts": {

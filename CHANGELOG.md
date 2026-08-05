@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.7.0
+
+### Minor Changes
+
+- [#68](https://github.com/matthova/faster-scad/pull/68) [`46a3e3c`](https://github.com/matthova/faster-scad/commit/46a3e3cfcf39826b1b75c58f8e7cf09c723a7fe3) Thanks [@matthova](https://github.com/matthova)! - Web UI capabilities: a **section (clipping) plane** (Display ▾ → Section, with X/Y/Z axis and a position slider) cuts the model so you can see inside; **drag-and-drop import** loads local .scad/data files (a dropped .scad renders immediately; binary STL/3MF/PNG surface a message rather than failing silently); a **help / shortcut sheet** (the ? button) surfaces the keyboard shortcuts and previously-undiscoverable features (nav cube, $vp scripting, BOSL2 auto-fetch, modifier characters); and autosave now **warns when browser storage is full** instead of silently dropping your work.
+
+- [#68](https://github.com/matthova/faster-scad/pull/68) [`46a3e3c`](https://github.com/matthova/faster-scad/commit/46a3e3cfcf39826b1b75c58f8e7cf09c723a7fe3) Thanks [@matthova](https://github.com/matthova)! - Web UI: add ISO dimension callouts (the "signature" mode). Toggle **Dimensions** from Display ▾ to annotate the model's bounding box with real world-space drafting callouts — extension lines, arrowheads, and the width/depth/height in millimetres — and the grid's numeric tick labels step aside so the two don't collide. Because the callouts are world-space geometry, they travel into PNG captures. Off by default.
+
+- [#68](https://github.com/matthova/faster-scad/pull/68) [`46a3e3c`](https://github.com/matthova/faster-scad/commit/46a3e3cfcf39826b1b75c58f8e7cf09c723a7fe3) Thanks [@matthova](https://github.com/matthova)! - Web UI: add a render-quality control ($fn/$fa/$fs: Draft/Normal/Fine/Custom), a render-integrity badge in the status bar (EXACT / FAST PREVIEW / DEGRADED), and click-to-source on diagnostics that resolve to a span. The status bar now holds its last-good numbers so they no longer blink during animation playback, and the desktop status bar reports the real engine version instead of "native".
+
+- [#68](https://github.com/matthova/faster-scad/pull/68) [`46a3e3c`](https://github.com/matthova/faster-scad/commit/46a3e3cfcf39826b1b75c58f8e7cf09c723a7fe3) Thanks [@matthova](https://github.com/matthova)! - Web UI restructure: give every control one obvious home. Zoom-to-fit replaces the I/F/T/R + Reset view toolbar buttons (the nav cube already does presets). A Display ▾ popover holds projection, link, and new grid/edge toggles. The right column becomes a dock with collapsible Parameters and Model sections (the Model section surfaces vertices, area, per-color parts, integrity, and libraries) that folds to a spine when a script has no params. Editor / dock / console are resizable with persisted sizes, the console gains severity filter chips, and a ⌘K command palette plus ⌘↵ / ⌘J / ⌘⇧F shortcuts land.
+
+### Patch Changes
+
+- [#68](https://github.com/matthova/faster-scad/pull/68) [`46a3e3c`](https://github.com/matthova/faster-scad/commit/46a3e3cfcf39826b1b75c58f8e7cf09c723a7fe3) Thanks [@matthova](https://github.com/matthova)! - Web UI: align the editor's chrome (background, gutters, active line, brackets, autocomplete) to the app's design tokens so the editor no longer reads as a separate VSCode pane — the seam between editor, viewport, and dock is gone. Syntax colors are unchanged. Light mode gets a designed three-elevation palette (crisp white content, cool-grey chrome) instead of literal white.
+
 ## 0.6.0
 
 ### Minor Changes
