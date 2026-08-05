@@ -64,12 +64,15 @@
 
 :root[data-theme="light"] {
   color-scheme: light;
+  /* Designed, not inherited: a crisp white content surface (bg) reads best for
+     code, a slightly cool grey chrome (panel) sits behind it, and controls /
+     popovers rise back to white (raised). */
   --bg: #ffffff;
-  --panel: #f3f3f3;
+  --panel: #eef0f3;
   --raised: #ffffff;
-  --border: #d4d4d4;
-  --text: #1e1e1e;
-  --muted: #6b6b6b;
+  --border: #d5d9e0;
+  --text: #1b1e23;
+  --muted: #667085;
   --accent: #d97706;
   --err: #d32f2f;
   --warn: #b7791f;
