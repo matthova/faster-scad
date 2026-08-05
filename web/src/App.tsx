@@ -480,10 +480,17 @@ export function App() {
   // Orthographic camera — persisted (usePref), unlike its old bare useState.
   const [ortho, , setOrthoPref] = usePref("ortho", loadPrefs().ortho);
   const [quality, setQuality] = useState<Quality>(qualityRef.current.quality);
-  // Custom-quality $fn (the crash banner tells users to lower it). $fa/$fs get a
-  // fuller editor with the Quality popover in a later phase.
+  // Custom-quality tolerances. $fn forces a fixed segment count; $fa (max angle,
+  // °) and $fs (max segment size, mm) are the tolerance knobs that match
+  // OpenSCAD's 12°/2mm defaults when $fn is left blank.
   const [customFn, setCustomFn] = useState<number | null>(
     qualityRef.current.customFn,
+  );
+  const [customFa, setCustomFa] = useState<number | null>(
+    qualityRef.current.customFa,
+  );
+  const [customFs, setCustomFs] = useState<number | null>(
+    qualityRef.current.customFs,
   );
   // App appearance. `theme` is the user's choice (auto/light/dark, persisted);
   // `mode` is the effective light/dark it resolves to — "auto" tracks the OS.
@@ -1159,6 +1166,8 @@ export function App() {
     qualityRef.current = { ...qualityRef.current, ...next };
     if (next.quality !== undefined) setQuality(next.quality);
     if (next.customFn !== undefined) setCustomFn(next.customFn);
+    if (next.customFa !== undefined) setCustomFa(next.customFa);
+    if (next.customFs !== undefined) setCustomFs(next.customFs);
     savePrefs(next);
     renderNowRef.current?.();
   }
@@ -2129,26 +2138,70 @@ export function App() {
             <option value="custom">Custom</option>
           </select>
           {quality === "custom" && (
-            <label
-              className="quality-fn"
-              title="Custom $fn (blank = leave to $fa/$fs)"
-            >
-              $fn
-              <input
-                type="number"
-                min={0}
-                step={1}
-                value={customFn ?? ""}
-                onChange={(e) =>
-                  setQualityPref({
-                    customFn:
-                      e.target.value === ""
-                        ? null
-                        : Math.max(0, Math.round(Number(e.target.value))),
-                  })
-                }
-              />
-            </label>
+            <>
+              <label
+                className="quality-fn"
+                title="Custom $fn — fixed segment count (blank = leave to $fa/$fs)"
+              >
+                $fn
+                <input
+                  type="number"
+                  min={0}
+                  step={1}
+                  value={customFn ?? ""}
+                  onChange={(e) =>
+                    setQualityPref({
+                      customFn:
+                        e.target.value === ""
+                          ? null
+                          : Math.max(0, Math.round(Number(e.target.value))),
+                    })
+                  }
+                />
+              </label>
+              <label
+                className="quality-fn"
+                title="Custom $fa — max fragment angle in degrees (OpenSCAD default 12)"
+              >
+                $fa
+                <input
+                  type="number"
+                  min={0.01}
+                  step={1}
+                  placeholder="12"
+                  value={customFa ?? ""}
+                  onChange={(e) =>
+                    setQualityPref({
+                      customFa:
+                        e.target.value === ""
+                          ? null
+                          : Math.max(0.01, Number(e.target.value)),
+                    })
+                  }
+                />
+              </label>
+              <label
+                className="quality-fn"
+                title="Custom $fs — max fragment size in mm (OpenSCAD default 2)"
+              >
+                $fs
+                <input
+                  type="number"
+                  min={0.01}
+                  step={0.1}
+                  placeholder="2"
+                  value={customFs ?? ""}
+                  onChange={(e) =>
+                    setQualityPref({
+                      customFs:
+                        e.target.value === ""
+                          ? null
+                          : Math.max(0.01, Number(e.target.value)),
+                    })
+                  }
+                />
+              </label>
+            </>
           )}
           <button
             onClick={onSavePng}
