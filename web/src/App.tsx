@@ -126,6 +126,12 @@ function currentMode(): ThemeMode {
     : "light";
 }
 
+/** The effective light/dark to paint first, honoring a forced theme pref. */
+function initialMode(): ThemeMode {
+  const t = loadPrefs().theme;
+  return t === "auto" ? currentMode() : t;
+}
+
 /** Editor theme + syntax-highlighting extensions for a given appearance. Placed
  *  after `basicSetup` so this style beats its `{fallback:true}` default. */
 function themeExts(mode: ThemeMode) {
@@ -479,8 +485,11 @@ export function App() {
   const [customFn, setCustomFn] = useState<number | null>(
     qualityRef.current.customFn,
   );
-  // OS light/dark appearance. Auto-follows `prefers-color-scheme`; no toggle.
-  const [mode, setMode] = useState<ThemeMode>(currentMode);
+  // App appearance. `theme` is the user's choice (auto/light/dark, persisted);
+  // `mode` is the effective light/dark it resolves to — "auto" tracks the OS.
+  const [theme, , setThemePref] = usePref("theme", loadPrefs().theme);
+  const [osMode, setOsMode] = useState<ThemeMode>(currentMode);
+  const mode: ThemeMode = theme === "auto" ? osMode : theme;
   const [time, setTime] = useState(sharedAnim?.t ?? 0);
   const [playing, setPlaying] = useState(sharedAnim?.playing ?? false);
   const [fps, setFps] = useState(sharedAnim?.fps ?? 15);
@@ -720,7 +729,7 @@ export function App() {
           openscad(),
           // After basicSetup so our HighlightStyle beats the fallback default.
           // Reconfigured live by the [mode] effect below.
-          themeComp.current.of(themeExts(currentMode())),
+          themeComp.current.of(themeExts(initialMode())),
           EditorView.updateListener.of((u) => {
             if (u.docChanged && !suppressRef.current) {
               const idx = activeRef.current;
@@ -896,11 +905,11 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Follow the OS appearance: subscribe once to prefers-color-scheme and mirror
-  // changes into `mode`. The [mode] effect below propagates them everywhere.
+  // Track the OS appearance so "auto" theme follows it. When the user forces
+  // light/dark, `mode` ignores this (but we keep tracking, cheaply).
   useEffect(() => {
     const mql = window.matchMedia("(prefers-color-scheme: dark)");
-    const onChange = () => setMode(currentMode());
+    const onChange = () => setOsMode(currentMode());
     mql.addEventListener("change", onChange);
     return () => mql.removeEventListener("change", onChange);
   }, []);
@@ -1925,6 +1934,9 @@ export function App() {
     "q-fine": () => setQualityPref({ quality: "fine" }),
     png: () => void onSavePng(),
     export: () => void onDownload(exportFmt),
+    "theme-auto": () => setThemePref("auto"),
+    "theme-light": () => setThemePref("light"),
+    "theme-dark": () => setThemePref("dark"),
     help: () => setHelpOpen(true),
     new: newProject,
     ...(TAURI ? {} : { share: () => void onShare() }),

@@ -49,6 +49,8 @@ export interface Prefs {
   sectionT: number;
   /** Orthographic (vs perspective) camera. Persisted like its Display siblings. */
   ortho: boolean;
+  /** App appearance: "auto" follows the OS (prefers-color-scheme); else forced. */
+  theme: "auto" | "light" | "dark";
   /** Console drawer: open/closed and the active severity filter. */
   consoleOpen: boolean;
   consoleFilter: "all" | "error" | "warn" | "echo";
@@ -75,9 +77,12 @@ const DEFAULTS: Prefs = {
   sectionAxis: "z",
   sectionT: 0.5,
   ortho: false,
+  theme: "auto",
   consoleOpen: false,
   consoleFilter: "all",
 };
+
+const THEMES: Prefs["theme"][] = ["auto", "light", "dark"];
 
 const AXES: Array<"x" | "y" | "z"> = ["x", "y", "z"];
 
@@ -161,6 +166,9 @@ export function loadPrefs(): Prefs {
         : DEFAULTS.sectionAxis,
       sectionT: num(p.sectionT) ?? DEFAULTS.sectionT,
       ortho: typeof p.ortho === "boolean" ? p.ortho : DEFAULTS.ortho,
+      theme: THEMES.includes(p.theme as Prefs["theme"])
+        ? (p.theme as Prefs["theme"])
+        : DEFAULTS.theme,
       consoleOpen:
         typeof p.consoleOpen === "boolean"
           ? p.consoleOpen
