@@ -1,10 +1,59 @@
+/* ── Design tokens ────────────────────────────────────────────────────────
+   Scales that don't depend on appearance live here once; palette (color)
+   tokens are attribute-scoped below. These were extracted from the values the
+   UI already used, so adopting them is visually neutral — the point is one
+   place to reach for spacing/radius/type/z-index/motion, not a redesign. */
+:root {
+  /* Spacing (px). The UI is built on a 2px rhythm; these are the steps in use. */
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 6px;
+  --space-4: 8px;
+  --space-5: 10px;
+  --space-6: 12px;
+  --space-7: 14px;
+  --space-8: 16px;
+  --space-10: 20px;
+
+  /* Corner radius. */
+  --radius-xs: 3px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+
+  /* Type scale (px). */
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-md: 13px;
+  --text-lg: 15px;
+
+  /* Stacking order. Only the nav-cube overlay bites today; the rest are the
+     homes reserved for popovers / banners / modals added in later phases. */
+  --z-base: 0;
+  --z-overlay: 5;
+  --z-popover: 50;
+  --z-banner: 100;
+  --z-modal: 1000;
+
+  /* Motion. */
+  --motion-fast: 120ms;
+  --motion-med: 200ms;
+  --ease-standard: ease;
+
+  /* Type families — one token each instead of ten scattered literals. */
+  --font-sans: ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, Menlo, monospace;
+}
+
 /* Palettes are attribute-scoped; :root stays dark so first paint (before JS
-   sets data-theme) matches today's dark default. App.tsx follows the OS. */
+   sets data-theme) matches today's dark default. App.tsx follows the OS.
+   Surfaces stack bg < panel < raised (raised is new — for controls that sit
+   above a panel, e.g. banner buttons). */
 :root,
 :root[data-theme="dark"] {
   color-scheme: dark;
   --bg: #14161b;
   --panel: #1a1d23;
+  --raised: #23272f;
   --border: #2a2e37;
   --text: #e6e8ec;
   --muted: #9aa0aa;
@@ -17,6 +66,7 @@
   color-scheme: light;
   --bg: #ffffff;
   --panel: #f3f3f3;
+  --raised: #ffffff;
   --border: #d4d4d4;
   --text: #1e1e1e;
   --muted: #6b6b6b;
@@ -39,11 +89,7 @@ body,
 body {
   background: var(--bg);
   color: var(--text);
-  font-family:
-    ui-sans-serif,
-    system-ui,
-    -apple-system,
-    sans-serif;
+  font-family: var(--font-sans);
 }
 
 .app {
@@ -56,7 +102,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 14px;
+  padding: var(--space-4) var(--space-7);
   background: var(--panel);
   border-bottom: 1px solid var(--border);
 }
@@ -69,19 +115,19 @@ body {
 .brand .tag {
   color: var(--muted);
   font-weight: 400;
-  font-size: 12px;
-  margin-left: 4px;
+  font-size: var(--text-sm);
+  margin-left: var(--space-2);
 }
 
 .actions button {
   background: var(--panel);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 6px 12px;
-  margin-left: 8px;
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-6);
+  margin-left: var(--space-4);
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--text-md);
 }
 
 .actions button:hover:not(:disabled) {
@@ -91,23 +137,23 @@ body {
 /* Compact camera-preset button group. */
 .view-presets {
   display: inline-flex;
-  margin-left: 8px;
+  margin-left: var(--space-4);
 }
 .view-presets button {
   margin-left: 0;
-  padding: 6px 9px;
+  padding: var(--space-3) 9px;
   border-radius: 0;
   border-left-width: 0;
-  font-family: ui-monospace, Menlo, monospace;
+  font-family: var(--font-mono);
 }
 .view-presets button:first-child {
-  border-top-left-radius: 6px;
-  border-bottom-left-radius: 6px;
+  border-top-left-radius: var(--radius-md);
+  border-bottom-left-radius: var(--radius-md);
   border-left-width: 1px;
 }
 .view-presets button:last-child {
-  border-top-right-radius: 6px;
-  border-bottom-right-radius: 6px;
+  border-top-right-radius: var(--radius-md);
+  border-bottom-right-radius: var(--radius-md);
 }
 
 .actions button:disabled {
@@ -120,7 +166,7 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 6px;
+  padding: var(--space-3);
   color: var(--muted);
 }
 .actions button.github-link:hover:not(:disabled) {
@@ -137,11 +183,11 @@ body {
   background: var(--panel);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 6px 8px;
-  margin-left: 8px;
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  margin-left: var(--space-4);
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--text-md);
 }
 
 .examples-select:hover {
@@ -174,10 +220,10 @@ body {
 .tab {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  font-size: 12px;
-  font-family: ui-monospace, Menlo, monospace;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-5);
+  font-size: var(--text-sm);
+  font-family: var(--font-mono);
   border-right: 1px solid var(--border);
   cursor: pointer;
   white-space: nowrap;
@@ -191,12 +237,12 @@ body {
   color: var(--accent, #f5a623);
   font-size: 9px;
   line-height: 1;
-  margin-right: -2px;
+  margin-right: calc(-1 * var(--space-1));
 }
 .tab-diag {
   font-size: 9px;
   line-height: 1;
-  margin-right: -2px;
+  margin-right: calc(-1 * var(--space-1));
 }
 .tab-diag.error {
   color: var(--err);
@@ -208,8 +254,8 @@ body {
   border: 0;
   background: transparent;
   color: inherit;
-  padding: 0 2px;
-  font-size: 13px;
+  padding: 0 var(--space-1);
+  font-size: var(--text-md);
   line-height: 1;
   cursor: pointer;
   opacity: 0.6;
@@ -221,8 +267,8 @@ body {
   border: 0;
   background: transparent;
   color: var(--muted, #999);
-  font-size: 15px;
-  padding: 0 10px;
+  font-size: var(--text-lg);
+  padding: 0 var(--space-5);
   cursor: pointer;
 }
 
@@ -261,9 +307,9 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 12px;
+  padding: var(--space-4) var(--space-6);
   border-bottom: 1px solid var(--border);
-  font-size: 12px;
+  font-size: var(--text-sm);
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -271,16 +317,16 @@ body {
 }
 
 .params-head button {
-  font-size: 11px;
-  padding: 2px 8px;
+  font-size: var(--text-xs);
+  padding: var(--space-1) var(--space-4);
 }
 
 .params-presets {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: var(--space-2);
   align-items: center;
-  padding: 6px 12px;
+  padding: var(--space-3) var(--space-6);
   border-bottom: 1px solid var(--border);
 }
 .params-presets select {
@@ -288,25 +334,25 @@ body {
   min-width: 80px;
 }
 .params-presets button {
-  font-size: 11px;
-  padding: 2px 6px;
+  font-size: var(--text-xs);
+  padding: var(--space-1) var(--space-3);
 }
 
 .params-body {
   overflow-y: auto;
-  padding: 8px 10px 16px;
+  padding: var(--space-4) var(--space-5) var(--space-8);
 }
 
 .param-group {
   border: 1px solid var(--border);
-  border-radius: 6px;
-  margin: 0 0 12px;
-  padding: 6px 10px 10px;
+  border-radius: var(--radius-md);
+  margin: 0 0 var(--space-6);
+  padding: var(--space-3) var(--space-5) var(--space-5);
 }
 
 .param-group legend {
-  padding: 0 6px;
-  font-size: 11px;
+  padding: 0 var(--space-3);
+  font-size: var(--text-xs);
   font-weight: 600;
   color: var(--muted, #999);
 }
@@ -315,9 +361,9 @@ body {
   display: grid;
   grid-template-columns: 1fr auto;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-4);
   padding: 5px 0;
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .param-label {
@@ -330,18 +376,18 @@ body {
 .param-row input[type="text"],
 .param-row select {
   width: 96px;
-  font-size: 12px;
-  padding: 2px 4px;
+  font-size: var(--text-sm);
+  padding: var(--space-1) var(--space-2);
   background: var(--bg, #1a1a1a);
   color: inherit;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .param-slider {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-3);
 }
 
 .param-slider input[type="range"] {
@@ -356,13 +402,13 @@ body {
   text-align: right;
   overflow: hidden;
   white-space: nowrap;
-  font-family: ui-monospace, Menlo, monospace;
-  font-size: 11px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
 }
 
 .param-vector {
   display: inline-flex;
-  gap: 4px;
+  gap: var(--space-2);
 }
 
 .param-vector input[type="number"] {
@@ -372,9 +418,9 @@ body {
 .anim {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  font-family: ui-monospace, Menlo, monospace;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+  font-family: var(--font-mono);
   color: var(--muted, #999);
 }
 .anim input[type="range"] {
@@ -385,7 +431,7 @@ body {
 }
 .anim-play {
   width: 26px;
-  padding: 2px 0;
+  padding: var(--space-1) 0;
   text-align: center;
 }
 .anim-field {
@@ -398,9 +444,9 @@ body {
   background: var(--panel);
   color: inherit;
   border: 1px solid var(--border);
-  border-radius: 4px;
-  font-size: 12px;
-  padding: 1px 2px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  padding: 1px var(--space-1);
 }
 
 .export {
@@ -417,7 +463,7 @@ body {
   background: var(--panel);
   color: inherit;
   border: 1px solid var(--border);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .console {
@@ -425,9 +471,9 @@ body {
   overflow-y: auto;
   background: var(--bg, #141414);
   border-top: 1px solid var(--border);
-  padding: 6px 12px;
-  font-family: ui-monospace, Menlo, monospace;
-  font-size: 12px;
+  padding: var(--space-3) var(--space-6);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
   line-height: 1.5;
 }
 
@@ -449,8 +495,8 @@ body {
 }
 
 .console-toggle {
-  font-size: 11px;
-  padding: 2px 8px;
+  font-size: var(--text-xs);
+  padding: var(--space-1) var(--space-4);
 }
 .console-toggle.alert {
   border-color: var(--warn);
@@ -460,12 +506,12 @@ body {
 .statusbar {
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 6px 14px;
+  gap: var(--space-8);
+  padding: var(--space-3) var(--space-7);
   background: var(--panel);
   border-top: 1px solid var(--border);
-  font-size: 12px;
-  font-family: ui-monospace, Menlo, monospace;
+  font-size: var(--text-sm);
+  font-family: var(--font-mono);
   white-space: nowrap;
   overflow: hidden;
 }
@@ -510,7 +556,7 @@ body {
   display: inline-block;
   width: 8px;
   height: 8px;
-  margin-right: 6px;
+  margin-right: var(--space-3);
   border-radius: 50%;
   background: var(--accent);
   animation: status-pulse 1s ease-in-out infinite;
@@ -527,8 +573,8 @@ body {
 }
 .status-stop,
 .status-render {
-  font-size: 11px;
-  padding: 2px 8px;
+  font-size: var(--text-xs);
+  padding: var(--space-1) var(--space-4);
 }
 .status-stop {
   border-color: var(--err);
@@ -537,7 +583,7 @@ body {
 
 /* Death-spiral recovery banner: reuses the update-banner chrome. */
 .recovery-banner code {
-  font-family: ui-monospace, Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 0.92em;
 }
 
@@ -546,8 +592,8 @@ body {
   background: var(--panel);
   border-bottom: 1px solid var(--border);
   border-left: 3px solid var(--accent);
-  padding: 8px 14px;
-  font-size: 13px;
+  padding: var(--space-4) var(--space-7);
+  font-size: var(--text-md);
 }
 .update-banner.error {
   border-left-color: var(--err);
@@ -555,7 +601,7 @@ body {
 .update-banner-row {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-6);
 }
 .update-banner-msg {
   flex: 1;
@@ -567,17 +613,17 @@ body {
 .update-banner-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-4);
   flex-shrink: 0;
 }
 .update-banner-actions button {
-  background: #23272f;
+  background: var(--raised);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 5px 11px;
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--text-md);
 }
 .update-banner-actions button:hover {
   border-color: var(--accent);
@@ -590,7 +636,7 @@ body {
   background: none;
   border: none;
   color: var(--muted);
-  padding: 5px 4px;
+  padding: 5px var(--space-2);
   text-decoration: underline;
 }
 .update-banner-actions .update-link:hover {
@@ -605,7 +651,7 @@ body {
 .update-progress {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-4);
   flex-shrink: 0;
 }
 .update-progress-bar {
@@ -614,21 +660,21 @@ body {
   appearance: none;
   -webkit-appearance: none;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
   background: var(--border);
 }
 .update-progress-bar::-webkit-progress-bar {
   background: var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 .update-progress-bar::-webkit-progress-value {
   background: var(--accent);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 .update-progress-bar::-moz-progress-bar {
   background: var(--accent);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 .update-progress-pct {
   color: var(--muted);
@@ -637,15 +683,15 @@ body {
 }
 
 .update-notes {
-  margin: 8px 0 0;
-  padding: 8px 10px;
+  margin: var(--space-4) 0 0;
+  padding: var(--space-4) var(--space-5);
   max-height: 160px;
   overflow: auto;
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--text-sm);
   line-height: 1.5;
 }
 .update-notes > :first-child {
@@ -655,36 +701,36 @@ body {
   margin-bottom: 0;
 }
 .update-notes p {
-  margin: 4px 0;
+  margin: var(--space-2) 0;
 }
 .update-notes ul,
 .update-notes ol {
-  margin: 4px 0;
-  padding-left: 20px;
+  margin: var(--space-2) 0;
+  padding-left: var(--space-10);
 }
 .update-notes li {
-  margin: 2px 0;
+  margin: var(--space-1) 0;
 }
 .update-notes h1,
 .update-notes h2,
 .update-notes h3 {
-  font-size: 12px;
+  font-size: var(--text-sm);
   font-weight: 600;
-  margin: 6px 0 2px;
+  margin: var(--space-3) 0 var(--space-1);
   color: var(--text);
 }
 .update-notes code {
-  font-family: ui-monospace, Menlo, monospace;
+  font-family: var(--font-mono);
   background: var(--panel);
-  border-radius: 3px;
+  border-radius: var(--radius-xs);
   padding: 0 3px;
 }
 .update-notes pre {
   background: var(--panel);
-  border-radius: 4px;
-  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-4);
   overflow: auto;
-  font-family: ui-monospace, Menlo, monospace;
+  font-family: var(--font-mono);
 }
 .update-notes a {
   color: var(--accent);

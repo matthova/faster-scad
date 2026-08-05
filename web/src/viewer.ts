@@ -1,6 +1,7 @@
 // A minimal three.js orbit viewer with a grid, axes, and flat-shaded mesh.
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { viewerConst, viewerTheme, hex, type ViewerTheme } from "./tokens";
 
 /** Model bounding-box size (mm) reported after each render. */
 export interface MeshInfo {
@@ -45,7 +46,7 @@ export interface ProvenanceGroup {
  *  the model (depthTest off) so the selected geometry reads clearly regardless of
  *  the model's own per-group colors. */
 const HIGHLIGHT_MATERIAL = new THREE.MeshBasicMaterial({
-  color: 0x4fc3f7,
+  color: viewerConst.selection,
   transparent: true,
   opacity: 0.225,
   depthTest: false,
@@ -79,6 +80,8 @@ export class Viewer {
    *  changes. */
   private gridGroup: THREE.Group | null = null;
   private themeDark = false;
+  /** Current viewer palette, updated on every setTheme. */
+  private vt: ViewerTheme = viewerTheme("dark");
   /** Cache key of the last-built grid, so per-frame `updateGrid` calls that
    *  wouldn't change anything early-return instead of rebuilding. */
   private lastGridKey = "";
@@ -249,9 +252,8 @@ export class Viewer {
    *  to call repeatedly on flips. */
   setTheme(mode: ThemeMode) {
     this.themeDark = mode === "dark";
-    this.scene.background = new THREE.Color(
-      this.themeDark ? 0x1a1d23 : 0xf3f3f3,
-    );
+    this.vt = viewerTheme(mode);
+    this.scene.background = new THREE.Color(this.vt.background);
     this.updateGrid(true);
     this.rebuildCubeFaces();
   }
@@ -338,7 +340,6 @@ export class Viewer {
   ) {
     this.disposeGrid();
     const g = new THREE.Group();
-    const dark = this.themeDark;
     const half = halfCells * spacing;
     const loX = ox - half,
       hiX = ox + half,
@@ -359,9 +360,9 @@ export class Viewer {
       new THREE.LineSegments(
         gridGeom,
         new THREE.LineBasicMaterial({
-          color: dark ? 0x3a3f4b : 0xcccccc,
+          color: this.vt.gridLine,
           transparent: true,
-          opacity: dark ? 0.6 : 0.9,
+          opacity: this.vt.gridLineOpacity,
         }),
       ),
     );
@@ -374,7 +375,7 @@ export class Viewer {
       return s === `-${zero}` ? zero : s;
     };
     const lh = spacing * 0.24; // label height in mm → ~constant on screen
-    const numCol = dark ? "#ced3dc" : "#3a3a3a";
+    const numCol = this.vt.gridLabel;
     const addLabel = (
       text: string,
       color: string,
@@ -389,9 +390,9 @@ export class Viewer {
     };
 
     // --- world axes + tick labels (only where the axis crosses the grid) ---
-    const X_COL = 0xd9584f,
-      Y_COL = 0x59a14f,
-      Z_COL = 0x4f83d9;
+    const X_COL = viewerConst.axisX,
+      Y_COL = viewerConst.axisY,
+      Z_COL = viewerConst.axisZ;
     const line = (a: number[], b: number[], color: number) => {
       const geo = new THREE.BufferGeometry();
       geo.setAttribute(
@@ -441,7 +442,7 @@ export class Viewer {
 
     if (xAxisOnGrid) {
       line([loX, 0, 0], [hiX, 0, 0], X_COL);
-      addLabel("X", "#d9584f", hiX + lh * 1.8, -lh * 1.4, 0, 1.5);
+      addLabel("X", hex(X_COL), hiX + lh * 1.8, -lh * 1.4, 0, 1.5);
       if (!suppress.x) {
         ticks("x", loX, hiX, X_COL);
         for (
@@ -456,7 +457,7 @@ export class Viewer {
     }
     if (yAxisOnGrid) {
       line([0, loY, 0], [0, hiY, 0], Y_COL);
-      addLabel("Y", "#59a14f", -lh * 1.4, hiY + lh * 1.8, 0, 1.5);
+      addLabel("Y", hex(Y_COL), -lh * 1.4, hiY + lh * 1.8, 0, 1.5);
       if (!suppress.y) {
         ticks("y", loY, hiY, Y_COL);
         for (
@@ -472,13 +473,13 @@ export class Viewer {
     if (originOnGrid) {
       // Vertical Z axis rising from the origin, with its own tick labels.
       line([0, 0, 0], [0, 0, half], Z_COL);
-      addLabel("Z", "#4f83d9", -lh * 1.4, -lh * 1.4, half + lh * 1.8, 1.5);
+      addLabel("Z", hex(Z_COL), -lh * 1.4, -lh * 1.4, half + lh * 1.8, 1.5);
       if (!suppress.z) {
         ticks("z", 0, half, Z_COL);
         for (let i = 2; i <= halfCells; i += 2) {
           addLabel(
             fmt(i * spacing),
-            dark ? "#9cc0ec" : "#3f73c9",
+            this.vt.axisTick,
             -lh * 1.6,
             -lh * 1.6,
             i * spacing,
@@ -567,7 +568,7 @@ export class Viewer {
     const edges = new THREE.LineSegments(
       new THREE.EdgesGeometry(geom, 20),
       new THREE.LineBasicMaterial({
-        color: 0x000000,
+        color: viewerConst.edge,
         opacity: 0.15,
         transparent: true,
       }),
@@ -596,7 +597,7 @@ export class Viewer {
     }
     const geom = this.buildGeom(positions, normals);
     const material = new THREE.MeshStandardMaterial({
-      color: 0xf5a623,
+      color: viewerConst.mesh,
       metalness: 0.1,
       roughness: 0.6,
       flatShading: true,
@@ -896,7 +897,7 @@ export class Viewer {
     const edges = new THREE.LineSegments(
       new THREE.EdgesGeometry(cube.geometry),
       new THREE.LineBasicMaterial({
-        color: 0x000000,
+        color: viewerConst.edge,
         transparent: true,
         opacity: 0.25,
       }),
@@ -907,7 +908,7 @@ export class Viewer {
     const highlight = new THREE.Mesh(
       new THREE.BoxGeometry(1, 1, 1),
       new THREE.MeshBasicMaterial({
-        color: 0x4fc3f7,
+        color: viewerConst.selection,
         transparent: true,
         opacity: 0.5,
         depthTest: false,
@@ -987,17 +988,16 @@ export class Viewer {
 
   /** A 128² canvas texture for one cube face: filled panel, border, centered label. */
   private makeCubeFaceTexture(label: string): THREE.CanvasTexture {
-    const dark = this.themeDark;
     const s = 128;
     const canvas = document.createElement("canvas");
     canvas.width = canvas.height = s;
     const ctx = canvas.getContext("2d")!;
-    ctx.fillStyle = dark ? "#2c313b" : "#eceef1";
+    ctx.fillStyle = this.vt.cubeFace;
     ctx.fillRect(0, 0, s, s);
-    ctx.strokeStyle = dark ? "#495060" : "#b6bcc6";
+    ctx.strokeStyle = this.vt.cubeStroke;
     ctx.lineWidth = 6;
     ctx.strokeRect(3, 3, s - 6, s - 6);
-    ctx.fillStyle = dark ? "#c6ccd6" : "#484d55";
+    ctx.fillStyle = this.vt.cubeText;
     const fs = label.length > 5 ? 20 : 24;
     ctx.font = `bold ${fs}px sans-serif`;
     ctx.textAlign = "center";
@@ -1269,7 +1269,7 @@ function materialForGroup(g: PreviewGroup): THREE.Material {
   if (g.mode === "highlight") {
     return new THREE.MeshStandardMaterial({
       ...base,
-      color: 0xff3b30,
+      color: viewerConst.modifierHighlight,
       transparent: true,
       opacity: 0.5,
     });
@@ -1277,7 +1277,7 @@ function materialForGroup(g: PreviewGroup): THREE.Material {
   if (g.mode === "background") {
     return new THREE.MeshStandardMaterial({
       ...base,
-      color: 0x888888,
+      color: viewerConst.modifierBackground,
       transparent: true,
       opacity: 0.3,
     });
