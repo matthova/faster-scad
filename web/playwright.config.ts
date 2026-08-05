@@ -13,7 +13,7 @@ export default defineConfig({
   reporter: process.env.CI ? "line" : "list",
   snapshotPathTemplate: "{testDir}/__screenshots__/{arg}{ext}",
   use: {
-    baseURL: "http://localhost:5173",
+    baseURL: "http://localhost:4173",
     viewport: { width: 1280, height: 800 },
     deviceScaleFactor: 1,
     ...devices["Desktop Chrome"],
@@ -27,9 +27,12 @@ export default defineConfig({
       animations: "disabled",
     },
   },
+  // Screenshot the built preview, not the dev server: the dev build is
+  // unminified and injects the HMR client, so it isn't what ships. Requires a
+  // prior `npm run build` (CI builds before the e2e step; locally, build first).
   webServer: {
-    command: "npm run dev -- --port 5173 --strictPort",
-    url: "http://localhost:5173",
+    command: "npm run preview -- --port 4173 --strictPort",
+    url: "http://localhost:4173",
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
   },

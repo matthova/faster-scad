@@ -85,7 +85,7 @@
   --muted: #5b6472;
   --accent: #d97706;
   --accent-strong: #a45a06;
-  --err: #d32f2f;
+  --err: #c62222;
   --warn: #8a5a00;
 }
 
@@ -370,8 +370,11 @@ body {
   font-size: var(--text-md);
 }
 .palette-item.active {
+  /* Amber is a light colour in both themes, so the selected row needs dark
+     text either way (white-on-amber is only 3.18:1; the old var(--bg) went
+     white in light mode). */
   background: var(--accent);
-  color: var(--bg);
+  color: #1b1e23;
 }
 .palette-shortcut {
   font-family: var(--font-mono);
@@ -1002,7 +1005,7 @@ body {
 }
 .console-chip.active {
   border-color: var(--accent);
-  color: var(--accent);
+  color: var(--accent-strong);
 }
 .console-chip.error.active {
   border-color: var(--err);
@@ -1050,8 +1053,16 @@ button.console-line.clickable:hover {
 }
 
 .console-toggle {
+  /* No explicit background means the UA button colour (a mid-grey in the dark
+     color-scheme) shows through, tanking the .alert warn-text contrast. Sit it
+     on the status bar's own surface instead. */
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
+  color: var(--muted);
   font-size: var(--text-xs);
   padding: var(--space-1) var(--space-4);
+  cursor: pointer;
 }
 .console-toggle.alert {
   border-color: var(--warn);

@@ -43,7 +43,8 @@ export const lightHighlight = HighlightStyle.define([
   { tag: t.number, color: "#098658" },
   {
     tag: [t.lineComment, t.blockComment],
-    color: "#008000",
+    // #008000 was 4.49:1 on the active-line bg — a hair under 4.5. Darkened.
+    color: "#007000",
     fontStyle: "italic",
   },
   { tag: [t.operator, t.definitionOperator], color: "#000000" },
