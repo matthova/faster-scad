@@ -1425,3 +1425,86 @@ button.console-line.clickable:hover {
   color: var(--accent);
   text-decoration: underline;
 }
+
+/* ── Responsive ──────────────────────────────────────────────────────────
+   The core loop (edit → render → read the numbers → tweak a param) must work at
+   every width. At ≥1024 the resizable columns stand; below, the layout collapses
+   to a single pane toggled by a Code⎪Model switch so nothing overflows. */
+.pane-switch {
+  display: none;
+}
+
+@media (max-width: 1023px) {
+  .pane-switch {
+    display: flex;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-4);
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+  }
+  .pane-switch button {
+    flex: 1;
+    min-height: 44px;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    font-size: var(--text-md);
+    cursor: pointer;
+  }
+  .pane-switch button.active {
+    border-color: var(--accent-strong);
+    color: var(--accent-strong);
+  }
+
+  /* Single pane: stack the workspace and show one side per the switch. */
+  .workspace {
+    display: flex !important;
+    flex-direction: column;
+  }
+  .workspace > .resize-handle {
+    display: none;
+  }
+  .workspace[data-pane="code"] > .viewer,
+  .workspace[data-pane="code"] > .dock {
+    display: none;
+  }
+  .workspace[data-pane="model"] > .editor-col {
+    display: none;
+  }
+  .editor-col,
+  .viewer {
+    flex: 1;
+    min-height: 0;
+    width: auto;
+  }
+  .dock {
+    flex: none;
+    max-height: 45vh;
+  }
+
+  /* Touch targets ≥44px; let the control row scroll rather than overflow. */
+  .actions {
+    overflow-x: auto;
+    min-width: 0;
+  }
+  .actions button,
+  .actions select,
+  .popover-trigger,
+  .examples-select {
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 767px) {
+  /* Read-and-tweak, not authoring: shed secondary chrome. */
+  .brand .tag {
+    display: none;
+  }
+  .status-version {
+    display: none;
+  }
+  .topbar {
+    padding: var(--space-3) var(--space-4);
+  }
+}

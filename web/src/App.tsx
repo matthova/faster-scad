@@ -451,6 +451,10 @@ export function App() {
     "consoleFilter",
     loadPrefs().consoleFilter,
   );
+  // Narrow-screen pane selection (≤1023px): the editor and viewer become a
+  // Code⎪Model segmented switch instead of side-by-side. "model" first — the
+  // customizer and viewer are the point at tablet/phone widths.
+  const [paneView, setPaneView] = useState<"code" | "model">("model");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   // Right-dock layout: spine collapse (null = auto: spine only when no params)
@@ -2392,8 +2396,28 @@ export function App() {
         />
       )}
 
+      <div className="pane-switch" role="tablist" aria-label="Pane">
+        <button
+          role="tab"
+          aria-selected={paneView === "code"}
+          className={paneView === "code" ? "active" : undefined}
+          onClick={() => setPaneView("code")}
+        >
+          Code
+        </button>
+        <button
+          role="tab"
+          aria-selected={paneView === "model"}
+          className={paneView === "model" ? "active" : undefined}
+          onClick={() => setPaneView("model")}
+        >
+          Model
+        </button>
+      </div>
+
       <main
         className="workspace"
+        data-pane={paneView}
         style={{
           gridTemplateColumns: `${effEditorW}px 6px 1fr ${
             dockCollapsed ? "28px" : `6px ${effDockW}px`
