@@ -415,6 +415,9 @@ export function App() {
   // Drag-and-drop file import: highlight state + a message for unsupported files.
   const [dragActive, setDragActive] = useState(false);
   const [importMsg, setImportMsg] = useState("");
+  // True while the OpenSCAD engine is downloading its ~10 MB wasm (first use);
+  // shown as a banner so the wait isn't mistaken for a hung render.
+  const [engineDownloading, setEngineDownloading] = useState(false);
   const [consoleOpen, setConsoleOpen] = useState(false);
   const [consoleFilter, setConsoleFilter] = useState<
     "all" | "error" | "warn" | "echo"
@@ -563,18 +566,21 @@ export function App() {
     // installed binary on desktop (falling back to wasm if none is installed), or
     // the vendored wasm build in the browser. "quito" uses the native C++ engine
     // on desktop and the wasm engine in the browser.
+    const onDownloadChange = (downloading: boolean) =>
+      setEngineDownloading(downloading);
     const buildEngine = (
       kind: EngineKind,
     ): Engine | DesktopEngine | DesktopOpenscadEngine => {
       const cb = (r: RenderResponse) => onResult(r);
+      const opts = { onBusyChange, onDownloadChange };
       if (kind === "openscad") {
-        if (!TAURI) return new OpenscadEngine(cb, { onBusyChange });
-        const osc = new DesktopOpenscadEngine(cb, { onBusyChange });
+        if (!TAURI) return new OpenscadEngine(cb, opts);
+        const osc = new DesktopOpenscadEngine(cb, opts);
         osc.dir = engineDirRef.current; // disk include/use via OPENSCADPATH
         return osc;
       }
-      if (!TAURI) return new Engine(cb, { onBusyChange });
-      const native = new DesktopEngine(cb, { onBusyChange });
+      if (!TAURI) return new Engine(cb, opts);
+      const native = new DesktopEngine(cb, opts);
       native.dir = engineDirRef.current; // re-seed disk include/use resolution
       return native;
     };
@@ -688,8 +694,9 @@ export function App() {
           ),
           basicSetup,
           keymap.of([
-            // ⌘S / ⌘⇧S save the active tab to disk (desktop). preventDefault
-            // stops the browser's own save dialog even in the web build.
+            // ⌘S saves the active tab to disk (desktop) or downloads it (web);
+            // ⌘⇧S is Save As (desktop). preventDefault stops the browser's own
+            // save dialog either way.
             {
               key: "Mod-s",
               preventDefault: true,
@@ -846,6 +853,17 @@ export function App() {
       if (mod && e.shiftKey && key === "f") {
         e.preventDefault();
         viewerRef.current?.fit();
+        return;
+      }
+      // ⌘S outside the editor: the CM keymap only fires when the editor has
+      // focus, so mirror it here (save on desktop, download on web) and stop
+      // the browser's save dialog. Plain ⌘S is not a native accelerator.
+      if (mod && !e.shiftKey && key === "s") {
+        const inEditor = (e.target as HTMLElement)?.closest?.(".cm-editor");
+        if (!inEditor) {
+          e.preventDefault();
+          saveActiveRef.current();
+        }
         return;
       }
       if (mod && key === "enter") {
@@ -1348,9 +1366,25 @@ export function App() {
   }
 
   // Text extensions we can load in the browser (binary STL/3MF/PNG need a
-  // Vec<u8> channel through the engine — not wired yet).
-  const TEXT_IMPORT = /\.(scad|txt|dat|csv|json|off|obj|amf|dxf|svg|stl)$/i;
+  // Vec<u8> channel through the engine — not wired yet). `.stl` is sniffed
+  // below: ASCII STL is text, binary STL joins BINARY_IMPORT.
+  const TEXT_IMPORT = /\.(scad|txt|dat|csv|json|off|obj|amf|dxf|svg)$/i;
+  const STL_IMPORT = /\.stl$/i;
   const BINARY_IMPORT = /\.(3mf|png|jpg|jpeg)$/i;
+
+  /** True if a `.stl` File is binary (80-byte header + uint32 count + 50
+   *  bytes/triangle). Binary STLs UTF-8-decode to U+FFFD-mangled garbage that a
+   *  lenient parser then "succeeds" on, so we route them to the binary message
+   *  instead of corrupting them. ASCII STL starts with the "solid" token and
+   *  has no such size relation; anything we can't confirm as ASCII is refused. */
+  async function stlIsBinary(f: globalThis.File): Promise<boolean> {
+    if (f.size >= 84) {
+      const dv = new DataView(await f.slice(80, 84).arrayBuffer());
+      if (f.size === 84 + dv.getUint32(0, true) * 50) return true;
+    }
+    const head = new TextDecoder().decode(await f.slice(0, 6).arrayBuffer());
+    return !head.trimStart().toLowerCase().startsWith("solid");
+  }
 
   /** Import dropped/opened local files (browser). A .scad replaces the pristine
    *  default main so it renders immediately; everything else is added as a tab.
@@ -1359,6 +1393,11 @@ export function App() {
     const arr = Array.from(fileList);
     const binary = arr.filter((f) => BINARY_IMPORT.test(f.name));
     const text = arr.filter((f) => TEXT_IMPORT.test(f.name));
+    // Sniff each .stl: ASCII is safe to read as text, binary is refused.
+    for (const f of arr.filter((f) => STL_IMPORT.test(f.name))) {
+      if (await stlIsBinary(f)) binary.push(f);
+      else text.push(f);
+    }
     if (binary.length) {
       setImportMsg(
         `Can't import ${binary
@@ -1902,7 +1941,11 @@ export function App() {
 
   // Keep the imperative refs (editor keymap, native menu) pointing at the latest
   // closures so they never see stale state.
-  saveActiveRef.current = () => void saveActive(false);
+  // On desktop ⌘S saves to disk; in the browser there is no disk, so it
+  // downloads the active .scad instead of being a swallowed no-op.
+  saveActiveRef.current = TAURI
+    ? () => void saveActive(false)
+    : () => onDownloadScad();
   saveAsRef.current = () => void saveActive(true);
   menuExportRef.current = () => void onDownload(exportFmt);
   highlightFromCursorRef.current = highlightFromCursor;
@@ -2069,7 +2112,14 @@ export function App() {
           <Popover
             label="Display"
             title="Viewport display options"
-            active={ortho || !showGrid || !showEdges || !linkHighlight}
+            active={
+              ortho ||
+              !showGrid ||
+              !showEdges ||
+              !linkHighlight ||
+              showDims ||
+              sectionOn
+            }
           >
             <PopoverToggle checked={ortho} onChange={setOrthoProjection}>
               Orthographic projection
@@ -2317,6 +2367,16 @@ export function App() {
           </button>
         </div>
       </header>
+
+      {engineDownloading && (
+        <div className="update-banner" role="status" aria-live="polite">
+          <div className="update-banner-row">
+            <span className="update-banner-msg">
+              Downloading the OpenSCAD engine (~10 MB, first use)…
+            </span>
+          </div>
+        </div>
+      )}
 
       {importMsg && (
         <div className="update-banner error" role="alert">

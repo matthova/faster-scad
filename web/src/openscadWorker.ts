@@ -43,6 +43,24 @@ type OpenSCADFactory = (
   opts: Record<string, unknown>,
 ) => Promise<OpenSCADModule>;
 
+// The upstream loader is ~10 MB. Import it once per worker and reuse the module
+// factory across renders so only the first render pays the download; a failed
+// load is not cached, so a retry can succeed. The download is reported to the
+// main thread (via a "loading" phase message) so it stays out of the render
+// watchdog — otherwise a slow connection aborts with "model too complex".
+let factoryPromise: Promise<OpenSCADFactory> | null = null;
+function loadFactory(url: string): Promise<OpenSCADFactory> {
+  if (!factoryPromise) {
+    factoryPromise = import(/* @vite-ignore */ url).then(
+      (m) => (m as { default: OpenSCADFactory }).default,
+    );
+    factoryPromise.catch(() => {
+      factoryPromise = null;
+    });
+  }
+  return factoryPromise;
+}
+
 /** Ensure every parent directory of `path` exists in the Emscripten FS. */
 function mkdirp(FS: OpenSCADFS, path: string) {
   const parts = path.split("/").filter(Boolean);
@@ -89,10 +107,17 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
   const err: string[] = [];
   let instance: OpenSCADModule;
   try {
-    const mod = (await import(/* @vite-ignore */ openscadUrl)) as {
-      default: OpenSCADFactory;
-    };
-    instance = await mod.default({
+    // Only the first load per worker downloads; announce it so the main thread
+    // pauses the watchdog and shows a downloading state.
+    const needsDownload = factoryPromise === null;
+    if (needsDownload) {
+      (self as unknown as Worker).postMessage({ phase: "loading" });
+    }
+    const factory = await loadFactory(openscadUrl);
+    if (needsDownload) {
+      (self as unknown as Worker).postMessage({ phase: "rendering" });
+    }
+    instance = await factory({
       noInitialRun: true,
       print: (s: string) => out.push(s),
       printErr: (s: string) => err.push(s),

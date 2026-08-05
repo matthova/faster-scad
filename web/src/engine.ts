@@ -8,7 +8,12 @@
 // running after `timeoutMs`, and `cancel()` lets the UI stop one on demand. Both
 // terminate the worker (the only way to interrupt a synchronous wasm call) and
 // deliver a synthetic error result so the app returns to an idle, usable state.
-import type { RenderRequest, RenderResponse } from "./engineWorker";
+import type {
+  EnginePhase,
+  EnginePhaseMessage,
+  RenderRequest,
+  RenderResponse,
+} from "./engineWorker";
 import type { Export2DRequest, Export2DResponse } from "./exportWorker";
 import { blankResponse } from "./renderResponse";
 
@@ -21,6 +26,10 @@ export interface EngineOptions {
   onBusyChange?: (busy: boolean) => void;
   /** Auto-stop a render still running after this many ms (0 disables). */
   timeoutMs?: number;
+  /** Notified when a worker is downloading a large engine asset (OpenSCAD wasm)
+   *  before it can render, so the UI can show a downloading state. The watchdog
+   *  is paused for the duration; see `onPhase`. */
+  onDownloadChange?: (downloading: boolean) => void;
 }
 
 /** Render a 2D model to DXF/SVG text via a dedicated one-shot worker. */
@@ -125,10 +134,18 @@ export class Engine {
 
   private spawn() {
     this.worker = this.createWorker();
-    this.worker.onmessage = (e: MessageEvent<RenderResponse>) => {
+    this.worker.onmessage = (
+      e: MessageEvent<RenderResponse | EnginePhaseMessage>,
+    ) => {
+      const msg = e.data;
+      if ("phase" in msg) {
+        this.onPhase(msg.phase);
+        return;
+      }
       this.clearTimer();
+      this.opts.onDownloadChange?.(false);
       this.setBusy(false);
-      this.onResult(e.data);
+      this.onResult(msg);
       if (this.pending !== null) {
         const job = this.pending;
         this.pending = null;
@@ -180,6 +197,7 @@ export class Engine {
    *  replacing this engine wholesale. */
   dispose() {
     this.clearTimer();
+    this.opts.onDownloadChange?.(false);
     this.worker.terminate();
     this.pending = null;
     this.setBusy(false);
@@ -192,6 +210,23 @@ export class Engine {
     this.abort("Render stopped.");
   }
 
+  /** Progress signal from a worker that must download a large asset before it
+   *  can render (the OpenSCAD wasm engine). The download must not count against
+   *  the render watchdog — otherwise a slow connection aborts with a misleading
+   *  "model too complex" message — so pause the timer while `"loading"` and
+   *  (re)arm it only when the render proper begins (`"rendering"`). */
+  private onPhase(phase: EnginePhase) {
+    if (phase === "loading") {
+      this.clearTimer();
+      this.opts.onDownloadChange?.(true);
+    } else {
+      this.opts.onDownloadChange?.(false);
+      if (this.timeoutMs > 0) {
+        this.timer = window.setTimeout(() => this.onTimeout(), this.timeoutMs);
+      }
+    }
+  }
+
   private onTimeout() {
     this.timer = undefined;
     this.abort(
@@ -202,6 +237,7 @@ export class Engine {
 
   private abort(error: string) {
     this.clearTimer();
+    this.opts.onDownloadChange?.(false);
     this.worker.terminate();
     this.spawn();
     this.pending = null;

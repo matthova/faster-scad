@@ -21,7 +21,7 @@ export const viewerConst = {
   /** Pick highlight + nav-cube hover wash. Cyan means "the thing you pointed
    *  at" everywhere it appears; do not split this hue (see track-D §3). */
   selection: 0x4fc3f7,
-  /** `!` modifier (debug highlight, red) and `%` modifier (background, gray). */
+  /** `#` modifier (debug highlight, red) and `%` modifier (background, gray). */
   modifierHighlight: 0xff3b30,
   modifierBackground: 0x888888,
 } as const;

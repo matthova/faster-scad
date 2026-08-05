@@ -136,7 +136,7 @@ function ModelPanel({ model }: { model: ModelInfo }) {
                 />
                 <span className="part-count">{int(g.count / 3)} tris</span>
                 {g.mode === "highlight" && (
-                  <span className="part-mode">! highlight</span>
+                  <span className="part-mode"># highlight</span>
                 )}
               </li>
             ))}
