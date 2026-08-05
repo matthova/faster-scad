@@ -85,6 +85,10 @@ export class Viewer {
   /** Display toggles (Display ▾ popover). */
   private showGrid = true;
   private showEdges = true;
+  /** ISO dimension callouts on the bounding box (the "signature" mode). When on,
+   *  the grid's numeric tick labels are suppressed so the two don't collide. */
+  private showDims = false;
+  private dimGroup: THREE.Group | null = null;
   /** Cache key of the last-built grid, so per-frame `updateGrid` calls that
    *  wouldn't change anything early-return instead of rebuilding. */
   private lastGridKey = "";
@@ -269,6 +273,7 @@ export class Viewer {
     this.scene.background = new THREE.Color(this.vt.background);
     this.updateGrid(true);
     this.rebuildCubeFaces();
+    this.rebuildDims(); // colors follow the theme
   }
 
   /** The world-space vertical extent currently visible at the orbit-target plane
@@ -469,7 +474,8 @@ export class Viewer {
           x <= hiX + 1e-6;
           x += spacing
         ) {
-          if (Math.abs(x) < spacing / 2 || !labeled(x)) continue; // origin labeled below
+          if (Math.abs(x) < spacing / 2 || !labeled(x) || this.showDims)
+            continue; // origin labeled below; dims mode suppresses numeric labels
           addLabel(fmt(x), numCol, x, -lh * 1.6, 0);
         }
       }
@@ -484,7 +490,8 @@ export class Viewer {
           y <= hiY + 1e-6;
           y += spacing
         ) {
-          if (Math.abs(y) < spacing / 2 || !labeled(y)) continue;
+          if (Math.abs(y) < spacing / 2 || !labeled(y) || this.showDims)
+            continue;
           addLabel(fmt(y), numCol, -lh * 1.6, y, 0);
         }
       }
@@ -495,7 +502,7 @@ export class Viewer {
       addLabel("Z", hex(Z_COL), -lh * 1.4, -lh * 1.4, half + lh * 1.8, 1.5);
       if (!suppress.z) {
         ticks("z", 0, half, Z_COL);
-        for (let i = 2; i <= halfCells; i += 2) {
+        for (let i = 2; i <= halfCells && !this.showDims; i += 2) {
           addLabel(
             fmt(i * spacing),
             this.vt.axisTick,
@@ -563,6 +570,7 @@ export class Viewer {
       this.mesh = null;
       this.geometry = null;
     }
+    this.disposeDims(); // no geometry → no callouts (mountMesh rebuilds them)
   }
 
   private buildGeom(
@@ -608,6 +616,8 @@ export class Viewer {
       this.frame(geom);
       this.hasFramed = true;
     }
+    // Rebuild dimension callouts for the new bounding box (if the mode is on).
+    this.rebuildDims();
   }
 
   setMesh(positions: Float32Array, normals: Float32Array) {
@@ -884,6 +894,106 @@ export class Viewer {
   }
   isEdgesVisible() {
     return this.showEdges;
+  }
+
+  /** Toggle the ISO dimension callouts on the bounding box (off by default).
+   *  Rebuilds the grid too so its numeric tick labels suppress/return. */
+  setDimensionsVisible(v: boolean) {
+    this.showDims = v;
+    this.rebuildDims();
+    this.updateGrid(true);
+  }
+  isDimensionsVisible() {
+    return this.showDims;
+  }
+
+  private disposeDims() {
+    if (!this.dimGroup) return;
+    this.scene.remove(this.dimGroup);
+    this.dimGroup.traverse((o) => {
+      const any = o as unknown as {
+        geometry?: { dispose?: () => void };
+        material?: {
+          map?: { dispose?: () => void };
+          dispose?: () => void;
+        };
+      };
+      any.geometry?.dispose?.();
+      any.material?.map?.dispose?.();
+      any.material?.dispose?.();
+    });
+    this.dimGroup = null;
+  }
+
+  /** Draw the bounding box's width/depth/height as drafting dimension callouts
+   *  (extension lines, an arrowed dimension line, and the value in millimetres),
+   *  in a dedicated scene group so setMesh/setColoredMesh never clobber it. */
+  private rebuildDims() {
+    this.disposeDims();
+    if (!this.showDims || !this.geometry) return;
+    const box = this.geometry.boundingBox!;
+    const { min, max } = box;
+    const size = new THREE.Vector3();
+    box.getSize(size);
+    const maxDim = Math.max(size.x, size.y, size.z, 1);
+    const off = maxDim * 0.13; // stand-off distance from the box
+    const arrow = maxDim * 0.03;
+    const lh = maxDim * 0.06; // label height (world units)
+    const colStr = this.vt.gridLabel;
+    const colNum = new THREE.Color(colStr);
+    const g = new THREE.Group();
+    const pts: number[] = [];
+    const seg = (p: THREE.Vector3, q: THREE.Vector3) =>
+      pts.push(p.x, p.y, p.z, q.x, q.y, q.z);
+    const fmtv = (v: number) =>
+      Number.isInteger(v) ? v.toFixed(2) : v.toFixed(2);
+
+    const dim = (a: THREE.Vector3, b: THREE.Vector3, dir: THREE.Vector3) => {
+      const o = dir.clone().multiplyScalar(off);
+      const a2 = a.clone().add(o);
+      const b2 = b.clone().add(o);
+      // extension lines run from the box corner to just past the dim line
+      const ext = dir.clone().multiplyScalar(off * 1.12);
+      seg(a.clone(), a.clone().add(ext));
+      seg(b.clone(), b.clone().add(ext));
+      // the dimension line itself
+      seg(a2, b2);
+      // arrowheads at both ends (a V of two short segments)
+      const inward = b2.clone().sub(a2).normalize().multiplyScalar(arrow);
+      const perp = dir.clone().multiplyScalar(arrow * 0.5);
+      seg(a2, a2.clone().add(inward).add(perp));
+      seg(a2, a2.clone().add(inward).sub(perp));
+      seg(b2, b2.clone().sub(inward).add(perp));
+      seg(b2, b2.clone().sub(inward).sub(perp));
+      // value label, floating just past the dim line
+      const mid = a2.clone().lerp(b2, 0.5).add(dir.clone().multiplyScalar(lh));
+      const label = this.makeTickLabel(fmtv(a.distanceTo(b)), colStr, lh);
+      label.position.copy(mid);
+      g.add(label);
+    };
+
+    const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
+    // Width (X) off the front, depth (Y) off the right, height (Z) off the left.
+    dim(V(min.x, min.y, min.z), V(max.x, min.y, min.z), V(0, -1, 0));
+    dim(V(max.x, min.y, min.z), V(max.x, max.y, min.z), V(1, 0, 0));
+    dim(V(min.x, min.y, min.z), V(min.x, min.y, max.z), V(-1, 0, 0));
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
+    g.add(
+      new THREE.LineSegments(
+        geo,
+        new THREE.LineBasicMaterial({
+          color: colNum,
+          // Lift the lines off the floor grid so they don't z-fight it.
+          polygonOffset: true,
+          polygonOffsetFactor: -2,
+          polygonOffsetUnits: -2,
+        }),
+      ),
+    );
+    this.dimGroup = g;
+    this.scene.add(g);
   }
 
   /** Frame the model to fill the view WITHOUT changing the current orientation

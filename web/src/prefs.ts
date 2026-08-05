@@ -41,6 +41,8 @@ export interface Prefs {
   /** Viewport display toggles (Display ▾ popover). */
   showGrid: boolean;
   showEdges: boolean;
+  /** ISO dimension callouts on the bounding box (off by default). */
+  showDims: boolean;
 }
 
 const DEFAULTS: Prefs = {
@@ -59,6 +61,7 @@ const DEFAULTS: Prefs = {
   consoleHeight: null,
   showGrid: true,
   showEdges: true,
+  showDims: false,
 };
 
 const QUALITIES: Quality[] = ["draft", "normal", "fine", "custom"];
@@ -125,6 +128,8 @@ export function loadPrefs(): Prefs {
         typeof p.showGrid === "boolean" ? p.showGrid : DEFAULTS.showGrid,
       showEdges:
         typeof p.showEdges === "boolean" ? p.showEdges : DEFAULTS.showEdges,
+      showDims:
+        typeof p.showDims === "boolean" ? p.showDims : DEFAULTS.showDims,
     };
   } catch {
     return { ...DEFAULTS };

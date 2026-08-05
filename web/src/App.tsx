@@ -435,6 +435,7 @@ export function App() {
   );
   const [showGrid, setShowGrid] = useState(loadPrefs().showGrid);
   const [showEdges, setShowEdges] = useState(loadPrefs().showEdges);
+  const [showDims, setShowDims] = useState(loadPrefs().showDims);
   const [exportFmt, setExportFmt] = useState<ExportFmt>("stl");
   // Whether the user has manually chosen an export format. Until they do, the
   // format auto-tracks the model: 3MF for multi-color 3D models, STL otherwise.
@@ -495,6 +496,7 @@ export function App() {
     const prefs0 = loadPrefs();
     viewer.setGridVisible(prefs0.showGrid);
     viewer.setEdgesVisible(prefs0.showEdges);
+    viewer.setDimensionsVisible(prefs0.showDims);
 
     // Model → code: clicking a face selects the source statement that produced
     // it. Spans index into the main file, so switch to it first if needed.
@@ -1178,6 +1180,11 @@ export function App() {
     setShowEdges(v);
     viewerRef.current?.setEdgesVisible(v);
     savePrefs({ showEdges: v });
+  }
+  function toggleDims(v: boolean) {
+    setShowDims(v);
+    viewerRef.current?.setDimensionsVisible(v);
+    savePrefs({ showDims: v });
   }
   function setOrthoProjection(next: boolean) {
     viewerRef.current?.setProjection(next ? "orthographic" : "perspective");
@@ -1974,6 +1981,9 @@ export function App() {
             </PopoverToggle>
             <PopoverToggle checked={showEdges} onChange={toggleEdges}>
               Edge overlay
+            </PopoverToggle>
+            <PopoverToggle checked={showDims} onChange={toggleDims}>
+              Dimensions
             </PopoverToggle>
           </Popover>
           <button
