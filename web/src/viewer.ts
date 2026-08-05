@@ -120,6 +120,9 @@ export class Viewer {
    *  view cube would ghost behind the live one). */
   private rafId = 0;
   private onWindowResize = () => this.resize();
+  /** Watches the canvas box so panel drags, drawer toggles, and dock collapses
+   *  — none of which fire a window `resize` — still re-fit the renderer + grid. */
+  private resizeObserver: ResizeObserver | null = null;
   /** Active camera fly-to (face click), interpolated in the animate loop. */
   private camAnim: {
     fromDir: THREE.Vector3;
@@ -192,6 +195,11 @@ export class Viewer {
 
     this.resize();
     window.addEventListener("resize", this.onWindowResize);
+    // Any layout change that resizes the canvas box (not just the OS window):
+    // panel splitters, the console drawer, dock collapse. Observe the container
+    // so a 0×0 canvas mid-transition still recovers once it has a box again.
+    this.resizeObserver = new ResizeObserver(() => this.resize());
+    this.resizeObserver.observe(canvas.parentElement ?? canvas);
     this.animate();
   }
 
@@ -222,6 +230,8 @@ export class Viewer {
   dispose() {
     cancelAnimationFrame(this.rafId);
     window.removeEventListener("resize", this.onWindowResize);
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
     this.controls.dispose();
     if (this.cubeRenderer) {
       this.cubeRenderer.dispose();
