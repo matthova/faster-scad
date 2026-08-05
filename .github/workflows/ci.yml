@@ -112,7 +112,10 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # 22, not 20: jsdom 30 (the vitest DOM env) bundles an undici that
+          # calls webidl.util.markAsUncloneable, which needs a newer Node than
+          # 20.x — on 20 the jsdom import throws before any test runs.
+          node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
 
