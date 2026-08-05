@@ -514,6 +514,21 @@ body {
   white-space: pre-wrap;
   word-break: break-word;
 }
+/* Clickable diagnostic (resolves to a source span). Rendered as a full-width
+   button but styled as a plain line; only these get the pointer + underline. */
+button.console-line {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  padding: 0;
+  cursor: pointer;
+}
+button.console-line.clickable:hover {
+  text-decoration: underline;
+}
 .console-line.error {
   color: var(--err);
 }

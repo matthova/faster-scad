@@ -1,5 +1,5 @@
 import { test, expect, Page } from "@playwright/test";
-import { gotoApp, waitForRender } from "./helpers";
+import { gotoApp, waitForRerender } from "./helpers";
 
 // The render-quality control forces $fn, so the triangle count must respond
 // even though the default project sets its own $fn. Draft drops it, Fine raises
@@ -13,8 +13,9 @@ async function triangleCount(page: Page): Promise<number> {
 }
 
 async function setQuality(page: Page, value: string) {
-  await page.locator(".quality-select").selectOption(value);
-  await waitForRender(page);
+  await waitForRerender(page, () =>
+    page.locator(".quality-select").selectOption(value),
+  );
 }
 
 test("quality preset changes triangle count and persists", async ({ page }) => {

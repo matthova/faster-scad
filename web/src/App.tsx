@@ -400,6 +400,9 @@ export function App() {
   // render never finished. Shows a banner and waits for the user to press Render.
   const [recovering, setRecovering] = useState(wasStuck);
   const [consoleOpen, setConsoleOpen] = useState(false);
+  // Monotonic render counter, surfaced as data-render-rev on the status bar so a
+  // completed render is observable even though the meta is always visible.
+  const [renderRev, setRenderRev] = useState(0);
   const [exportFmt, setExportFmt] = useState<ExportFmt>("stl");
   // Whether the user has manually chosen an export format. Until they do, the
   // format auto-tracks the model: 3MF for multi-color 3D models, STL otherwise.
@@ -1351,18 +1354,65 @@ export function App() {
     // we never reach here and the sentinel stays set so the next load recovers.
     // A *stopped* result (watchdog/Stop) is exempt — see settleRenderPending.
     settleRenderPending(!!r.stopped);
+
+    // Bump a monotonic revision so a "new render landed" is observable (the
+    // status meta is now always visible, so its presence no longer signals it).
+    setRenderRev((n) => n + 1);
   }
 
-  const consoleLines: { kind: "error" | "warn" | "echo"; text: string }[] = [];
-  if (status.error) consoleLines.push({ kind: "error", text: status.error });
+  // A console line carries a source span only when the structured diagnostics
+  // array has a matching message with a real (byte ≥ 0) offset. Echo output and
+  // geom-error prose never resolve to a span, so they stay non-clickable — making
+  // every line *look* clickable is worse than making only the real ones clickable.
+  type ConsoleLine = {
+    kind: "error" | "warn" | "echo";
+    text: string;
+    span?: Span;
+  };
+  const spanFor = (
+    severity: "error" | "warning",
+    message: string,
+  ): Span | undefined => {
+    const d = diagRef.current.find(
+      (x) => x.severity === severity && x.message === message && x.start >= 0,
+    );
+    return d ? [d.start, d.end] : undefined;
+  };
+  const consoleLines: ConsoleLine[] = [];
+  if (status.error)
+    consoleLines.push({
+      kind: "error",
+      text: status.error,
+      span: spanFor("error", status.error),
+    });
   // Recoverable geometry errors: shown red like a hard error, but the model is
-  // still rendered (degraded) alongside them.
+  // still rendered (degraded) alongside them. Prose, so never clickable.
   for (const e of status.geomErrors.split("\n").filter(Boolean))
     consoleLines.push({ kind: "error", text: `GEOMETRY ERROR: ${e}` });
   for (const w of status.warnings.split("\n").filter(Boolean))
-    consoleLines.push({ kind: "warn", text: `WARNING: ${w}` });
+    consoleLines.push({
+      kind: "warn",
+      text: `WARNING: ${w}`,
+      span: spanFor("warning", w),
+    });
   for (const e of status.echo.split("\n").filter(Boolean))
     consoleLines.push({ kind: "echo", text: e });
+
+  /** Jump the editor cursor to a diagnostic's source span (main file). Mirrors
+   *  the model→code pick path: switch to the main tab, map bytes→chars, select. */
+  function jumpToSpan(span: Span) {
+    const view = viewRef.current;
+    if (!view) return;
+    if (activeRef.current !== 0) switchTo(0);
+    const src = filesRef.current[0].content;
+    const from = byteToChar(src, span[0]);
+    const to = byteToChar(src, span[1]);
+    view.dispatch({
+      selection: { anchor: from, head: to },
+      scrollIntoView: true,
+    });
+    view.focus();
+  }
 
   function setOverride(name: string, value: ParamValue) {
     const next = { ...overridesRef.current, [name]: value };
@@ -2039,16 +2089,30 @@ export function App() {
           {consoleLines.length === 0 ? (
             <div className="console-line muted">No output.</div>
           ) : (
-            consoleLines.map((l, i) => (
-              <div className={`console-line ${l.kind}`} key={i}>
-                {l.text}
-              </div>
-            ))
+            consoleLines.map((l, i) =>
+              l.span ? (
+                <button
+                  className={`console-line ${l.kind} clickable`}
+                  key={i}
+                  onClick={() => jumpToSpan(l.span!)}
+                  title="Jump to source"
+                >
+                  {l.text}
+                </button>
+              ) : (
+                <div className={`console-line ${l.kind}`} key={i}>
+                  {l.text}
+                </div>
+              ),
+            )
           )}
         </div>
       )}
 
-      <footer className={`statusbar ${status.ok ? "ok" : "err"}`}>
+      <footer
+        className={`statusbar ${status.ok ? "ok" : "err"}`}
+        data-render-rev={renderRev}
+      >
         {/* Fixed-width control cell so Render↔(rendering… Stop) can't shift the
             numbers sideways every render. */}
         <span className="status-controls">

@@ -24,6 +24,22 @@ export async function waitForRender(page: Page) {
   await page.waitForTimeout(400);
 }
 
+/** Current render revision (bumps once per completed render). */
+export async function renderRev(page: Page): Promise<number> {
+  const v = await page.locator(".statusbar").getAttribute("data-render-rev");
+  return Number(v ?? "0");
+}
+
+/** Run `action`, then wait for the next render to land (a new revision). Use
+ *  when the meta is already visible, so its presence can't signal completion. */
+export async function waitForRerender(page: Page, action: () => Promise<void>) {
+  const before = await renderRev(page);
+  await action();
+  await expect
+    .poll(() => renderRev(page), { timeout: 30_000 })
+    .toBeGreaterThan(before);
+}
+
 /** The 3D canvas — masked in screenshots because WebGL output is not stable. */
 export function viewerMask(page: Page): Locator {
   return page.locator(".viewer");
