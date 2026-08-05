@@ -409,6 +409,9 @@ export function App() {
   // Recovery mode: the restored project wasn't auto-rendered because the last
   // render never finished. Shows a banner and waits for the user to press Render.
   const [recovering, setRecovering] = useState(wasStuck);
+  // Autosave to localStorage failed (quota exceeded): warn instead of silently
+  // dropping the user's work.
+  const [saveFailed, setSaveFailed] = useState(false);
   const [consoleOpen, setConsoleOpen] = useState(false);
   const [consoleFilter, setConsoleFilter] = useState<
     "all" | "error" | "warn" | "echo"
@@ -480,12 +483,15 @@ export function App() {
   });
 
   function persist() {
-    saveProject({
+    const ok = saveProject({
       files: filesRef.current,
       overrides: overridesRef.current,
       active: activeRef.current,
       paramSets: paramSetsRef.current,
     });
+    // Surface a silent data-loss trap: if storage is full, autosave stops and
+    // the user would otherwise never know until a reload lost their work.
+    setSaveFailed((prev) => (prev === !ok ? prev : !ok));
   }
 
   useEffect(() => {
@@ -2188,6 +2194,26 @@ export function App() {
           </button>
         </div>
       </header>
+
+      {saveFailed && (
+        <div className="update-banner error" role="alert">
+          <div className="update-banner-row">
+            <span className="update-banner-msg">
+              Browser storage is full — your work is no longer being autosaved
+              and will be lost on reload. Export the file, or free up space.
+            </span>
+            <div className="update-banner-actions">
+              <button
+                className="update-dismiss"
+                onClick={() => setSaveFailed(false)}
+                aria-label="Dismiss"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {recovering && (
         <div className="update-banner error recovery-banner" role="alert">

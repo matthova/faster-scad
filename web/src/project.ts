@@ -21,11 +21,15 @@ export interface Project {
 
 const KEY = "quito.project.v1";
 
-export function saveProject(p: Project): void {
+/** Persist the project. Returns false when storage is full/unavailable so the
+ *  caller can warn the user their work isn't being saved (a silent failure here
+ *  is a data-loss trap). */
+export function saveProject(p: Project): boolean {
   try {
     localStorage.setItem(KEY, JSON.stringify(p));
+    return true;
   } catch {
-    // storage full / unavailable — non-fatal, just don't persist
+    return false;
   }
 }
 
