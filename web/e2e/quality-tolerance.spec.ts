@@ -18,7 +18,8 @@ test("custom $fa tightens tessellation (more triangles)", async ({ page }) => {
   const before = await triangles(page);
   expect(before).toBeGreaterThan(0);
 
-  await page.locator(".quality-select").selectOption("custom");
+  await page.getByRole("button", { name: /^Quality/ }).click();
+  await page.getByRole("menuitemradio", { name: "Custom" }).click();
   const fa = page.getByRole("spinbutton", { name: /\$fa/ });
   await waitForRerender(page, async () => {
     await fa.fill("2"); // finer than the 12° default

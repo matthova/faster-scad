@@ -166,6 +166,7 @@ jobs:
           e2e/a11y.spec.ts e2e/focus.spec.ts
           e2e/render.spec.ts e2e/customizer.spec.ts e2e/prefs.spec.ts
           e2e/palette.spec.ts e2e/theme.spec.ts e2e/quality-tolerance.spec.ts
+          e2e/topbar.spec.ts
 
       - name: Upload Playwright report
         if: failure()

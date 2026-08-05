@@ -52,7 +52,7 @@ import {
 } from "./stl";
 import { Dock } from "./Dock";
 import { ResizeHandle } from "./ResizeHandle";
-import { Popover, PopoverToggle } from "./Popover";
+import { Popover, PopoverToggle, PopoverAction } from "./Popover";
 import { CommandPalette } from "./CommandPalette";
 import { HelpSheet } from "./HelpSheet";
 import {
@@ -348,6 +348,9 @@ export function App() {
   // which source produced the shown mesh (renderState.renderedSource) without
   // reading the possibly-newer live editor buffer.
   const renderedSourceRef = useRef("");
+  // Hidden <input type=file> backing the web Project ▾ → Import… action (web
+  // import was drag-only before).
+  const importInputRef = useRef<HTMLInputElement>(null);
   const requestRenderRef = useRef<() => void>(() => {});
   const renderNowRef = useRef<() => void>(() => {}); // immediate render (animation frames bypass the debounce)
   // During frame export: resolved by onResult when the current frame's render lands.
@@ -1991,7 +1994,6 @@ export function App() {
           Quito <span className="tag">playground</span>
         </div>
         <div className="actions">
-          <button onClick={newProject}>New</button>
           <select
             className="examples-select"
             aria-label="Load example"
@@ -2010,31 +2012,38 @@ export function App() {
               </option>
             ))}
           </select>
-          {TAURI && <button onClick={openNative}>Open…</button>}
-          {TAURI && (
-            <button
-              onClick={() => saveActiveRef.current()}
-              title="Save the active file (⌘S)"
-            >
-              Save
-            </button>
-          )}
-          {!TAURI && (
-            <button
-              onClick={onShare}
-              title="Copy a shareable link to this project"
-            >
-              {shareMsg || "Share"}
-            </button>
-          )}
-          {!TAURI && (
-            <button
-              onClick={onDownloadScad}
-              title="Download the active file as .scad"
-            >
-              .scad
-            </button>
-          )}
+          <Popover
+            label="Project"
+            title="Project files, sharing, and export to disk"
+          >
+            <PopoverAction onClick={newProject}>New project</PopoverAction>
+            {!TAURI && (
+              <PopoverAction onClick={() => importInputRef.current?.click()}>
+                Import file…
+              </PopoverAction>
+            )}
+            {TAURI && <PopoverAction onClick={openNative}>Open…</PopoverAction>}
+            {TAURI && (
+              <PopoverAction onClick={() => saveActiveRef.current()}>
+                Save
+              </PopoverAction>
+            )}
+            {TAURI && (
+              <PopoverAction onClick={() => saveAsRef.current()}>
+                Save As…
+              </PopoverAction>
+            )}
+            {!TAURI && (
+              <PopoverAction onClick={onShare}>
+                {shareMsg || "Copy share link"}
+              </PopoverAction>
+            )}
+            {!TAURI && (
+              <PopoverAction onClick={onDownloadScad}>
+                Download .scad
+              </PopoverAction>
+            )}
+          </Popover>
           <Popover
             label="Display"
             title="Viewport display options"
@@ -2100,6 +2109,7 @@ export function App() {
           </Popover>
           <button
             className={engineKind === "openscad" ? "active" : undefined}
+            data-cmd="engine"
             aria-pressed={engineKind === "openscad"}
             onClick={toggleEngine}
             title={
@@ -2116,6 +2126,7 @@ export function App() {
           </button>
           <button
             className={fastPreview ? "active" : undefined}
+            data-cmd="fast"
             aria-pressed={fastPreview}
             onClick={toggleFastPreview}
             title={
@@ -2130,215 +2141,170 @@ export function App() {
           >
             Fast
           </button>
-          <select
-            className="quality-select"
-            aria-label="Render quality"
-            value={quality}
-            onChange={(e) =>
-              setQualityPref({ quality: e.target.value as Quality })
-            }
-            title="Render resolution ($fn/$fa/$fs). Draft is coarse and fast; Fine is smooth and slow; Normal respects the script."
+          <Popover
+            label={`Quality: ${quality[0].toUpperCase()}${quality.slice(1)}`}
+            active={quality !== "normal"}
+            title="Render resolution. Draft is coarse and fast; Fine is smooth and slow; Normal respects the script; Custom sets $fn/$fa/$fs."
           >
-            <option value="draft">Draft</option>
-            <option value="normal">Normal</option>
-            <option value="fine">Fine</option>
-            <option value="custom">Custom</option>
-          </select>
-          {quality === "custom" && (
-            <>
-              <label
-                className="quality-fn"
-                title="Custom $fn — fixed segment count (blank = leave to $fa/$fs)"
+            {(["draft", "normal", "fine", "custom"] as Quality[]).map((q) => (
+              <button
+                key={q}
+                className={`popover-row popover-choice ${quality === q ? "active" : ""}`}
+                role="menuitemradio"
+                aria-checked={quality === q}
+                onClick={() => setQualityPref({ quality: q })}
               >
-                $fn
-                <input
-                  type="number"
-                  min={0}
-                  step={1}
-                  value={customFn ?? ""}
-                  onChange={(e) =>
-                    setQualityPref({
-                      customFn:
-                        e.target.value === ""
-                          ? null
-                          : Math.max(0, Math.round(Number(e.target.value))),
-                    })
-                  }
-                />
-              </label>
-              <label
-                className="quality-fn"
-                title="Custom $fa — max fragment angle in degrees (OpenSCAD default 12)"
-              >
-                $fa
-                <input
-                  type="number"
-                  min={0.01}
-                  step={1}
-                  placeholder="12"
-                  value={customFa ?? ""}
-                  onChange={(e) =>
-                    setQualityPref({
-                      customFa:
-                        e.target.value === ""
-                          ? null
-                          : Math.max(0.01, Number(e.target.value)),
-                    })
-                  }
-                />
-              </label>
-              <label
-                className="quality-fn"
-                title="Custom $fs — max fragment size in mm (OpenSCAD default 2)"
-              >
-                $fs
-                <input
-                  type="number"
-                  min={0.01}
-                  step={0.1}
-                  placeholder="2"
-                  value={customFs ?? ""}
-                  onChange={(e) =>
-                    setQualityPref({
-                      customFs:
-                        e.target.value === ""
-                          ? null
-                          : Math.max(0.01, Number(e.target.value)),
-                    })
-                  }
-                />
-              </label>
-            </>
-          )}
-          <button
-            onClick={onSavePng}
-            title="Save the current view as a PNG image"
-          >
-            PNG
-          </button>
-          <div className="anim" title="Animation ($t sweeps 0→1)">
-            <button
-              className="anim-play"
-              onClick={() => setPlaying((p) => !p)}
-              title={playing ? "Pause animation" : "Play animation"}
-              aria-label={playing ? "Pause animation" : "Play animation"}
-            >
-              {playing ? "⏸" : "▶"}
-            </button>
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.001}
-              value={time}
-              onChange={(e) => seekTime(parseFloat(e.target.value))}
-              title="Animation time $t (0–1)"
-            />
-            <span className="anim-val" title="Current $t">
-              {time.toFixed(3)}
-            </span>
-            <label className="anim-field" title="Frames per second">
-              FPS
-              <input
-                type="number"
-                min={1}
-                max={60}
-                value={fps}
-                onChange={(e) =>
-                  setFps(
-                    Math.max(
-                      1,
-                      Math.min(60, Math.round(parseFloat(e.target.value) || 1)),
-                    ),
-                  )
-                }
-              />
-            </label>
-            <label
-              className="anim-field"
-              title="Number of frames as $t goes 0→1"
-            >
-              Steps
-              <input
-                type="number"
-                min={1}
-                max={1000}
-                value={steps}
-                onChange={(e) =>
-                  setSteps(
-                    Math.max(
-                      1,
-                      Math.min(
-                        1000,
-                        Math.round(parseFloat(e.target.value) || 1),
-                      ),
-                    ),
-                  )
-                }
-              />
-            </label>
-            <button
-              onClick={onExportFrames}
-              disabled={status.triangleCount === 0}
-              title="Render every frame and download a zip of PNGs"
-            >
-              Frames
-            </button>
-          </div>
+                {q[0].toUpperCase() + q.slice(1)}
+              </button>
+            ))}
+            {quality === "custom" && (
+              <div className="popover-custom">
+                <label
+                  className="quality-fn"
+                  title="Fixed segment count (blank = leave to $fa/$fs)"
+                >
+                  $fn
+                  <input
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={customFn ?? ""}
+                    onChange={(e) =>
+                      setQualityPref({
+                        customFn:
+                          e.target.value === ""
+                            ? null
+                            : Math.max(0, Math.round(Number(e.target.value))),
+                      })
+                    }
+                  />
+                </label>
+                <label
+                  className="quality-fn"
+                  title="Max fragment angle, ° (OpenSCAD default 12)"
+                >
+                  $fa
+                  <input
+                    type="number"
+                    min={0.01}
+                    step={1}
+                    placeholder="12"
+                    value={customFa ?? ""}
+                    onChange={(e) =>
+                      setQualityPref({
+                        customFa:
+                          e.target.value === ""
+                            ? null
+                            : Math.max(0.01, Number(e.target.value)),
+                      })
+                    }
+                  />
+                </label>
+                <label
+                  className="quality-fn"
+                  title="Max fragment size, mm (OpenSCAD default 2)"
+                >
+                  $fs
+                  <input
+                    type="number"
+                    min={0.01}
+                    step={0.1}
+                    placeholder="2"
+                    value={customFs ?? ""}
+                    onChange={(e) =>
+                      setQualityPref({
+                        customFs:
+                          e.target.value === ""
+                            ? null
+                            : Math.max(0.01, Number(e.target.value)),
+                      })
+                    }
+                  />
+                </label>
+              </div>
+            )}
+          </Popover>
           <div className="export">
             <button
+              className="export-primary"
+              data-cmd="export"
               onClick={() => onDownload(exportFmt)}
               disabled={status.triangleCount === 0}
+              title={`Export ${exportFmt.toUpperCase()}`}
             >
-              Export
+              Export {exportFmt.toUpperCase()}
             </button>
-            <select
-              aria-label="Export format"
-              value={exportFmt}
-              onChange={(e) => {
-                userPickedFmtRef.current = true;
-                setExportFmt(e.target.value as ExportFmt);
-              }}
-            >
+            <Popover label="" title="Export format, PNG, and animation frames">
               {(is2D ? FORMATS_2D : FORMATS_3D).map((f) => (
-                <option key={f} value={f}>
-                  {f.toUpperCase()}
-                </option>
+                <PopoverAction
+                  key={f}
+                  disabled={status.triangleCount === 0}
+                  onClick={() => {
+                    userPickedFmtRef.current = true;
+                    setExportFmt(f);
+                    void onDownload(f);
+                  }}
+                >
+                  Export {f.toUpperCase()}
+                </PopoverAction>
               ))}
-            </select>
+              <PopoverAction onClick={() => void onSavePng()}>
+                PNG (screenshot)
+              </PopoverAction>
+              <PopoverAction
+                disabled={status.triangleCount === 0}
+                onClick={() => void onExportFrames()}
+              >
+                Frames (zip)
+              </PopoverAction>
+            </Popover>
           </div>
           <button
             className="cmdk"
+            data-cmd="palette"
             onClick={() => setPaletteOpen(true)}
             title="Command palette (⌘K)"
             aria-label="Open command palette"
           >
             ⌘K
           </button>
-          <button
-            className="help-btn"
-            onClick={() => setHelpOpen(true)}
-            title="Help & keyboard shortcuts"
-            aria-label="Help"
-          >
-            ?
-          </button>
-          <button
-            className="github-link"
-            onClick={() => openExternal(GITHUB_URL)}
-            title="View source on GitHub"
-            aria-label="View source on GitHub"
-          >
-            <svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true">
-              <path
-                fill="currentColor"
-                fillRule="evenodd"
-                d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"
-              />
-            </svg>
-          </button>
+          <Popover label="?" title="Help, theme, and source">
+            <PopoverAction onClick={() => setHelpOpen(true)}>
+              Help &amp; keyboard shortcuts
+            </PopoverAction>
+            <div className="popover-section-label">Theme</div>
+            {(["auto", "light", "dark"] as const).map((t) => (
+              <button
+                key={t}
+                className={`popover-row popover-choice ${theme === t ? "active" : ""}`}
+                role="menuitemradio"
+                aria-checked={theme === t}
+                onClick={() => setThemePref(t)}
+              >
+                {t[0].toUpperCase() + t.slice(1)}
+                {t === "auto" ? " (follow OS)" : ""}
+              </button>
+            ))}
+            <PopoverAction onClick={() => openExternal(GITHUB_URL)}>
+              View source on GitHub ↗
+            </PopoverAction>
+            <div className="popover-version">{version || "quito"}</div>
+          </Popover>
         </div>
       </header>
+
+      <input
+        ref={importInputRef}
+        type="file"
+        multiple
+        className="sr-only"
+        aria-hidden="true"
+        tabIndex={-1}
+        onChange={(e) => {
+          if (e.target.files?.length) void importFiles(e.target.files);
+          e.target.value = ""; // allow re-importing the same file
+        }}
+      />
 
       {engineDownloading && (
         <div className="update-banner" role="status" aria-live="polite">
@@ -2517,6 +2483,85 @@ export function App() {
           >
             ⤢ Fit
           </button>
+          {(() => {
+            // Transport strip below the canvas. Only 2 of 10 examples read $t, so
+            // it collapses to a thin bar and expands (FPS/Steps) when the main
+            // file uses $t — it doesn't tax every script with 5 controls.
+            const hasT = files[0]?.content.includes("$t") ?? false;
+            return (
+              <div
+                className={`transport ${hasT ? "expanded" : "collapsed"}`}
+                title="Animation ($t sweeps 0→1)"
+              >
+                <button
+                  className="anim-play"
+                  onClick={() => setPlaying((p) => !p)}
+                  title={playing ? "Pause animation" : "Play animation"}
+                  aria-label={playing ? "Pause animation" : "Play animation"}
+                >
+                  {playing ? "⏸" : "▶"}
+                </button>
+                <input
+                  type="range"
+                  className="transport-scrub"
+                  min={0}
+                  max={1}
+                  step={0.001}
+                  value={time}
+                  onChange={(e) => seekTime(parseFloat(e.target.value))}
+                  aria-label="Animation time $t (0–1)"
+                />
+                <span className="anim-val">$t {time.toFixed(3)}</span>
+                {hasT && (
+                  <>
+                    <label className="anim-field" title="Frames per second">
+                      FPS
+                      <input
+                        type="number"
+                        min={1}
+                        max={60}
+                        value={fps}
+                        onChange={(e) =>
+                          setFps(
+                            Math.max(
+                              1,
+                              Math.min(
+                                60,
+                                Math.round(parseFloat(e.target.value) || 1),
+                              ),
+                            ),
+                          )
+                        }
+                      />
+                    </label>
+                    <label
+                      className="anim-field"
+                      title="Number of frames as $t goes 0→1"
+                    >
+                      Steps
+                      <input
+                        type="number"
+                        min={1}
+                        max={1000}
+                        value={steps}
+                        onChange={(e) =>
+                          setSteps(
+                            Math.max(
+                              1,
+                              Math.min(
+                                1000,
+                                Math.round(parseFloat(e.target.value) || 1),
+                              ),
+                            ),
+                          )
+                        }
+                      />
+                    </label>
+                  </>
+                )}
+              </div>
+            );
+          })()}
         </div>
         {!dockCollapsed && (
           <ResizeHandle
