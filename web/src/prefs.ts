@@ -34,6 +34,10 @@ export interface Prefs {
   /** Dock section open/closed state. */
   paramsOpen: boolean;
   modelOpen: boolean;
+  /** Persisted panel sizes (px). null = use the default. */
+  editorWidth: number | null;
+  dockWidth: number | null;
+  consoleHeight: number | null;
 }
 
 const DEFAULTS: Prefs = {
@@ -47,6 +51,9 @@ const DEFAULTS: Prefs = {
   dockCollapsed: null,
   paramsOpen: true,
   modelOpen: true,
+  editorWidth: null,
+  dockWidth: null,
+  consoleHeight: null,
 };
 
 const QUALITIES: Quality[] = ["draft", "normal", "fine", "custom"];
@@ -106,6 +113,9 @@ export function loadPrefs(): Prefs {
         typeof p.paramsOpen === "boolean" ? p.paramsOpen : DEFAULTS.paramsOpen,
       modelOpen:
         typeof p.modelOpen === "boolean" ? p.modelOpen : DEFAULTS.modelOpen,
+      editorWidth: num(p.editorWidth),
+      dockWidth: num(p.dockWidth),
+      consoleHeight: num(p.consoleHeight),
     };
   } catch {
     return { ...DEFAULTS };

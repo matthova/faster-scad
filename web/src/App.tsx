@@ -38,6 +38,7 @@ import {
   zipFiles,
 } from "./stl";
 import { Dock } from "./Dock";
+import { ResizeHandle } from "./ResizeHandle";
 import {
   parseSchema,
   toLiteral,
@@ -243,6 +244,13 @@ function distinctExportColors(groups: PreviewGroup[]): number {
 // so an ordinary reload mid-render doesn't force recovery mode on next load.
 const SLOW_RENDER_MS = 3000;
 
+// Panel-size defaults + bounds (px) for the resizable layout.
+const EDITOR_W_DEFAULT = 460;
+const DOCK_W_DEFAULT = 288;
+const CONSOLE_H_DEFAULT = 160;
+const clampNum = (v: number, lo: number, hi: number) =>
+  Math.max(lo, Math.min(hi, v));
+
 interface Status {
   ok: boolean;
   message: string;
@@ -409,6 +417,16 @@ export function App() {
   );
   const [paramsOpen, setParamsOpen] = useState(loadPrefs().paramsOpen);
   const [modelOpen, setModelOpen] = useState(loadPrefs().modelOpen);
+  // Resizable panel sizes (px); null → the default. Persisted on drag release.
+  const [editorWidth, setEditorWidth] = useState<number | null>(
+    loadPrefs().editorWidth,
+  );
+  const [dockWidth, setDockWidth] = useState<number | null>(
+    loadPrefs().dockWidth,
+  );
+  const [consoleHeight, setConsoleHeight] = useState<number | null>(
+    loadPrefs().consoleHeight,
+  );
   const [exportFmt, setExportFmt] = useState<ExportFmt>("stl");
   // Whether the user has manually chosen an export format. Until they do, the
   // format auto-tracks the model: 3MF for multi-color 3D models, STL otherwise.
@@ -1066,6 +1084,35 @@ export function App() {
     setModelOpen(v);
     savePrefs({ modelOpen: v });
   }
+
+  // --- resizable panels: apply a pointer delta, then persist on release ---
+  const effEditorW = editorWidth ?? EDITOR_W_DEFAULT;
+  const effDockW = dockWidth ?? DOCK_W_DEFAULT;
+  const effConsoleH = consoleHeight ?? CONSOLE_H_DEFAULT;
+  // Mirror the live sizes so the drag's pointerup closure (bound at pointerdown)
+  // persists the *current* values, not the ones captured at drag start.
+  const sizeRef = useRef({ editorWidth, dockWidth, consoleHeight });
+  sizeRef.current = { editorWidth, dockWidth, consoleHeight };
+  // Deltas arrive incrementally per pointermove, so accumulate with functional
+  // updates rather than adding to a value captured at drag start.
+  function dragEditor(delta: number) {
+    setEditorWidth((w) =>
+      clampNum((w ?? EDITOR_W_DEFAULT) + delta, 260, window.innerWidth - 480),
+    );
+  }
+  function dragDock(delta: number) {
+    // The handle is left of the dock, so dragging right shrinks the dock.
+    setDockWidth((w) =>
+      clampNum((w ?? DOCK_W_DEFAULT) - delta, 200, window.innerWidth - 480),
+    );
+  }
+  function dragConsole(delta: number) {
+    // The handle is atop the console, so dragging up grows it.
+    setConsoleHeight((h) =>
+      clampNum((h ?? CONSOLE_H_DEFAULT) - delta, 80, window.innerHeight - 220),
+    );
+  }
+  const persistSizes = () => savePrefs(sizeRef.current);
 
   /** Swap the render engine between Quito and the vendored OpenSCAD wasm, then
    *  re-render on the new engine. Remembered across sessions. On desktop, "quito"
@@ -2009,7 +2056,14 @@ export function App() {
         />
       )}
 
-      <div className="workspace">
+      <div
+        className="workspace"
+        style={{
+          gridTemplateColumns: `${effEditorW}px 6px 1fr ${
+            dockCollapsed ? "28px" : `6px ${effDockW}px`
+          }`,
+        }}
+      >
         <div className="editor-col">
           <div className="tabs">
             {files.map((f, i) => {
@@ -2077,6 +2131,12 @@ export function App() {
           </div>
           <div className="editor" ref={editorHost} />
         </div>
+        <ResizeHandle
+          axis="x"
+          onDelta={dragEditor}
+          onCommit={persistSizes}
+          title="Drag to resize the editor"
+        />
         <div className="viewer">
           <canvas ref={canvasRef} />
           <button
@@ -2088,6 +2148,14 @@ export function App() {
             ⤢ Fit
           </button>
         </div>
+        {!dockCollapsed && (
+          <ResizeHandle
+            axis="x"
+            onDelta={dragDock}
+            onCommit={persistSizes}
+            title="Drag to resize the dock"
+          />
+        )}
         <Dock
           params={schema}
           overrides={overrides}
@@ -2121,7 +2189,15 @@ export function App() {
       </div>
 
       {consoleOpen && (
-        <div className="console">
+        <ResizeHandle
+          axis="y"
+          onDelta={dragConsole}
+          onCommit={persistSizes}
+          title="Drag to resize the console"
+        />
+      )}
+      {consoleOpen && (
+        <div className="console" style={{ height: effConsoleH }}>
           {consoleLines.length === 0 ? (
             <div className="console-line muted">No output.</div>
           ) : (

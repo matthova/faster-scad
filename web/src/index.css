@@ -207,7 +207,9 @@ body {
 
 .workspace {
   display: grid;
-  grid-template-columns: minmax(260px, 36%) 1fr auto;
+  /* Columns are set inline (resizable): editor | handle | viewer | handle | dock.
+     The fallback here matches the first paint before the inline style applies. */
+  grid-template-columns: 460px 6px 1fr 6px 288px;
   flex: 1;
   min-height: 0;
 }
@@ -217,6 +219,22 @@ body {
   flex-direction: column;
   min-height: 0;
   border-right: 1px solid var(--border);
+}
+
+/* Draggable splitters between panels. */
+.resize-handle {
+  background: transparent;
+  transition: background var(--motion-fast) var(--ease-standard);
+}
+.resize-handle:hover {
+  background: var(--accent);
+}
+.resize-x {
+  cursor: col-resize;
+}
+.resize-y {
+  height: 6px;
+  cursor: row-resize;
 }
 
 .tabs {
@@ -325,10 +343,10 @@ body {
   border-color: var(--accent);
 }
 
-/* Right dock — a scrollable column of collapsible sections. */
+/* Right dock — a scrollable column of collapsible sections. Its width is set by
+   the workspace grid track (resizable); the item just fills the cell. */
 .dock {
   position: relative;
-  width: 288px;
   border-left: 1px solid var(--border);
   background: var(--panel);
   display: flex;
@@ -337,7 +355,6 @@ body {
   overflow-y: auto;
 }
 .dock.collapsed {
-  width: 28px;
   overflow: hidden;
 }
 
@@ -650,7 +667,9 @@ body {
 }
 
 .console {
+  /* Height is set inline (resizable); this is the pre-hydration fallback. */
   height: 160px;
+  flex: none;
   overflow-y: auto;
   background: var(--bg, #141414);
   border-top: 1px solid var(--border);
