@@ -405,6 +405,11 @@ body {
   font-size: var(--text-xs);
   opacity: 0.8;
 }
+/* On the active (amber) row, 0.8 opacity drops the shortcut to 3.95:1; full
+   strength keeps it ≥4.5:1 against the accent background. */
+.palette-item.active .palette-shortcut {
+  opacity: 1;
+}
 .palette-empty {
   padding: var(--space-5) var(--space-6);
   color: var(--muted);
