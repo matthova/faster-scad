@@ -53,8 +53,16 @@ import {
 import { Dock } from "./Dock";
 import { ResizeHandle } from "./ResizeHandle";
 import { Popover, PopoverToggle } from "./Popover";
-import { CommandPalette, type Command } from "./CommandPalette";
+import { CommandPalette } from "./CommandPalette";
 import { HelpSheet } from "./HelpSheet";
+import {
+  resolveCommands,
+  paletteIds,
+  shortcutRows,
+  titleOf,
+  displayKey,
+  type Ctx as CmdCtx,
+} from "./commands";
 import {
   parseSchema,
   toLiteral,
@@ -1893,94 +1901,45 @@ export function App() {
 
   // Command registry (⌘K). Web actions only — the desktop native menu is a
   // separate Rust-driven surface and isn't unified here.
-  const commands: Command[] = [
-    {
-      id: "render",
-      title: "Render",
-      shortcut: "⌘↵",
-      run: () => renderNowRef.current(),
-    },
-    {
-      id: "stop",
-      title: "Stop render",
-      when: rendering,
-      run: () => engineRef.current?.cancel(),
-    },
-    {
-      id: "fit",
-      title: "Zoom to fit",
-      shortcut: "⌘⇧F",
-      run: () => viewerRef.current?.fit(),
-    },
-    {
-      id: "reset-view",
-      title: "Reset view",
-      run: () => viewerRef.current?.resetView(),
-    },
-    {
-      id: "console",
-      title: "Toggle console",
-      shortcut: "⌘J",
-      run: () => setConsoleOpen((o) => !o),
-    },
-    { id: "dock", title: "Toggle dock", run: toggleDock },
-    {
-      id: "grid",
-      title: "Toggle grid & axes",
-      run: () => toggleGrid(!showGrid),
-    },
-    {
-      id: "edges",
-      title: "Toggle edge overlay",
-      run: () => toggleEdges(!showEdges),
-    },
-    {
-      id: "dims",
-      title: "Toggle dimensions",
-      run: () => toggleDims(!showDims),
-    },
-    {
-      id: "section",
-      title: "Toggle section plane",
-      run: () => applySection(!sectionOn, sectionAxis, sectionT),
-    },
-    { id: "fast", title: "Toggle fast preview", run: toggleFastPreview },
-    {
-      id: "engine",
-      title: `Switch engine (${engineKind === "openscad" ? "→ Quito" : "→ OpenSCAD"})`,
-      run: toggleEngine,
-    },
-    {
-      id: "q-draft",
-      title: "Quality: Draft",
-      run: () => setQualityPref({ quality: "draft" }),
-    },
-    {
-      id: "q-normal",
-      title: "Quality: Normal",
-      run: () => setQualityPref({ quality: "normal" }),
-    },
-    {
-      id: "q-fine",
-      title: "Quality: Fine",
-      run: () => setQualityPref({ quality: "fine" }),
-    },
-    { id: "png", title: "Save PNG", run: () => void onSavePng() },
-    {
-      id: "export",
-      title: `Export (${exportFmt.toUpperCase()})`,
-      run: () => void onDownload(exportFmt),
-    },
-    {
-      id: "help",
-      title: "Help & keyboard shortcuts",
-      run: () => setHelpOpen(true),
-    },
-    { id: "new", title: "New project", run: newProject },
-    ...(TAURI
-      ? []
-      : [{ id: "share", title: "Copy share link", run: () => void onShare() }]),
-  ];
+  // Command registry projection: one `run` per id (see commands/). The palette,
+  // help sheet, and shortcut display all derive from the same registry, so a
+  // control is countable and its keyboard hint can't drift from its binding.
+  const cmdCtx: CmdCtx = { rendering, engineKind, exportFmt };
+  const cmdRuns: Record<string, () => void> = {
+    render: () => renderNowRef.current(),
+    stop: () => engineRef.current?.cancel(),
+    fit: () => viewerRef.current?.fit(),
+    "reset-view": () => viewerRef.current?.resetView(),
+    console: () => setConsoleOpen((o) => !o),
+    dock: toggleDock,
+    palette: () => setPaletteOpen((o) => !o),
+    "download-scad": onDownloadScad,
+    grid: () => toggleGrid(!showGrid),
+    edges: () => toggleEdges(!showEdges),
+    dims: () => toggleDims(!showDims),
+    section: () => applySection(!sectionOn, sectionAxis, sectionT),
+    fast: toggleFastPreview,
+    engine: toggleEngine,
+    "q-draft": () => setQualityPref({ quality: "draft" }),
+    "q-normal": () => setQualityPref({ quality: "normal" }),
+    "q-fine": () => setQualityPref({ quality: "fine" }),
+    png: () => void onSavePng(),
+    export: () => void onDownload(exportFmt),
+    help: () => setHelpOpen(true),
+    new: newProject,
+    ...(TAURI ? {} : { share: () => void onShare() }),
+  };
+  const registry = resolveCommands(cmdRuns);
+  const paletteSet = new Set(paletteIds());
+  const commands = registry
+    .filter((c) => paletteSet.has(c.id))
+    .filter((c) => !c.when || c.when(cmdCtx))
+    .map((c) => ({
+      id: c.id,
+      title: titleOf(c, cmdCtx),
+      shortcut: c.key ? displayKey(c.key) : undefined,
+      run: c.run,
+    }));
 
   return (
     <div
@@ -2677,7 +2636,12 @@ export function App() {
           onClose={() => setPaletteOpen(false)}
         />
       )}
-      {helpOpen && <HelpSheet onClose={() => setHelpOpen(false)} />}
+      {helpOpen && (
+        <HelpSheet
+          onClose={() => setHelpOpen(false)}
+          shortcuts={shortcutRows(cmdCtx)}
+        />
+      )}
       {dragActive && (
         <div className="drop-overlay">Drop .scad or data files to import</div>
       )}

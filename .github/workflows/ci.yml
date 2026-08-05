@@ -165,6 +165,7 @@ jobs:
           npx playwright test
           e2e/a11y.spec.ts e2e/focus.spec.ts
           e2e/render.spec.ts e2e/customizer.spec.ts e2e/prefs.spec.ts
+          e2e/palette.spec.ts
 
       - name: Upload Playwright report
         if: failure()

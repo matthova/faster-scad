@@ -5,19 +5,14 @@ import { useEffect } from "react";
 
 interface Props {
   onClose: () => void;
+  /** Generated from the command registry (displayKey + title) so a shortcut can
+   *  never drift from its binding. */
+  shortcuts: [string, string][];
 }
 
-const MOD =
-  typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform)
-    ? "⌘"
-    : "Ctrl";
-
-const SHORTCUTS: [string, string][] = [
-  [`${MOD}K`, "Command palette"],
-  [`${MOD}↵`, "Render"],
-  [`${MOD}J`, "Toggle console"],
-  [`${MOD}⇧F`, "Zoom to fit"],
-  [`${MOD}S`, "Save file (desktop)"],
+// Editor-only keys that aren't registry commands (no palette entry), so they're
+// listed by hand rather than generated.
+const EDITOR_KEYS: [string, string][] = [
   ["Esc", "Dismiss the editor↔preview highlight"],
   ["Tab", "Indent (in the editor)"],
 ];
@@ -53,7 +48,8 @@ const TIPS: [string, string][] = [
   ],
 ];
 
-export function HelpSheet({ onClose }: Props) {
+export function HelpSheet({ onClose, shortcuts }: Props) {
+  const keys = [...shortcuts, ...EDITOR_KEYS];
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -83,7 +79,7 @@ export function HelpSheet({ onClose }: Props) {
           <section>
             <h3>Keyboard</h3>
             <dl className="help-keys">
-              {SHORTCUTS.map(([k, v]) => (
+              {keys.map(([k, v]) => (
                 <div key={k}>
                   <dt>
                     <kbd>{k}</kbd>
