@@ -20,6 +20,7 @@ this directory.
 | **B (proposed M7)** | [track-b-switcher-experience.md](track-b-switcher-experience.md) | Product parity for daily use: desktop Save, inline diagnostics, color/#/% rendering, PNG export | ~3 weeks | An OpenSCAD user can run a real project on Quito desktop without a workflow wall |
 | **C (fold into A/B)** | [track-c-ci-hardening.md](track-c-ci-hardening.md) | Make every headline claim machine-enforced on every PR | ~1.5–2 weeks | No claim in the README that CI doesn't check |
 | **D (M8)** | [track-d-ui-structure.md](track-d-ui-structure.md) | Web UI structure: token system, re-homed controls, and the missing code-CAD controls (`$fn`, quality, inspector, integrity) | six phases, incremental | Every feature has one obvious home; nothing fails silently; the topbar has room for the next feature |
+| **E (M9)** | [track-e-ui-ceiling.md](track-e-ui-ceiling.md) | Give the UI a ceiling: a `CommandDef` registry that makes controls countable, a responsive layout enforced at 1024px, the `renderState.ts`/`usePref` refactors, the Objects/isolate signature move, and a quality floor with Playwright in CI | seven phases (0–6), incremental | The topbar is ≤12 hit targets and does not wrap at 1024px; a control cannot exist without a def; the app is usable on a tablet; the quality net runs on every PR |
 
 ## Why this ordering
 
