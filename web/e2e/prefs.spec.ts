@@ -10,8 +10,9 @@ test("Fast toggle actually switches the render to preview", async ({
 }) => {
   await gotoApp(page);
   await expect(page.locator(".status-integrity")).toHaveText("EXACT");
+  await page.getByRole("button", { name: "Display" }).click();
   await waitForRerender(page, () =>
-    page.getByRole("button", { name: "Fast" }).click(),
+    page.getByRole("button", { name: "Fast preview" }).click(),
   );
   // The render honoured fastPreviewRef.current → the worker returned a preview.
   await expect(page.locator(".status-integrity")).toHaveText("FAST PREVIEW");

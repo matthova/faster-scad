@@ -10,14 +10,15 @@ test("integrity badge reflects the render path", async ({ page }) => {
   await expect(badge).toHaveText("EXACT");
 
   // Fast preview: unions skipped, mesh not watertight.
+  await page.getByRole("button", { name: "Display" }).click();
   await waitForRerender(page, () =>
-    page.getByRole("button", { name: "Fast" }).click(),
+    page.getByRole("button", { name: "Fast preview" }).click(),
   );
   await expect(badge).toHaveText("FAST PREVIEW");
 
   // Back to exact.
   await waitForRerender(page, () =>
-    page.getByRole("button", { name: "Fast" }).click(),
+    page.getByRole("button", { name: "Fast preview" }).click(),
   );
   await expect(badge).toHaveText("EXACT");
 });
