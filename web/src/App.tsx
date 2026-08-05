@@ -37,7 +37,7 @@ import {
   downloadBlob,
   zipFiles,
 } from "./stl";
-import { CustomizerPanel } from "./CustomizerPanel";
+import { Dock } from "./Dock";
 import {
   parseSchema,
   toLiteral,
@@ -402,6 +402,13 @@ export function App() {
   // Monotonic render counter, surfaced as data-render-rev on the status bar so a
   // completed render is observable even though the meta is always visible.
   const [renderRev, setRenderRev] = useState(0);
+  // Right-dock layout: spine collapse (null = auto: spine only when no params)
+  // and per-section open state. All persisted.
+  const [dockPref, setDockPref] = useState<boolean | null>(
+    loadPrefs().dockCollapsed,
+  );
+  const [paramsOpen, setParamsOpen] = useState(loadPrefs().paramsOpen);
+  const [modelOpen, setModelOpen] = useState(loadPrefs().modelOpen);
   const [exportFmt, setExportFmt] = useState<ExportFmt>("stl");
   // Whether the user has manually chosen an export format. Until they do, the
   // format auto-tracks the model: 3MF for multi-color 3D models, STL otherwise.
@@ -1040,6 +1047,24 @@ export function App() {
     if (next.customFn !== undefined) setCustomFn(next.customFn);
     savePrefs(next);
     renderNowRef.current?.();
+  }
+
+  // Effective dock collapse: explicit pref wins, else auto-spine when no params.
+  const dockCollapsed = dockPref ?? schema.length === 0;
+  function toggleDock() {
+    const v = !dockCollapsed;
+    setDockPref(v);
+    savePrefs({ dockCollapsed: v });
+  }
+  function toggleParamsSection() {
+    const v = !paramsOpen;
+    setParamsOpen(v);
+    savePrefs({ paramsOpen: v });
+  }
+  function toggleModelSection() {
+    const v = !modelOpen;
+    setModelOpen(v);
+    savePrefs({ modelOpen: v });
   }
 
   /** Swap the render engine between Quito and the vendored OpenSCAD wasm, then
@@ -2063,7 +2088,7 @@ export function App() {
             ⤢ Fit
           </button>
         </div>
-        <CustomizerPanel
+        <Dock
           params={schema}
           overrides={overrides}
           onChange={setOverride}
@@ -2074,6 +2099,24 @@ export function App() {
           onDeletePreset={deletePreset}
           onImportPresets={importPresets}
           onExportPresets={exportPresets}
+          model={{
+            ok: status.ok,
+            triangleCount: status.triangleCount,
+            vertexCount: status.vertexCount,
+            area: status.area,
+            volume: status.volume,
+            preview: status.preview,
+            geomErrors: status.geomErrors,
+            dims,
+            groups: lastPreview.current.groups,
+            libraries: files.slice(1).map((f) => f.name),
+          }}
+          collapsed={dockCollapsed}
+          onToggleCollapsed={toggleDock}
+          paramsOpen={paramsOpen}
+          onToggleParams={toggleParamsSection}
+          modelOpen={modelOpen}
+          onToggleModel={toggleModelSection}
         />
       </div>
 

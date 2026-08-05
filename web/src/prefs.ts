@@ -29,6 +29,11 @@ export interface Prefs {
   customFn: number | null;
   customFa: number | null;
   customFs: number | null;
+  /** Right-dock collapsed to a spine. null = auto (spine only when no params). */
+  dockCollapsed: boolean | null;
+  /** Dock section open/closed state. */
+  paramsOpen: boolean;
+  modelOpen: boolean;
 }
 
 const DEFAULTS: Prefs = {
@@ -39,6 +44,9 @@ const DEFAULTS: Prefs = {
   customFn: null,
   customFa: null,
   customFs: null,
+  dockCollapsed: null,
+  paramsOpen: true,
+  modelOpen: true,
 };
 
 const QUALITIES: Quality[] = ["draft", "normal", "fine", "custom"];
@@ -92,6 +100,12 @@ export function loadPrefs(): Prefs {
       customFn: num(p.customFn),
       customFa: num(p.customFa),
       customFs: num(p.customFs),
+      dockCollapsed:
+        typeof p.dockCollapsed === "boolean" ? p.dockCollapsed : null,
+      paramsOpen:
+        typeof p.paramsOpen === "boolean" ? p.paramsOpen : DEFAULTS.paramsOpen,
+      modelOpen:
+        typeof p.modelOpen === "boolean" ? p.modelOpen : DEFAULTS.modelOpen,
     };
   } catch {
     return { ...DEFAULTS };

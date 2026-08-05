@@ -48,9 +48,8 @@ export function CustomizerPanel({
   const dirty = Object.keys(overrides).length > 0;
 
   return (
-    <aside className="params">
-      <div className="params-head">
-        <span>Parameters</span>
+    <>
+      <div className="params-presets">
         <button
           onClick={onReset}
           disabled={!dirty}
@@ -58,8 +57,6 @@ export function CustomizerPanel({
         >
           Reset
         </button>
-      </div>
-      <div className="params-presets">
         <select
           aria-label="Parameter set"
           value={selected}
@@ -132,7 +129,7 @@ export function CustomizerPanel({
           </fieldset>
         ))}
       </div>
-    </aside>
+    </>
   );
 }
 
