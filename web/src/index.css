@@ -437,9 +437,7 @@ body {
   color: var(--accent);
 }
 .popover-panel {
-  position: absolute;
-  top: calc(100% + var(--space-2));
-  left: 0;
+  position: fixed;
   z-index: var(--z-popover);
   min-width: 200px;
   background: var(--raised);
@@ -450,6 +448,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
+  overflow-y: auto;
 }
 .popover-row {
   display: flex;
@@ -463,6 +462,13 @@ body {
 }
 .popover-row:hover {
   background: var(--panel);
+}
+.popover-setting {
+  justify-content: space-between;
+}
+.popover-setting .quality-select {
+  margin-left: var(--space-6);
+  padding: var(--space-2) var(--space-3);
 }
 /* Section-plane axis buttons + position slider inside the Display popover. */
 .section-controls {
@@ -500,7 +506,7 @@ body {
   min-width: 90px;
 }
 
-/* Render-quality picker + its inline custom-$fn field. */
+/* Render-quality picker inside the Display popover. */
 .quality-select {
   background: var(--panel);
   color: var(--text);
