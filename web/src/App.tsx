@@ -412,6 +412,9 @@ export function App() {
   // Autosave to localStorage failed (quota exceeded): warn instead of silently
   // dropping the user's work.
   const [saveFailed, setSaveFailed] = useState(false);
+  // Drag-and-drop file import: highlight state + a message for unsupported files.
+  const [dragActive, setDragActive] = useState(false);
+  const [importMsg, setImportMsg] = useState("");
   const [consoleOpen, setConsoleOpen] = useState(false);
   const [consoleFilter, setConsoleFilter] = useState<
     "all" | "error" | "warn" | "echo"
@@ -1344,6 +1347,56 @@ export function App() {
     persist();
   }
 
+  // Text extensions we can load in the browser (binary STL/3MF/PNG need a
+  // Vec<u8> channel through the engine — not wired yet).
+  const TEXT_IMPORT = /\.(scad|txt|dat|csv|json|off|obj|amf|dxf|svg|stl)$/i;
+  const BINARY_IMPORT = /\.(3mf|png|jpg|jpeg)$/i;
+
+  /** Import dropped/opened local files (browser). A .scad replaces the pristine
+   *  default main so it renders immediately; everything else is added as a tab.
+   *  Binary formats surface a message instead of failing silently. */
+  async function importFiles(fileList: FileList | globalThis.File[]) {
+    const arr = Array.from(fileList);
+    const binary = arr.filter((f) => BINARY_IMPORT.test(f.name));
+    const text = arr.filter((f) => TEXT_IMPORT.test(f.name));
+    if (binary.length) {
+      setImportMsg(
+        `Can't import ${binary
+          .map((f) => f.name)
+          .join(
+            ", ",
+          )} in the browser yet — binary STL/3MF/PNG need the desktop app.`,
+      );
+    }
+    if (text.length === 0) return;
+    const read = await Promise.all(
+      text.map(async (f) => ({ name: f.name, content: await f.text() })),
+    );
+    let next = filesRef.current.slice();
+    const isPristine = next[0]?.content === DEFAULT_FILES[0].content;
+    let focus = next.length;
+    for (const file of read) {
+      // De-dupe names so a re-drop doesn't collide.
+      let name = file.name;
+      let n = 1;
+      while (next.some((f) => f.name === name))
+        name = file.name.replace(/(\.[^.]+)?$/, (ext) => `-${n++}${ext}`);
+      if (file.name.endsWith(".scad") && isPristine && next.length <= 2) {
+        next = [{ name, content: file.content }, ...next.slice(1)];
+        focus = 0;
+      } else {
+        next.push({ name, content: file.content });
+        focus = next.length - 1;
+      }
+    }
+    filesRef.current = next;
+    setFiles(next);
+    activeRef.current = -1;
+    switchTo(Math.min(focus, next.length - 1));
+    persist();
+    requestRenderRef.current();
+  }
+
   function deleteFile(idx: number) {
     if (idx === 0) return; // main is not deletable
     const next = filesRef.current.filter((_, i) => i !== idx);
@@ -1946,7 +1999,24 @@ export function App() {
   ];
 
   return (
-    <div className="app">
+    <div
+      className="app"
+      onDragOver={(e) => {
+        if (e.dataTransfer.types.includes("Files")) {
+          e.preventDefault();
+          setDragActive(true);
+        }
+      }}
+      onDragLeave={(e) => {
+        // Only clear when the pointer actually leaves the app, not a child.
+        if (e.currentTarget === e.target) setDragActive(false);
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragActive(false);
+        if (e.dataTransfer.files.length) void importFiles(e.dataTransfer.files);
+      }}
+    >
       <header className="topbar">
         <div className="brand">
           Quito <span className="tag">playground</span>
@@ -2247,6 +2317,23 @@ export function App() {
           </button>
         </div>
       </header>
+
+      {importMsg && (
+        <div className="update-banner error" role="alert">
+          <div className="update-banner-row">
+            <span className="update-banner-msg">{importMsg}</span>
+            <div className="update-banner-actions">
+              <button
+                className="update-dismiss"
+                onClick={() => setImportMsg("")}
+                aria-label="Dismiss"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {saveFailed && (
         <div className="update-banner error" role="alert">
@@ -2590,6 +2677,9 @@ export function App() {
         />
       )}
       {helpOpen && <HelpSheet onClose={() => setHelpOpen(false)} />}
+      {dragActive && (
+        <div className="drop-overlay">Drop .scad or data files to import</div>
+      )}
     </div>
   );
 }

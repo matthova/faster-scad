@@ -175,6 +175,21 @@ body {
   border-color: var(--accent);
 }
 
+/* Drag-and-drop import overlay. */
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  border: 3px dashed var(--accent);
+  color: var(--text);
+  font-size: var(--text-lg);
+  pointer-events: none;
+}
+
 /* ⌘K trigger button. */
 .cmdk {
   font-family: var(--font-mono);
