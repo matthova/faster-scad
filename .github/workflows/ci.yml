@@ -159,9 +159,12 @@ jobs:
         working-directory: web
         run: npx playwright install --with-deps chromium
 
-      - name: E2E — a11y + focus (Playwright)
+      - name: E2E — a11y, focus, render loop (Playwright)
         working-directory: web
-        run: npx playwright test e2e/a11y.spec.ts e2e/focus.spec.ts
+        run: >-
+          npx playwright test
+          e2e/a11y.spec.ts e2e/focus.spec.ts
+          e2e/render.spec.ts e2e/customizer.spec.ts
 
       - name: Upload Playwright report
         if: failure()

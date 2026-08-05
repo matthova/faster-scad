@@ -28,6 +28,19 @@ import {
 } from "./engine";
 import type { RenderResponse } from "./engineWorker";
 import {
+  reduce,
+  parseDiagnostics,
+  keepOverrides,
+  FORMATS_2D,
+  FORMATS_3D,
+  INITIAL_RENDER_STATE,
+  type RenderState,
+  type ReduceCtx,
+  type Status,
+  type EngineDiag,
+  type ExportFmt,
+} from "./renderState";
+import {
   buildBinarySTL,
   buildOFF,
   buildOBJ,
@@ -47,7 +60,6 @@ import {
   toLiteral,
   toParamSetsJson,
   fromParamSetsJson,
-  type Param,
   type ParamValue,
 } from "./customizer";
 import {
@@ -152,8 +164,6 @@ module rounded_box(sz, r) {
   },
 ];
 
-type ExportFmt = "stl" | "off" | "obj" | "3mf" | "amf" | "dxf" | "svg";
-
 /** Format a bounding-box dimension: whole numbers plain, else up to 2 decimals. */
 function fmtDim(v: number): string {
   return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, "");
@@ -163,14 +173,6 @@ function fmtDim(v: number): string {
 function basename(path: string): string {
   const seg = path.split(/[/\\]/).pop();
   return seg && seg.length ? seg : path;
-}
-
-/** A structured diagnostic from the engine (byte offsets into the main source). */
-interface EngineDiag {
-  severity: "error" | "warning";
-  message: string;
-  start: number; // UTF-8 byte offset, or -1 when unknown
-  end: number;
 }
 
 /** UTF-8 byte length of a Unicode code point. */
@@ -224,24 +226,6 @@ function toCmDiagnostics(diags: EngineDiag[], source: string): Diagnostic[] {
   return out;
 }
 
-// Formats offered per model dimensionality — 2D profiles export to vector
-// formats, 3D solids to mesh formats.
-const FORMATS_3D: ExportFmt[] = ["stl", "off", "obj", "3mf", "amf"];
-const FORMATS_2D: ExportFmt[] = ["dxf", "svg"];
-
-// A model is "multi-color" for export purposes when its exportable (non-`%`
-// background) color groups use more than one distinct color. STL silently drops
-// color; 3MF preserves it as separate objects — so we default multi-color models
-// to 3MF until the user picks a format themselves.
-function distinctExportColors(groups: PreviewGroup[]): number {
-  const seen = new Set<string>();
-  for (const g of groups) {
-    if (g.mode === "background") continue;
-    seen.add(g.color.join(","));
-  }
-  return seen.size;
-}
-
 // A render running longer than this is considered a death-spiral candidate and
 // arms the crash-recovery sentinel (see project.ts). Fast renders never trip it,
 // so an ordinary reload mid-render doesn't force recovery mode on next load.
@@ -253,26 +237,6 @@ const DOCK_W_DEFAULT = 288;
 const CONSOLE_H_DEFAULT = 160;
 const clampNum = (v: number, lo: number, hi: number) =>
   Math.max(lo, Math.min(hi, v));
-
-interface Status {
-  ok: boolean;
-  message: string;
-  triangleCount: number;
-  vertexCount: number;
-  /** Total surface area (3D) or enclosed area (2D). */
-  area: number;
-  volume: number;
-  ms: number;
-  echo: string;
-  warnings: string;
-  error: string;
-  /** Recoverable geometry errors (degraded render): a mesh is shown but a CSG op
-   *  failed and was replaced by a fallback. Empty when geometry is exact. */
-  geomErrors: string;
-  /** The shown mesh came from the fast, non-watertight preview path, so `volume`
-   *  is approximate (it counts skipped-union interior walls). */
-  preview: boolean;
-}
 
 export function App() {
   const editorHost = useRef<HTMLDivElement>(null);
@@ -357,6 +321,10 @@ export function App() {
     saved?.paramSets ?? {},
   );
   const paramsJsonRef = useRef("");
+  // The main source snapshotted at render-request time, so onResult can record
+  // which source produced the shown mesh (renderState.renderedSource) without
+  // reading the possibly-newer live editor buffer.
+  const renderedSourceRef = useRef("");
   const requestRenderRef = useRef<() => void>(() => {});
   const renderNowRef = useRef<() => void>(() => {}); // immediate render (animation frames bypass the debounce)
   // During frame export: resolved by onResult when the current frame's render lands.
@@ -389,23 +357,49 @@ export function App() {
 
   const [files, setFiles] = useState<File[]>(filesRef.current);
   const [active, setActive] = useState(activeRef.current);
-  const [status, setStatus] = useState<Status>({
-    ok: true,
-    message: "initializing…",
-    triangleCount: 0,
-    vertexCount: 0,
-    area: 0,
-    volume: 0,
-    ms: 0,
-    echo: "",
-    warnings: "",
-    error: "",
-    geomErrors: "",
-    preview: false,
+  // The nine fields a completed render replaces, in one state so onResult can
+  // fold them through the pure `reduce` (see renderState.ts) reading `prev` from
+  // inside the []-deps mount effect. Reads use the destructured names below, so
+  // the rest of the component is unchanged; writers outside onResult go through
+  // the partial updaters.
+  const [renderState, setRenderState] = useState<RenderState>({
+    ...INITIAL_RENDER_STATE,
+    overrides: overridesRef.current,
   });
-  const [version, setVersion] = useState("");
+  const {
+    status,
+    version,
+    renderRev,
+    exportFmt,
+    is2D,
+    schema,
+    overrides,
+    diagCounts,
+  } = renderState;
+  const setStatus = (u: Status | ((s: Status) => Status)) =>
+    setRenderState((p) => ({
+      ...p,
+      status:
+        typeof u === "function" ? (u as (s: Status) => Status)(p.status) : u,
+    }));
+  const setOverrides = (
+    u:
+      | Record<string, ParamValue>
+      | ((o: Record<string, ParamValue>) => Record<string, ParamValue>),
+  ) =>
+    setRenderState((p) => ({
+      ...p,
+      overrides: typeof u === "function" ? u(p.overrides) : u,
+    }));
+  const setExportFmt = (u: ExportFmt | ((f: ExportFmt) => ExportFmt)) =>
+    setRenderState((p) => ({
+      ...p,
+      exportFmt: typeof u === "function" ? u(p.exportFmt) : u,
+    }));
   // A render is in flight (drives the "rendering…" indicator + Stop button).
   const [rendering, setRendering] = useState(false);
+  // (status/version/renderRev/exportFmt/is2D/schema/overrides/diagCounts are
+  // fields of `renderState` above.)
   // Recovery mode: the restored project wasn't auto-rendered because the last
   // render never finished. Shows a banner and waits for the user to press Render.
   const [recovering, setRecovering] = useState(wasStuck);
@@ -424,9 +418,6 @@ export function App() {
   >("all");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
-  // Monotonic render counter, surfaced as data-render-rev on the status bar so a
-  // completed render is observable even though the meta is always visible.
-  const [renderRev, setRenderRev] = useState(0);
   // Right-dock layout: spine collapse (null = auto: spine only when no params)
   // and per-section open state. All persisted.
   const [dockPref, setDockPref] = useState<boolean | null>(
@@ -450,11 +441,9 @@ export function App() {
   const [sectionOn, setSectionOn] = useState(loadPrefs().sectionOn);
   const [sectionAxis, setSectionAxis] = useState(loadPrefs().sectionAxis);
   const [sectionT, setSectionT] = useState(loadPrefs().sectionT);
-  const [exportFmt, setExportFmt] = useState<ExportFmt>("stl");
   // Whether the user has manually chosen an export format. Until they do, the
   // format auto-tracks the model: 3MF for multi-color 3D models, STL otherwise.
   const userPickedFmtRef = useRef(false);
-  const [is2D, setIs2D] = useState(false);
   const [dims, setDims] = useState<MeshInfo | null>(null);
   const [ortho, setOrtho] = useState(false);
   const [linkHighlight, setLinkHighlight] = useState(linkHighlightRef.current);
@@ -474,22 +463,10 @@ export function App() {
   const [playing, setPlaying] = useState(sharedAnim?.playing ?? false);
   const [fps, setFps] = useState(sharedAnim?.fps ?? 15);
   const [steps, setSteps] = useState(sharedAnim?.steps ?? 20);
-  const [schema, setSchema] = useState<Param[]>([]);
-  const [overrides, setOverrides] = useState<Record<string, ParamValue>>(
-    overridesRef.current,
-  );
   const [paramSets, setParamSets] = useState<
     Record<string, Record<string, ParamValue>>
   >(paramSetsRef.current);
   const [shareMsg, setShareMsg] = useState("");
-  // Diagnostic counts for the main file (error/warning), for the tab badge.
-  const [diagCounts, setDiagCounts] = useState<{
-    errors: number;
-    warnings: number;
-  }>({
-    errors: 0,
-    warnings: 0,
-  });
 
   function persist() {
     const ok = saveProject({
@@ -627,6 +604,8 @@ export function App() {
         );
       }
       const libs = fs.slice(1);
+      // Snapshot the source this render will reflect (for renderedSource).
+      renderedSourceRef.current = fs[0].content;
       if (engineRef.current instanceof DesktopEngine) {
         // Native engine resolves include/use from disk (OPENSCADPATH) + the
         // in-memory tabs; no CDN fetch needed. Only the native engine can read
@@ -1478,42 +1457,37 @@ export function App() {
     window.clearTimeout(slowTimer.current);
     if (!r.stopped) markRenderPending();
 
-    if (r.version) setVersion(r.version);
-
     // Unblock a frame-export step waiting on this render (mesh is applied below).
     const frameWaiter = frameWaiterRef.current;
 
-    // Inline diagnostics: parse the structured channel, remember it (for the
-    // tab badge), and squiggle it in the editor when the main tab is showing.
-    let diags: EngineDiag[] = [];
-    try {
-      diags = JSON.parse(r.diagnostics || "[]") as EngineDiag[];
-    } catch {
-      diags = [];
-    }
-    diagRef.current = diags;
-    setDiagCounts({
-      errors: diags.filter((d) => d.severity === "error").length,
-      warnings: diags.filter((d) => d.severity === "warning").length,
-    });
+    // Inline diagnostics: remember them (for the tab badge) and squiggle them in
+    // the editor when the main tab is showing.
+    diagRef.current = parseDiagnostics(r.diagnostics);
     applyDiagnostics();
 
-    if (r.params && r.params !== paramsJsonRef.current) {
+    // Params changed → the reducer re-parses the schema and drops overrides no
+    // longer in it; mirror the shadow ref + parse cache here since the render
+    // path reads them. The parse gate avoids re-filtering every playback frame.
+    const paramsChanged = !!r.params && r.params !== paramsJsonRef.current;
+    if (paramsChanged) {
       paramsJsonRef.current = r.params;
-      const next = parseSchema(r.params);
-      setSchema(next);
-      const kept: Record<string, ParamValue> = {};
-      for (const [k, v] of Object.entries(overridesRef.current)) {
-        if (next.some((p) => p.name === k)) kept[k] = v;
-      }
-      if (
-        Object.keys(kept).length !== Object.keys(overridesRef.current).length
-      ) {
-        overridesRef.current = kept;
-        setOverrides(kept);
-      }
+      overridesRef.current = keepOverrides(
+        overridesRef.current,
+        parseSchema(r.params),
+      );
     }
 
+    // Fold the nine display fields in one batched update, reading `prev` via the
+    // updater (this call site is inside the []-deps mount effect and cannot read
+    // state any other way). All side effects stay below.
+    const ctx: ReduceCtx = {
+      userPickedFmt: userPickedFmtRef.current,
+      renderedSource: renderedSourceRef.current,
+      paramsChanged,
+    };
+    setRenderState((prev) => reduce(prev, r, ctx));
+
+    // ---- side effects (refs + imperative viewer APIs only, never state) ----
     if (r.ok) {
       lastPositions.current = r.positions;
       // Colored preview groups (present only when the model uses color/`#`/`%`).
@@ -1558,47 +1532,10 @@ export function App() {
       if (r.viewport && viewerRef.current && !exportingRef.current) {
         applyScriptCamera(r.viewport);
       }
-      // Offer vector formats for 2D models, mesh formats for 3D; keep the
-      // selected format valid when the model's dimensionality changes.
-      setIs2D(r.is2D);
-      const multiColor = distinctExportColors(groups) > 1;
-      setExportFmt((f) => {
-        if (r.is2D) return FORMATS_2D.includes(f) ? f : "dxf";
-        // Until the user picks a format, default multi-color models to 3MF (which
-        // preserves the colors) and everything else to STL.
-        if (!userPickedFmtRef.current) return multiColor ? "3mf" : "stl";
-        return FORMATS_3D.includes(f) ? f : "stl";
-      });
-      setStatus({
-        ok: true,
-        message: r.geomErrors
-          ? `${r.triangleCount.toLocaleString()} triangles · geometry errors`
-          : `${r.triangleCount.toLocaleString()} triangles`,
-        triangleCount: r.triangleCount,
-        vertexCount: r.vertexCount,
-        area: r.area,
-        volume: r.volume,
-        ms: r.ms,
-        echo: r.echo,
-        warnings: r.warnings,
-        error: "",
-        geomErrors: r.geomErrors,
-        preview: r.preview ?? false,
-      });
       // A degraded render still shows a mesh, but the user should know it's
       // wrong somewhere — pop the console so the error is visible.
       if (r.geomErrors) setConsoleOpen(true);
     } else {
-      setStatus((s) => ({
-        ...s,
-        ok: false,
-        message: r.error,
-        ms: r.ms,
-        echo: r.echo,
-        warnings: r.warnings,
-        error: r.error,
-        geomErrors: r.geomErrors,
-      }));
       setConsoleOpen(true);
     }
 
@@ -1613,10 +1550,6 @@ export function App() {
     // we never reach here and the sentinel stays set so the next load recovers.
     // A *stopped* result (watchdog/Stop) is exempt — see settleRenderPending.
     settleRenderPending(!!r.stopped);
-
-    // Bump a monotonic revision so a "new render landed" is observable (the
-    // status meta is now always visible, so its presence no longer signals it).
-    setRenderRev((n) => n + 1);
   }
 
   // A console line carries a source span only when the structured diagnostics
