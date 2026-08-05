@@ -856,6 +856,28 @@ export class Viewer {
     if (this.geometry) this.frame(this.geometry);
   }
 
+  /** Frame the model to fill the view WITHOUT changing the current orientation
+   *  (unlike setPreset/resetView, which also snap the angle). Zoom-to-fit. */
+  fit() {
+    if (!this.geometry) return;
+    const box = this.geometry.boundingBox!;
+    const size = new THREE.Vector3();
+    const center = new THREE.Vector3();
+    box.getSize(size);
+    box.getCenter(center);
+    const radius = Math.max(size.x, size.y, size.z) * 0.75 + 1;
+    const dist = radius / Math.sin((this.perspCamera.fov * Math.PI) / 360);
+    // Preserve the current view direction (target → eye); only re-center + zoom.
+    const dir = this.camera.position.clone().sub(this.controls.target);
+    if (dir.lengthSq() === 0) dir.set(0, -1, 0);
+    dir.normalize();
+    this.camera.position.copy(center.clone().add(dir.multiplyScalar(dist)));
+    if (this.camera instanceof THREE.OrthographicCamera)
+      this.setOrthoFrustum(radius);
+    this.controls.target.copy(center);
+    this.controls.update();
+  }
+
   // ---------------------------------------------------------------------------
   // Navigation view cube
   // ---------------------------------------------------------------------------

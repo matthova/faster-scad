@@ -15,7 +15,6 @@ import {
 import {
   Viewer,
   type MeshInfo,
-  type ViewPreset,
   type PreviewGroup,
   type ProvenanceGroup,
   type ThemeMode,
@@ -1738,20 +1737,6 @@ export function App() {
               .scad
             </button>
           )}
-          <span className="view-presets">
-            {(["iso", "front", "top", "right"] as ViewPreset[]).map((p) => (
-              <button
-                key={p}
-                onClick={() => viewerRef.current?.setPreset(p)}
-                title={`${p} view`}
-              >
-                {p[0].toUpperCase()}
-              </button>
-            ))}
-          </span>
-          <button onClick={() => viewerRef.current?.resetView()}>
-            Reset view
-          </button>
           <button
             className={ortho ? "active" : undefined}
             onClick={() => {
@@ -2069,6 +2054,14 @@ export function App() {
         </div>
         <div className="viewer">
           <canvas ref={canvasRef} />
+          <button
+            className="viewer-fit"
+            onClick={() => viewerRef.current?.fit()}
+            title="Zoom to fit — frame the model without changing the angle (⌘⇧F)"
+            aria-label="Zoom to fit"
+          >
+            ⤢ Fit
+          </button>
         </div>
         <CustomizerPanel
           params={schema}
