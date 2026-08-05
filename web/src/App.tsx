@@ -1,22 +1,31 @@
 import { useEffect, useRef, useState } from "react";
 import { EditorView, keymap } from "@codemirror/view";
-import { EditorState, Compartment } from "@codemirror/state";
+import { EditorState, Compartment, Prec } from "@codemirror/state";
 import { syntaxHighlighting } from "@codemirror/language";
 import { setDiagnostics, type Diagnostic } from "@codemirror/lint";
 import { basicSetup } from "codemirror";
 import { indentWithTab } from "@codemirror/commands";
 import { openscad } from "./lang/openscad";
-import { darkTheme, lightTheme, darkHighlight, lightHighlight } from "./lang/theme";
+import {
+  darkTheme,
+  lightTheme,
+  darkHighlight,
+  lightHighlight,
+} from "./lang/theme";
 import {
   Viewer,
   type MeshInfo,
-  type ViewPreset,
   type PreviewGroup,
   type ProvenanceGroup,
   type ThemeMode,
   type Span,
 } from "./viewer";
-import { Engine, OpenscadEngine, export2dBrowser, renderMeshExactBrowser } from "./engine";
+import {
+  Engine,
+  OpenscadEngine,
+  export2dBrowser,
+  renderMeshExactBrowser,
+} from "./engine";
 import type { RenderResponse } from "./engineWorker";
 import {
   buildBinarySTL,
@@ -28,7 +37,11 @@ import {
   downloadBlob,
   zipFiles,
 } from "./stl";
-import { CustomizerPanel } from "./CustomizerPanel";
+import { Dock } from "./Dock";
+import { ResizeHandle } from "./ResizeHandle";
+import { Popover, PopoverToggle } from "./Popover";
+import { CommandPalette, type Command } from "./CommandPalette";
+import { HelpSheet } from "./HelpSheet";
 import {
   parseSchema,
   toLiteral,
@@ -46,7 +59,14 @@ import {
   wasRenderPending,
   type File,
 } from "./project";
-import { loadPrefs, savePrefs, type EngineKind } from "./prefs";
+import {
+  loadPrefs,
+  savePrefs,
+  qualityOverrides,
+  type EngineKind,
+  type Quality,
+  type QualitySettings,
+} from "./prefs";
 import { EXAMPLES } from "./examples";
 import { decodeSharedProject, shareUrl } from "./share";
 import { resolveClosure } from "./library";
@@ -80,7 +100,9 @@ const LIB_BASE = new URL("lib/", document.baseURI).href;
 
 /** The current OS appearance from `prefers-color-scheme`. */
 function currentMode(): ThemeMode {
-  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  return window.matchMedia("(prefers-color-scheme: dark)").matches
+    ? "dark"
+    : "light";
 }
 
 /** Editor theme + syntax-highlighting extensions for a given appearance. Placed
@@ -225,10 +247,20 @@ function distinctExportColors(groups: PreviewGroup[]): number {
 // so an ordinary reload mid-render doesn't force recovery mode on next load.
 const SLOW_RENDER_MS = 3000;
 
+// Panel-size defaults + bounds (px) for the resizable layout.
+const EDITOR_W_DEFAULT = 460;
+const DOCK_W_DEFAULT = 288;
+const CONSOLE_H_DEFAULT = 160;
+const clampNum = (v: number, lo: number, hi: number) =>
+  Math.max(lo, Math.min(hi, v));
+
 interface Status {
   ok: boolean;
   message: string;
   triangleCount: number;
+  vertexCount: number;
+  /** Total surface area (3D) or enclosed area (2D). */
+  area: number;
   volume: number;
   ms: number;
   echo: string;
@@ -246,7 +278,9 @@ export function App() {
   const editorHost = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const viewerRef = useRef<Viewer | null>(null);
-  const engineRef = useRef<Engine | DesktopEngine | DesktopOpenscadEngine | null>(null);
+  const engineRef = useRef<
+    Engine | DesktopEngine | DesktopOpenscadEngine | null
+  >(null);
   // Directory of the opened file, for the native engine's disk include/use
   // resolution. Held here (not just on the engine instance) so it survives an
   // engine swap: switching to OpenSCAD and back rebuilds the DesktopEngine, and
@@ -255,7 +289,10 @@ export function App() {
   const viewRef = useRef<EditorView | null>(null);
   const lastPositions = useRef<Float32Array>(new Float32Array(0));
   // Preview color channel from the last render, for colored 3MF export.
-  const lastPreview = useRef<{ positions: Float32Array; groups: PreviewGroup[] }>({
+  const lastPreview = useRef<{
+    positions: Float32Array;
+    groups: PreviewGroup[];
+  }>({
     positions: new Float32Array(0),
     groups: [],
   });
@@ -280,6 +317,14 @@ export function App() {
   // Fast (non-watertight) preview toggle. Mirrored to a ref so the once-wired
   // `renderNow` closure reads the live value.
   const fastPreviewRef = useRef(loadPrefs().fastPreview);
+  // Render quality ($fn/$fa/$fs). Mirrored to a ref so `renderNow` injects the
+  // live setting; a NOT-in-share-link pref (quality is a viewing preference).
+  const qualityRef = useRef<QualitySettings>({
+    quality: loadPrefs().quality,
+    customFn: loadPrefs().customFn,
+    customFa: loadPrefs().customFa,
+    customFs: loadPrefs().customFs,
+  });
   // Active render engine. "quito" is our engine (native C++ kernel on desktop,
   // wasm in the browser); "openscad" is the vendored OpenSCAD wasm build, which
   // runs in-webview on both. Mirrored to a ref so the once-wired render closures
@@ -300,11 +345,17 @@ export function App() {
   // content, so it always renders. Read once at startup, before any render arms
   // the sentinel again.
   const wasStuck = useRef(!sharedRef.current && wasRenderPending()).current;
-  const filesRef = useRef<File[]>(saved?.files ?? DEFAULT_FILES.map((f) => ({ ...f })));
+  const filesRef = useRef<File[]>(
+    saved?.files ?? DEFAULT_FILES.map((f) => ({ ...f })),
+  );
   const activeRef = useRef(saved?.active ?? 0);
   const suppressRef = useRef(false);
-  const overridesRef = useRef<Record<string, ParamValue>>(saved?.overrides ?? {});
-  const paramSetsRef = useRef<Record<string, Record<string, ParamValue>>>(saved?.paramSets ?? {});
+  const overridesRef = useRef<Record<string, ParamValue>>(
+    saved?.overrides ?? {},
+  );
+  const paramSetsRef = useRef<Record<string, Record<string, ParamValue>>>(
+    saved?.paramSets ?? {},
+  );
   const paramsJsonRef = useRef("");
   const requestRenderRef = useRef<() => void>(() => {});
   const renderNowRef = useRef<() => void>(() => {}); // immediate render (animation frames bypass the debounce)
@@ -332,7 +383,9 @@ export function App() {
   // recipient opens on the same frame and speed.
   const sharedAnim = sharedRef.current?.anim;
   const timeRef = useRef(sharedAnim?.t ?? 0); // $t for animation
-  const stepRef = useRef(Math.round((sharedAnim?.t ?? 0) * (sharedAnim?.steps ?? 20))); // current animation frame index (0..steps-1)
+  const stepRef = useRef(
+    Math.round((sharedAnim?.t ?? 0) * (sharedAnim?.steps ?? 20)),
+  ); // current animation frame index (0..steps-1)
 
   const [files, setFiles] = useState<File[]>(filesRef.current);
   const [active, setActive] = useState(activeRef.current);
@@ -340,6 +393,8 @@ export function App() {
     ok: true,
     message: "initializing…",
     triangleCount: 0,
+    vertexCount: 0,
+    area: 0,
     volume: 0,
     ms: 0,
     echo: "",
@@ -354,7 +409,44 @@ export function App() {
   // Recovery mode: the restored project wasn't auto-rendered because the last
   // render never finished. Shows a banner and waits for the user to press Render.
   const [recovering, setRecovering] = useState(wasStuck);
+  // Autosave to localStorage failed (quota exceeded): warn instead of silently
+  // dropping the user's work.
+  const [saveFailed, setSaveFailed] = useState(false);
+  // Drag-and-drop file import: highlight state + a message for unsupported files.
+  const [dragActive, setDragActive] = useState(false);
+  const [importMsg, setImportMsg] = useState("");
   const [consoleOpen, setConsoleOpen] = useState(false);
+  const [consoleFilter, setConsoleFilter] = useState<
+    "all" | "error" | "warn" | "echo"
+  >("all");
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+  // Monotonic render counter, surfaced as data-render-rev on the status bar so a
+  // completed render is observable even though the meta is always visible.
+  const [renderRev, setRenderRev] = useState(0);
+  // Right-dock layout: spine collapse (null = auto: spine only when no params)
+  // and per-section open state. All persisted.
+  const [dockPref, setDockPref] = useState<boolean | null>(
+    loadPrefs().dockCollapsed,
+  );
+  const [paramsOpen, setParamsOpen] = useState(loadPrefs().paramsOpen);
+  const [modelOpen, setModelOpen] = useState(loadPrefs().modelOpen);
+  // Resizable panel sizes (px); null → the default. Persisted on drag release.
+  const [editorWidth, setEditorWidth] = useState<number | null>(
+    loadPrefs().editorWidth,
+  );
+  const [dockWidth, setDockWidth] = useState<number | null>(
+    loadPrefs().dockWidth,
+  );
+  const [consoleHeight, setConsoleHeight] = useState<number | null>(
+    loadPrefs().consoleHeight,
+  );
+  const [showGrid, setShowGrid] = useState(loadPrefs().showGrid);
+  const [showEdges, setShowEdges] = useState(loadPrefs().showEdges);
+  const [showDims, setShowDims] = useState(loadPrefs().showDims);
+  const [sectionOn, setSectionOn] = useState(loadPrefs().sectionOn);
+  const [sectionAxis, setSectionAxis] = useState(loadPrefs().sectionAxis);
+  const [sectionT, setSectionT] = useState(loadPrefs().sectionT);
   const [exportFmt, setExportFmt] = useState<ExportFmt>("stl");
   // Whether the user has manually chosen an export format. Until they do, the
   // format auto-tracks the model: 3MF for multi-color 3D models, STL otherwise.
@@ -364,7 +456,15 @@ export function App() {
   const [ortho, setOrtho] = useState(false);
   const [linkHighlight, setLinkHighlight] = useState(linkHighlightRef.current);
   const [fastPreview, setFastPreview] = useState(fastPreviewRef.current);
-  const [engineKind, setEngineKind] = useState<EngineKind>(engineKindRef.current);
+  const [quality, setQuality] = useState<Quality>(qualityRef.current.quality);
+  // Custom-quality $fn (the crash banner tells users to lower it). $fa/$fs get a
+  // fuller editor with the Quality popover in a later phase.
+  const [customFn, setCustomFn] = useState<number | null>(
+    qualityRef.current.customFn,
+  );
+  const [engineKind, setEngineKind] = useState<EngineKind>(
+    engineKindRef.current,
+  );
   // OS light/dark appearance. Auto-follows `prefers-color-scheme`; no toggle.
   const [mode, setMode] = useState<ThemeMode>(currentMode);
   const [time, setTime] = useState(sharedAnim?.t ?? 0);
@@ -372,24 +472,32 @@ export function App() {
   const [fps, setFps] = useState(sharedAnim?.fps ?? 15);
   const [steps, setSteps] = useState(sharedAnim?.steps ?? 20);
   const [schema, setSchema] = useState<Param[]>([]);
-  const [overrides, setOverrides] = useState<Record<string, ParamValue>>(overridesRef.current);
-  const [paramSets, setParamSets] = useState<Record<string, Record<string, ParamValue>>>(
-    paramSetsRef.current,
+  const [overrides, setOverrides] = useState<Record<string, ParamValue>>(
+    overridesRef.current,
   );
+  const [paramSets, setParamSets] = useState<
+    Record<string, Record<string, ParamValue>>
+  >(paramSetsRef.current);
   const [shareMsg, setShareMsg] = useState("");
   // Diagnostic counts for the main file (error/warning), for the tab badge.
-  const [diagCounts, setDiagCounts] = useState<{ errors: number; warnings: number }>({
+  const [diagCounts, setDiagCounts] = useState<{
+    errors: number;
+    warnings: number;
+  }>({
     errors: 0,
     warnings: 0,
   });
 
   function persist() {
-    saveProject({
+    const ok = saveProject({
       files: filesRef.current,
       overrides: overridesRef.current,
       active: activeRef.current,
       paramSets: paramSetsRef.current,
     });
+    // Surface a silent data-loss trap: if storage is full, autosave stops and
+    // the user would otherwise never know until a reload lost their work.
+    setSaveFailed((prev) => (prev === !ok ? prev : !ok));
   }
 
   useEffect(() => {
@@ -397,6 +505,13 @@ export function App() {
 
     const viewer = new Viewer(canvasRef.current, (info) => setDims(info));
     viewerRef.current = viewer;
+    // Apply persisted display toggles (defaults are on, so this only bites when
+    // the user had turned the grid/edges off).
+    const prefs0 = loadPrefs();
+    viewer.setGridVisible(prefs0.showGrid);
+    viewer.setEdgesVisible(prefs0.showEdges);
+    viewer.setDimensionsVisible(prefs0.showDims);
+    viewer.setSection(prefs0.sectionOn, prefs0.sectionAxis, prefs0.sectionT);
 
     // Model → code: clicking a face selects the source statement that produced
     // it. Spans index into the main file, so switch to it first if needed.
@@ -416,7 +531,10 @@ export function App() {
       const from = byteToChar(src, span[0]);
       const to = byteToChar(src, span[1]);
       const v = viewRef.current!;
-      v.dispatch({ selection: { anchor: from, head: to }, scrollIntoView: true });
+      v.dispatch({
+        selection: { anchor: from, head: to },
+        scrollIntoView: true,
+      });
       v.focus();
       // Re-enable and highlight the clicked item. An explicit call covers the
       // case where the selection didn't change (re-clicking the same item after a
@@ -435,7 +553,10 @@ export function App() {
       window.clearTimeout(slowTimer.current);
       if (busy) {
         setRecovering(false);
-        slowTimer.current = window.setTimeout(markRenderPending, SLOW_RENDER_MS);
+        slowTimer.current = window.setTimeout(
+          markRenderPending,
+          SLOW_RENDER_MS,
+        );
       }
     };
     // Build an engine for the given kind. "openscad" runs OpenSCAD — a locally-
@@ -473,6 +594,16 @@ export function App() {
       const ov = overridesRef.current;
       const names = Object.keys(ov);
       const values = names.map((n) => toLiteral(ov[n]));
+      // Render-quality overrides ($fn/$fa/$fs), injected like customizer values.
+      // A user param of the same name (unusual) wins, so skip any already set.
+      for (const [n, v] of Object.entries(
+        qualityOverrides(qualityRef.current),
+      )) {
+        if (!names.includes(n)) {
+          names.push(n);
+          values.push(v);
+        }
+      }
       if (timeRef.current !== 0) {
         names.push("$t");
         values.push(String(timeRef.current));
@@ -507,11 +638,8 @@ export function App() {
         // include/use closure (fetching libraries), then render with the full
         // file set. Read `engineRef.current` (not a captured local) so a live
         // engine swap takes effect on the next render.
-        const { names: fileNames, contents: fileContents } = await resolveClosure(
-          fs[0].content,
-          libs,
-          LIB_BASE,
-        );
+        const { names: fileNames, contents: fileContents } =
+          await resolveClosure(fs[0].content, libs, LIB_BASE);
         engineRef.current?.render(
           fs[0].content,
           names,
@@ -536,13 +664,28 @@ export function App() {
     // camera to avoid a feedback loop.
     const unsubCamera = viewer.onCameraChange(() => {
       if (applyingCameraRef.current || exportingRef.current) return;
-      if (filesRef.current[0].content.includes("$vp")) requestRenderRef.current();
+      if (filesRef.current[0].content.includes("$vp"))
+        requestRenderRef.current();
     });
 
     const view = new EditorView({
       state: EditorState.create({
         doc: filesRef.current[activeRef.current].content,
         extensions: [
+          // ⌘↵ renders. Highest precedence so it beats basicSetup's
+          // defaultKeymap, where Mod-Enter is insertBlankLine.
+          Prec.highest(
+            keymap.of([
+              {
+                key: "Mod-Enter",
+                preventDefault: true,
+                run: () => {
+                  renderNowRef.current();
+                  return true;
+                },
+              },
+            ]),
+          ),
           basicSetup,
           keymap.of([
             // ⌘S / ⌘⇧S save the active tab to disk (desktop). preventDefault
@@ -618,8 +761,11 @@ export function App() {
     if (TAURI) {
       // Seed saved baselines for any restored files that already have a disk path,
       // and (re)arm watchers for them so external edits reload after a relaunch.
-      const paths = filesRef.current.map((f) => f.path).filter((p): p is string => !!p);
-      for (const f of filesRef.current) if (f.path) savedRef.current[f.name] = f.content;
+      const paths = filesRef.current
+        .map((f) => f.path)
+        .filter((p): p is string => !!p);
+      for (const f of filesRef.current)
+        if (f.path) savedRef.current[f.name] = f.content;
       if (paths.length) void watchFiles(paths);
 
       // Live-reload a file edited in an external editor. Route by path to the
@@ -681,8 +827,36 @@ export function App() {
       void checkUpdatesRef.current(false);
     }
 
-    // Escape deselects the highlighted item (like clicking empty preview space).
+    // App-level keyboard shortcuts (web actions). ⌘↵ inside the editor is caught
+    // by the high-precedence CM keymap above, so skip it here when the editor is
+    // focused to avoid rendering twice.
     const onKeyDown = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey;
+      const key = e.key.toLowerCase();
+      if (mod && key === "k") {
+        e.preventDefault();
+        setPaletteOpen((o) => !o);
+        return;
+      }
+      if (mod && key === "j") {
+        e.preventDefault();
+        setConsoleOpen((o) => !o);
+        return;
+      }
+      if (mod && e.shiftKey && key === "f") {
+        e.preventDefault();
+        viewerRef.current?.fit();
+        return;
+      }
+      if (mod && key === "enter") {
+        const inEditor = (e.target as HTMLElement)?.closest?.(".cm-editor");
+        if (!inEditor) {
+          e.preventDefault();
+          renderNowRef.current();
+        }
+        return;
+      }
+      // Escape deselects the highlighted item (like clicking empty preview).
       if (e.key === "Escape" && linkHighlightRef.current) {
         highlightDismissedRef.current = true;
         viewerRef.current?.highlightSpan(null);
@@ -720,7 +894,9 @@ export function App() {
     document.documentElement.style.colorScheme = mode;
     viewerRef.current?.setTheme(mode);
     if (viewRef.current) {
-      viewRef.current.dispatch({ effects: themeComp.current.reconfigure(themeExts(mode)) });
+      viewRef.current.dispatch({
+        effects: themeComp.current.reconfigure(themeExts(mode)),
+      });
     }
   }, [mode]);
 
@@ -756,7 +932,12 @@ export function App() {
    *  external-edit reload — updating the editor if that tab is active. When a
    *  disk `path` is given the tab remembers it (so ⌘S writes there) and the
    *  content becomes the new saved baseline (no unsaved-changes dot). */
-  function setMainFile(name: string, content: string, dir?: string, path?: string) {
+  function setMainFile(
+    name: string,
+    content: string,
+    dir?: string,
+    path?: string,
+  ) {
     const next = filesRef.current.slice();
     next[0] = { name, content, path: path ?? next[0].path };
     filesRef.current = next;
@@ -765,12 +946,15 @@ export function App() {
     if (dir) {
       engineDirRef.current = dir;
       const e = engineRef.current;
-      if (e instanceof DesktopEngine || e instanceof DesktopOpenscadEngine) e.dir = dir;
+      if (e instanceof DesktopEngine || e instanceof DesktopOpenscadEngine)
+        e.dir = dir;
     }
     if (activeRef.current === 0 && viewRef.current) {
       const view = viewRef.current;
       suppressRef.current = true;
-      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: content } });
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: content },
+      });
       suppressRef.current = false;
     }
     persist();
@@ -783,7 +967,12 @@ export function App() {
   function applyExternalEdit(path: string, content: string) {
     const idx = filesRef.current.findIndex((f) => f.path === path);
     if (idx <= 0) {
-      setMainFile(filesRef.current[0].name, content, undefined, filesRef.current[0].path);
+      setMainFile(
+        filesRef.current[0].name,
+        content,
+        undefined,
+        filesRef.current[0].path,
+      );
       return;
     }
     const next = filesRef.current.slice();
@@ -794,7 +983,9 @@ export function App() {
     if (activeRef.current === idx && viewRef.current) {
       const view = viewRef.current;
       suppressRef.current = true;
-      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: content } });
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: content },
+      });
       suppressRef.current = false;
     }
     persist();
@@ -845,12 +1036,20 @@ export function App() {
           const d = path.slice(0, path.length - basename(path).length) || ".";
           engineDirRef.current = d;
           const e = engineRef.current;
-          if (e instanceof DesktopEngine || e instanceof DesktopOpenscadEngine) e.dir = d;
+          if (e instanceof DesktopEngine || e instanceof DesktopOpenscadEngine)
+            e.dir = d;
         }
-        void watchFiles(filesRef.current.map((x) => x.path).filter((p): p is string => !!p));
+        void watchFiles(
+          filesRef.current.map((x) => x.path).filter((p): p is string => !!p),
+        );
       }
     } catch (e) {
-      setStatus((s) => ({ ...s, ok: false, error: `save failed: ${String(e)}`, message: "save failed" }));
+      setStatus((s) => ({
+        ...s,
+        ok: false,
+        error: `save failed: ${String(e)}`,
+        message: "save failed",
+      }));
       setConsoleOpen(true);
     }
   }
@@ -875,7 +1074,11 @@ export function App() {
     const viewer = viewerRef.current;
     const view = viewRef.current;
     if (!viewer || !view) return;
-    if (!linkHighlightRef.current || activeRef.current !== 0 || highlightDismissedRef.current) {
+    if (
+      !linkHighlightRef.current ||
+      activeRef.current !== 0 ||
+      highlightDismissedRef.current
+    ) {
       viewer.highlightSpan(null);
       return;
     }
@@ -892,7 +1095,11 @@ export function App() {
     let best: Span | null = null;
     for (const g of provenanceRef.current) {
       for (const s of g.spans) {
-        if (byte >= s[0] && byte < s[1] && (!best || s[1] - s[0] < best[1] - best[0])) {
+        if (
+          byte >= s[0] &&
+          byte < s[1] &&
+          (!best || s[1] - s[0] < best[1] - best[0])
+        ) {
           best = s;
         }
       }
@@ -922,11 +1129,96 @@ export function App() {
     renderNowRef.current?.();
   }
 
+  /** Change the render-quality preset (or the custom $fn), persist it, and
+   *  re-render so the new resolution shows immediately. */
+  function setQualityPref(next: Partial<QualitySettings>) {
+    qualityRef.current = { ...qualityRef.current, ...next };
+    if (next.quality !== undefined) setQuality(next.quality);
+    if (next.customFn !== undefined) setCustomFn(next.customFn);
+    savePrefs(next);
+    renderNowRef.current?.();
+  }
+
+  // Effective dock collapse: explicit pref wins, else auto-spine when no params.
+  const dockCollapsed = dockPref ?? schema.length === 0;
+  function toggleDock() {
+    const v = !dockCollapsed;
+    setDockPref(v);
+    savePrefs({ dockCollapsed: v });
+  }
+  function toggleParamsSection() {
+    const v = !paramsOpen;
+    setParamsOpen(v);
+    savePrefs({ paramsOpen: v });
+  }
+  function toggleModelSection() {
+    const v = !modelOpen;
+    setModelOpen(v);
+    savePrefs({ modelOpen: v });
+  }
+
+  // --- resizable panels: apply a pointer delta, then persist on release ---
+  const effEditorW = editorWidth ?? EDITOR_W_DEFAULT;
+  const effDockW = dockWidth ?? DOCK_W_DEFAULT;
+  const effConsoleH = consoleHeight ?? CONSOLE_H_DEFAULT;
+  // Mirror the live sizes so the drag's pointerup closure (bound at pointerdown)
+  // persists the *current* values, not the ones captured at drag start.
+  const sizeRef = useRef({ editorWidth, dockWidth, consoleHeight });
+  sizeRef.current = { editorWidth, dockWidth, consoleHeight };
+  // Deltas arrive incrementally per pointermove, so accumulate with functional
+  // updates rather than adding to a value captured at drag start.
+  function dragEditor(delta: number) {
+    setEditorWidth((w) =>
+      clampNum((w ?? EDITOR_W_DEFAULT) + delta, 260, window.innerWidth - 480),
+    );
+  }
+  function dragDock(delta: number) {
+    // The handle is left of the dock, so dragging right shrinks the dock.
+    setDockWidth((w) =>
+      clampNum((w ?? DOCK_W_DEFAULT) - delta, 200, window.innerWidth - 480),
+    );
+  }
+  function dragConsole(delta: number) {
+    // The handle is atop the console, so dragging up grows it.
+    setConsoleHeight((h) =>
+      clampNum((h ?? CONSOLE_H_DEFAULT) - delta, 80, window.innerHeight - 220),
+    );
+  }
+  const persistSizes = () => savePrefs(sizeRef.current);
+
+  function toggleGrid(v: boolean) {
+    setShowGrid(v);
+    viewerRef.current?.setGridVisible(v);
+    savePrefs({ showGrid: v });
+  }
+  function toggleEdges(v: boolean) {
+    setShowEdges(v);
+    viewerRef.current?.setEdgesVisible(v);
+    savePrefs({ showEdges: v });
+  }
+  function toggleDims(v: boolean) {
+    setShowDims(v);
+    viewerRef.current?.setDimensionsVisible(v);
+    savePrefs({ showDims: v });
+  }
+  function applySection(on: boolean, axis: "x" | "y" | "z", t: number) {
+    setSectionOn(on);
+    setSectionAxis(axis);
+    setSectionT(t);
+    viewerRef.current?.setSection(on, axis, t);
+    savePrefs({ sectionOn: on, sectionAxis: axis, sectionT: t });
+  }
+  function setOrthoProjection(next: boolean) {
+    viewerRef.current?.setProjection(next ? "orthographic" : "perspective");
+    setOrtho(next);
+  }
+
   /** Swap the render engine between Quito and the vendored OpenSCAD wasm, then
    *  re-render on the new engine. Remembered across sessions. On desktop, "quito"
    *  is the native engine and "openscad" runs the OpenSCAD wasm in-webview. */
   function toggleEngine() {
-    const next: EngineKind = engineKindRef.current === "openscad" ? "quito" : "openscad";
+    const next: EngineKind =
+      engineKindRef.current === "openscad" ? "quito" : "openscad";
     engineKindRef.current = next;
     setEngineKind(next);
     savePrefs({ engine: next });
@@ -940,7 +1232,11 @@ export function App() {
     const view = viewRef.current;
     suppressRef.current = true;
     view.dispatch({
-      changes: { from: 0, to: view.state.doc.length, insert: filesRef.current[idx].content },
+      changes: {
+        from: 0,
+        to: view.state.doc.length,
+        insert: filesRef.current[idx].content,
+      },
     });
     suppressRef.current = false;
     applyDiagnostics();
@@ -990,7 +1286,11 @@ export function App() {
     // Drop any share-link hash so a reload doesn't restore the shared project.
     sharedRef.current = null;
     try {
-      window.history.replaceState(null, "", window.location.pathname + window.location.search);
+      window.history.replaceState(
+        null,
+        "",
+        window.location.pathname + window.location.search,
+      );
     } catch {
       /* ignore */
     }
@@ -1008,11 +1308,19 @@ export function App() {
   function loadExample(idx: number) {
     const ex = EXAMPLES[idx];
     if (!ex) return;
-    if (!window.confirm(`Load the "${ex.label}" example? This replaces the current project.`))
+    if (
+      !window.confirm(
+        `Load the "${ex.label}" example? This replaces the current project.`,
+      )
+    )
       return;
     sharedRef.current = null;
     try {
-      window.history.replaceState(null, "", window.location.pathname + window.location.search);
+      window.history.replaceState(
+        null,
+        "",
+        window.location.pathname + window.location.search,
+      );
     } catch {
       /* ignore */
     }
@@ -1039,6 +1347,56 @@ export function App() {
     persist();
   }
 
+  // Text extensions we can load in the browser (binary STL/3MF/PNG need a
+  // Vec<u8> channel through the engine — not wired yet).
+  const TEXT_IMPORT = /\.(scad|txt|dat|csv|json|off|obj|amf|dxf|svg|stl)$/i;
+  const BINARY_IMPORT = /\.(3mf|png|jpg|jpeg)$/i;
+
+  /** Import dropped/opened local files (browser). A .scad replaces the pristine
+   *  default main so it renders immediately; everything else is added as a tab.
+   *  Binary formats surface a message instead of failing silently. */
+  async function importFiles(fileList: FileList | globalThis.File[]) {
+    const arr = Array.from(fileList);
+    const binary = arr.filter((f) => BINARY_IMPORT.test(f.name));
+    const text = arr.filter((f) => TEXT_IMPORT.test(f.name));
+    if (binary.length) {
+      setImportMsg(
+        `Can't import ${binary
+          .map((f) => f.name)
+          .join(
+            ", ",
+          )} in the browser yet — binary STL/3MF/PNG need the desktop app.`,
+      );
+    }
+    if (text.length === 0) return;
+    const read = await Promise.all(
+      text.map(async (f) => ({ name: f.name, content: await f.text() })),
+    );
+    let next = filesRef.current.slice();
+    const isPristine = next[0]?.content === DEFAULT_FILES[0].content;
+    let focus = next.length;
+    for (const file of read) {
+      // De-dupe names so a re-drop doesn't collide.
+      let name = file.name;
+      let n = 1;
+      while (next.some((f) => f.name === name))
+        name = file.name.replace(/(\.[^.]+)?$/, (ext) => `-${n++}${ext}`);
+      if (file.name.endsWith(".scad") && isPristine && next.length <= 2) {
+        next = [{ name, content: file.content }, ...next.slice(1)];
+        focus = 0;
+      } else {
+        next.push({ name, content: file.content });
+        focus = next.length - 1;
+      }
+    }
+    filesRef.current = next;
+    setFiles(next);
+    activeRef.current = -1;
+    switchTo(Math.min(focus, next.length - 1));
+    persist();
+    requestRenderRef.current();
+  }
+
   function deleteFile(idx: number) {
     if (idx === 0) return; // main is not deletable
     const next = filesRef.current.filter((_, i) => i !== idx);
@@ -1058,7 +1416,8 @@ export function App() {
     if (idx === 0) return; // keep main.scad stable
     const cur = filesRef.current[idx].name;
     const name = window.prompt("Rename file", cur);
-    if (!name || name === cur || filesRef.current.some((f) => f.name === name)) return;
+    if (!name || name === cur || filesRef.current.some((f) => f.name === name))
+      return;
     const next = filesRef.current.slice();
     next[idx] = { ...next[idx], name };
     filesRef.current = next;
@@ -1108,7 +1467,9 @@ export function App() {
       for (const [k, v] of Object.entries(overridesRef.current)) {
         if (next.some((p) => p.name === k)) kept[k] = v;
       }
-      if (Object.keys(kept).length !== Object.keys(overridesRef.current).length) {
+      if (
+        Object.keys(kept).length !== Object.keys(overridesRef.current).length
+      ) {
         overridesRef.current = kept;
         setOverrides(kept);
       }
@@ -1127,7 +1488,11 @@ export function App() {
       }
       lastPreview.current = { positions: r.previewPositions, groups };
       if (groups.length > 0) {
-        viewerRef.current?.setColoredMesh(r.previewPositions, r.previewNormals, groups);
+        viewerRef.current?.setColoredMesh(
+          r.previewPositions,
+          r.previewNormals,
+          groups,
+        );
       } else {
         viewerRef.current?.setMesh(r.positions, r.normals);
       }
@@ -1141,7 +1506,11 @@ export function App() {
         }
       }
       provenanceRef.current = prov;
-      viewerRef.current?.setProvenance(r.provenancePositions, r.provenanceNormals, prov);
+      viewerRef.current?.setProvenance(
+        r.provenancePositions,
+        r.provenanceNormals,
+        prov,
+      );
       // Re-apply the code→model highlight for the current cursor (setProvenance
       // cleared the stale overlay).
       highlightFromCursor();
@@ -1167,6 +1536,8 @@ export function App() {
           ? `${r.triangleCount.toLocaleString()} triangles · geometry errors`
           : `${r.triangleCount.toLocaleString()} triangles`,
         triangleCount: r.triangleCount,
+        vertexCount: r.vertexCount,
+        area: r.area,
         volume: r.volume,
         ms: r.ms,
         echo: r.echo,
@@ -1203,18 +1574,65 @@ export function App() {
     // we never reach here and the sentinel stays set so the next load recovers.
     // A *stopped* result (watchdog/Stop) is exempt — see settleRenderPending.
     settleRenderPending(!!r.stopped);
+
+    // Bump a monotonic revision so a "new render landed" is observable (the
+    // status meta is now always visible, so its presence no longer signals it).
+    setRenderRev((n) => n + 1);
   }
 
-  const consoleLines: { kind: "error" | "warn" | "echo"; text: string }[] = [];
-  if (status.error) consoleLines.push({ kind: "error", text: status.error });
+  // A console line carries a source span only when the structured diagnostics
+  // array has a matching message with a real (byte ≥ 0) offset. Echo output and
+  // geom-error prose never resolve to a span, so they stay non-clickable — making
+  // every line *look* clickable is worse than making only the real ones clickable.
+  type ConsoleLine = {
+    kind: "error" | "warn" | "echo";
+    text: string;
+    span?: Span;
+  };
+  const spanFor = (
+    severity: "error" | "warning",
+    message: string,
+  ): Span | undefined => {
+    const d = diagRef.current.find(
+      (x) => x.severity === severity && x.message === message && x.start >= 0,
+    );
+    return d ? [d.start, d.end] : undefined;
+  };
+  const consoleLines: ConsoleLine[] = [];
+  if (status.error)
+    consoleLines.push({
+      kind: "error",
+      text: status.error,
+      span: spanFor("error", status.error),
+    });
   // Recoverable geometry errors: shown red like a hard error, but the model is
-  // still rendered (degraded) alongside them.
+  // still rendered (degraded) alongside them. Prose, so never clickable.
   for (const e of status.geomErrors.split("\n").filter(Boolean))
     consoleLines.push({ kind: "error", text: `GEOMETRY ERROR: ${e}` });
   for (const w of status.warnings.split("\n").filter(Boolean))
-    consoleLines.push({ kind: "warn", text: `WARNING: ${w}` });
+    consoleLines.push({
+      kind: "warn",
+      text: `WARNING: ${w}`,
+      span: spanFor("warning", w),
+    });
   for (const e of status.echo.split("\n").filter(Boolean))
     consoleLines.push({ kind: "echo", text: e });
+
+  /** Jump the editor cursor to a diagnostic's source span (main file). Mirrors
+   *  the model→code pick path: switch to the main tab, map bytes→chars, select. */
+  function jumpToSpan(span: Span) {
+    const view = viewRef.current;
+    if (!view) return;
+    if (activeRef.current !== 0) switchTo(0);
+    const src = filesRef.current[0].content;
+    const from = byteToChar(src, span[0]);
+    const to = byteToChar(src, span[1]);
+    view.dispatch({
+      selection: { anchor: from, head: to },
+      scrollIntoView: true,
+    });
+    view.focus();
+  }
 
   function setOverride(name: string, value: ParamValue) {
     const next = { ...overridesRef.current, [name]: value };
@@ -1257,7 +1675,8 @@ export function App() {
     const name = window.prompt("Save parameter set as:");
     if (!name) return;
     const snapshot: Record<string, ParamValue> = {};
-    for (const p of schema) snapshot[p.name] = overridesRef.current[p.name] ?? p.value;
+    for (const p of schema)
+      snapshot[p.name] = overridesRef.current[p.name] ?? p.value;
     commitParamSets({ ...paramSetsRef.current, [name]: snapshot });
   }
 
@@ -1300,9 +1719,12 @@ export function App() {
       return;
     }
     const cur = viewer.getCamera();
-    const nearN = (a: number | null | undefined, b: number) => a == null || Math.abs(a - b) < 1e-3;
-    const nearV = (a: [number, number, number] | null | undefined, b: [number, number, number]) =>
-      !a || a.every((x, i) => Math.abs(x - b[i]) < 1e-3);
+    const nearN = (a: number | null | undefined, b: number) =>
+      a == null || Math.abs(a - b) < 1e-3;
+    const nearV = (
+      a: [number, number, number] | null | undefined,
+      b: [number, number, number],
+    ) => !a || a.every((x, i) => Math.abs(x - b[i]) < 1e-3);
     const changed =
       !nearV(vp.vpr, cur.vpr) ||
       !nearV(vp.vpt, cur.vpt) ||
@@ -1392,7 +1814,9 @@ export function App() {
     // in the browser, trigger an anchor download. Used by the wasm-engine export
     // paths below (the native engine has its own `save_model` re-render path).
     const saveExport = (data: Uint8Array, ext: string) =>
-      TAURI ? void saveBytesNative(data, ext) : downloadBlob(data, `quito.${ext}`);
+      TAURI
+        ? void saveBytesNative(data, ext)
+        : downloadBlob(data, `quito.${ext}`);
 
     // The native re-render export applies only when the native engine produced
     // what's on screen. With the OpenSCAD wasm engine active (even on desktop),
@@ -1414,11 +1838,8 @@ export function App() {
     // 2D vector formats need the exact contours, so re-render in a worker.
     if (format === "dxf" || format === "svg") {
       try {
-        const { names: fileNames, contents: fileContents } = await resolveClosure(
-          fs[0].content,
-          libs,
-          LIB_BASE,
-        );
+        const { names: fileNames, contents: fileContents } =
+          await resolveClosure(fs[0].content, libs, LIB_BASE);
         const text = await export2dBrowser({
           source: fs[0].content,
           names,
@@ -1442,11 +1863,8 @@ export function App() {
     if (pos.length === 0) return;
     if (status.preview) {
       try {
-        const { names: fileNames, contents: fileContents } = await resolveClosure(
-          fs[0].content,
-          libs,
-          LIB_BASE,
-        );
+        const { names: fileNames, contents: fileContents } =
+          await resolveClosure(fs[0].content, libs, LIB_BASE);
         pos = await renderMeshExactBrowser({
           source: fs[0].content,
           names,
@@ -1465,7 +1883,9 @@ export function App() {
       const { positions, groups } = lastPreview.current;
       const exportable = groups.filter((g) => g.mode !== "background");
       const data =
-        exportable.length > 0 ? build3MFColored(positions, exportable) : build3MF(pos);
+        exportable.length > 0
+          ? build3MFColored(positions, exportable)
+          : build3MF(pos);
       saveExport(data, "3mf");
       return;
     }
@@ -1487,8 +1907,116 @@ export function App() {
   menuExportRef.current = () => void onDownload(exportFmt);
   highlightFromCursorRef.current = highlightFromCursor;
 
+  // Command registry (⌘K). Web actions only — the desktop native menu is a
+  // separate Rust-driven surface and isn't unified here.
+  const commands: Command[] = [
+    {
+      id: "render",
+      title: "Render",
+      shortcut: "⌘↵",
+      run: () => renderNowRef.current(),
+    },
+    {
+      id: "stop",
+      title: "Stop render",
+      when: rendering,
+      run: () => engineRef.current?.cancel(),
+    },
+    {
+      id: "fit",
+      title: "Zoom to fit",
+      shortcut: "⌘⇧F",
+      run: () => viewerRef.current?.fit(),
+    },
+    {
+      id: "reset-view",
+      title: "Reset view",
+      run: () => viewerRef.current?.resetView(),
+    },
+    {
+      id: "console",
+      title: "Toggle console",
+      shortcut: "⌘J",
+      run: () => setConsoleOpen((o) => !o),
+    },
+    { id: "dock", title: "Toggle dock", run: toggleDock },
+    {
+      id: "grid",
+      title: "Toggle grid & axes",
+      run: () => toggleGrid(!showGrid),
+    },
+    {
+      id: "edges",
+      title: "Toggle edge overlay",
+      run: () => toggleEdges(!showEdges),
+    },
+    {
+      id: "dims",
+      title: "Toggle dimensions",
+      run: () => toggleDims(!showDims),
+    },
+    {
+      id: "section",
+      title: "Toggle section plane",
+      run: () => applySection(!sectionOn, sectionAxis, sectionT),
+    },
+    { id: "fast", title: "Toggle fast preview", run: toggleFastPreview },
+    {
+      id: "engine",
+      title: `Switch engine (${engineKind === "openscad" ? "→ Quito" : "→ OpenSCAD"})`,
+      run: toggleEngine,
+    },
+    {
+      id: "q-draft",
+      title: "Quality: Draft",
+      run: () => setQualityPref({ quality: "draft" }),
+    },
+    {
+      id: "q-normal",
+      title: "Quality: Normal",
+      run: () => setQualityPref({ quality: "normal" }),
+    },
+    {
+      id: "q-fine",
+      title: "Quality: Fine",
+      run: () => setQualityPref({ quality: "fine" }),
+    },
+    { id: "png", title: "Save PNG", run: () => void onSavePng() },
+    {
+      id: "export",
+      title: `Export (${exportFmt.toUpperCase()})`,
+      run: () => void onDownload(exportFmt),
+    },
+    {
+      id: "help",
+      title: "Help & keyboard shortcuts",
+      run: () => setHelpOpen(true),
+    },
+    { id: "new", title: "New project", run: newProject },
+    ...(TAURI
+      ? []
+      : [{ id: "share", title: "Copy share link", run: () => void onShare() }]),
+  ];
+
   return (
-    <div className="app">
+    <div
+      className="app"
+      onDragOver={(e) => {
+        if (e.dataTransfer.types.includes("Files")) {
+          e.preventDefault();
+          setDragActive(true);
+        }
+      }}
+      onDragLeave={(e) => {
+        // Only clear when the pointer actually leaves the app, not a child.
+        if (e.currentTarget === e.target) setDragActive(false);
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragActive(false);
+        if (e.dataTransfer.files.length) void importFiles(e.dataTransfer.files);
+      }}
+    >
       <header className="topbar">
         <div className="brand">
           Quito <span className="tag">playground</span>
@@ -1515,58 +2043,85 @@ export function App() {
           </select>
           {TAURI && <button onClick={openNative}>Open…</button>}
           {TAURI && (
-            <button onClick={() => saveActiveRef.current()} title="Save the active file (⌘S)">
+            <button
+              onClick={() => saveActiveRef.current()}
+              title="Save the active file (⌘S)"
+            >
               Save
             </button>
           )}
           {!TAURI && (
-            <button onClick={onShare} title="Copy a shareable link to this project">
+            <button
+              onClick={onShare}
+              title="Copy a shareable link to this project"
+            >
               {shareMsg || "Share"}
             </button>
           )}
           {!TAURI && (
-            <button onClick={onDownloadScad} title="Download the active file as .scad">
+            <button
+              onClick={onDownloadScad}
+              title="Download the active file as .scad"
+            >
               .scad
             </button>
           )}
-          <span className="view-presets">
-            {(["iso", "front", "top", "right"] as ViewPreset[]).map((p) => (
-              <button
-                key={p}
-                onClick={() => viewerRef.current?.setPreset(p)}
-                title={`${p} view`}
-              >
-                {p[0].toUpperCase()}
-              </button>
-            ))}
-          </span>
-          <button onClick={() => viewerRef.current?.resetView()}>Reset view</button>
-          <button
-            className={ortho ? "active" : undefined}
-            onClick={() => {
-              const next = !ortho;
-              viewerRef.current?.setProjection(next ? "orthographic" : "perspective");
-              setOrtho(next);
-            }}
-            title={
-              ortho
-                ? "Orthographic projection (parallel) — click for perspective"
-                : "Perspective projection — click for orthographic (isometric)"
-            }
+          <Popover
+            label="Display"
+            title="Viewport display options"
+            active={ortho || !showGrid || !showEdges || !linkHighlight}
           >
-            {ortho ? "Ortho" : "Persp"}
-          </button>
-          <button
-            className={linkHighlight ? "active" : undefined}
-            onClick={toggleLinkHighlight}
-            title={
-              linkHighlight
-                ? "Editor↔preview highlighting on — click to disable"
-                : "Editor↔preview highlighting off — click to enable"
-            }
-          >
-            Link
-          </button>
+            <PopoverToggle checked={ortho} onChange={setOrthoProjection}>
+              Orthographic projection
+            </PopoverToggle>
+            <PopoverToggle
+              checked={linkHighlight}
+              onChange={() => toggleLinkHighlight()}
+            >
+              Link editor ↔ preview
+            </PopoverToggle>
+            <PopoverToggle checked={showGrid} onChange={toggleGrid}>
+              Grid &amp; axes
+            </PopoverToggle>
+            <PopoverToggle checked={showEdges} onChange={toggleEdges}>
+              Edge overlay
+            </PopoverToggle>
+            <PopoverToggle checked={showDims} onChange={toggleDims}>
+              Dimensions
+            </PopoverToggle>
+            <PopoverToggle
+              checked={sectionOn}
+              onChange={(v) => applySection(v, sectionAxis, sectionT)}
+            >
+              Section plane
+            </PopoverToggle>
+            {sectionOn && (
+              <div className="section-controls">
+                <div className="section-axes">
+                  {(["x", "y", "z"] as const).map((ax) => (
+                    <button
+                      key={ax}
+                      className={sectionAxis === ax ? "active" : undefined}
+                      onClick={() => applySection(true, ax, sectionT)}
+                    >
+                      {ax.toUpperCase()}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={sectionT}
+                  onChange={(e) =>
+                    applySection(true, sectionAxis, Number(e.target.value))
+                  }
+                  aria-label="Section position"
+                />
+              </div>
+            )}
+          </Popover>
           <button
             className={engineKind === "openscad" ? "active" : undefined}
             onClick={toggleEngine}
@@ -1597,7 +2152,46 @@ export function App() {
           >
             Fast
           </button>
-          <button onClick={onSavePng} title="Save the current view as a PNG image">
+          <select
+            className="quality-select"
+            aria-label="Render quality"
+            value={quality}
+            onChange={(e) =>
+              setQualityPref({ quality: e.target.value as Quality })
+            }
+            title="Render resolution ($fn/$fa/$fs). Draft is coarse and fast; Fine is smooth and slow; Normal respects the script."
+          >
+            <option value="draft">Draft</option>
+            <option value="normal">Normal</option>
+            <option value="fine">Fine</option>
+            <option value="custom">Custom</option>
+          </select>
+          {quality === "custom" && (
+            <label
+              className="quality-fn"
+              title="Custom $fn (blank = leave to $fa/$fs)"
+            >
+              $fn
+              <input
+                type="number"
+                min={0}
+                step={1}
+                value={customFn ?? ""}
+                onChange={(e) =>
+                  setQualityPref({
+                    customFn:
+                      e.target.value === ""
+                        ? null
+                        : Math.max(0, Math.round(Number(e.target.value))),
+                  })
+                }
+              />
+            </label>
+          )}
+          <button
+            onClick={onSavePng}
+            title="Save the current view as a PNG image"
+          >
             PNG
           </button>
           <div className="anim" title="Animation ($t sweeps 0→1)">
@@ -1629,11 +2223,19 @@ export function App() {
                 max={60}
                 value={fps}
                 onChange={(e) =>
-                  setFps(Math.max(1, Math.min(60, Math.round(parseFloat(e.target.value) || 1))))
+                  setFps(
+                    Math.max(
+                      1,
+                      Math.min(60, Math.round(parseFloat(e.target.value) || 1)),
+                    ),
+                  )
                 }
               />
             </label>
-            <label className="anim-field" title="Number of frames as $t goes 0→1">
+            <label
+              className="anim-field"
+              title="Number of frames as $t goes 0→1"
+            >
               Steps
               <input
                 type="number"
@@ -1641,7 +2243,15 @@ export function App() {
                 max={1000}
                 value={steps}
                 onChange={(e) =>
-                  setSteps(Math.max(1, Math.min(1000, Math.round(parseFloat(e.target.value) || 1))))
+                  setSteps(
+                    Math.max(
+                      1,
+                      Math.min(
+                        1000,
+                        Math.round(parseFloat(e.target.value) || 1),
+                      ),
+                    ),
+                  )
                 }
               />
             </label>
@@ -1654,7 +2264,10 @@ export function App() {
             </button>
           </div>
           <div className="export">
-            <button onClick={() => onDownload(exportFmt)} disabled={status.triangleCount === 0}>
+            <button
+              onClick={() => onDownload(exportFmt)}
+              disabled={status.triangleCount === 0}
+            >
               Export
             </button>
             <select
@@ -1673,6 +2286,22 @@ export function App() {
             </select>
           </div>
           <button
+            className="cmdk"
+            onClick={() => setPaletteOpen(true)}
+            title="Command palette (⌘K)"
+            aria-label="Open command palette"
+          >
+            ⌘K
+          </button>
+          <button
+            className="help-btn"
+            onClick={() => setHelpOpen(true)}
+            title="Help & keyboard shortcuts"
+            aria-label="Help"
+          >
+            ?
+          </button>
+          <button
             className="github-link"
             onClick={() => openExternal(GITHUB_URL)}
             title="View source on GitHub"
@@ -1689,12 +2318,50 @@ export function App() {
         </div>
       </header>
 
+      {importMsg && (
+        <div className="update-banner error" role="alert">
+          <div className="update-banner-row">
+            <span className="update-banner-msg">{importMsg}</span>
+            <div className="update-banner-actions">
+              <button
+                className="update-dismiss"
+                onClick={() => setImportMsg("")}
+                aria-label="Dismiss"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {saveFailed && (
+        <div className="update-banner error" role="alert">
+          <div className="update-banner-row">
+            <span className="update-banner-msg">
+              Browser storage is full — your work is no longer being autosaved
+              and will be lost on reload. Export the file, or free up space.
+            </span>
+            <div className="update-banner-actions">
+              <button
+                className="update-dismiss"
+                onClick={() => setSaveFailed(false)}
+                aria-label="Dismiss"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {recovering && (
         <div className="update-banner error recovery-banner" role="alert">
           <div className="update-banner-row">
             <span className="update-banner-msg">
-              The last render didn't finish — this model may be too heavy and could freeze the
-              app. Your script is loaded but not rendered. Simplify it (e.g. lower <code>$fn</code>
+              The last render didn't finish — this model may be too heavy and
+              could freeze the app. Your script is loaded but not rendered.
+              Simplify it (e.g. lower <code>$fn</code>
               ), or render anyway.
             </span>
             <div className="update-banner-actions">
@@ -1727,11 +2394,19 @@ export function App() {
         />
       )}
 
-      <div className="workspace">
+      <div
+        className="workspace"
+        style={{
+          gridTemplateColumns: `${effEditorW}px 6px 1fr ${
+            dockCollapsed ? "28px" : `6px ${effDockW}px`
+          }`,
+        }}
+      >
         <div className="editor-col">
           <div className="tabs">
             {files.map((f, i) => {
-              const dirty = TAURI && !!f.path && f.content !== savedRef.current[f.name];
+              const dirty =
+                TAURI && !!f.path && f.content !== savedRef.current[f.name];
               // The engine reports errors/warnings against the main file; when
               // it's not the active tab, badge it so the squiggles aren't missed.
               const diagKind =
@@ -1743,41 +2418,49 @@ export function App() {
                       : ""
                   : "";
               return (
-              <div
-                key={i}
-                className={`tab ${i === active ? "active" : ""}`}
-                onClick={() => switchTo(i)}
-                onDoubleClick={() => renameFile(i)}
-                title={i === 0 ? "main (rendered)" : "double-click to rename"}
-              >
-                {diagKind && (
-                  <span
-                    className={`tab-diag ${diagKind}`}
-                    title={diagKind === "error" ? "Errors in this file" : "Warnings in this file"}
-                    aria-label={diagKind === "error" ? "Errors" : "Warnings"}
-                  >
-                    ●
-                  </span>
-                )}
-                {dirty && (
-                  <span className="tab-dirty" title="Unsaved changes" aria-label="Unsaved changes">
-                    ●
-                  </span>
-                )}
-                <span>{f.name}</span>
-                {i > 0 && (
-                  <button
-                    className="tab-close"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      deleteFile(i);
-                    }}
-                    title="Delete file"
-                  >
-                    ×
-                  </button>
-                )}
-              </div>
+                <div
+                  key={i}
+                  className={`tab ${i === active ? "active" : ""}`}
+                  onClick={() => switchTo(i)}
+                  onDoubleClick={() => renameFile(i)}
+                  title={i === 0 ? "main (rendered)" : "double-click to rename"}
+                >
+                  {diagKind && (
+                    <span
+                      className={`tab-diag ${diagKind}`}
+                      title={
+                        diagKind === "error"
+                          ? "Errors in this file"
+                          : "Warnings in this file"
+                      }
+                      aria-label={diagKind === "error" ? "Errors" : "Warnings"}
+                    >
+                      ●
+                    </span>
+                  )}
+                  {dirty && (
+                    <span
+                      className="tab-dirty"
+                      title="Unsaved changes"
+                      aria-label="Unsaved changes"
+                    >
+                      ●
+                    </span>
+                  )}
+                  <span>{f.name}</span>
+                  {i > 0 && (
+                    <button
+                      className="tab-close"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        deleteFile(i);
+                      }}
+                      title="Delete file"
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
               );
             })}
             <button className="tab-add" onClick={addFile} title="Add file">
@@ -1786,10 +2469,32 @@ export function App() {
           </div>
           <div className="editor" ref={editorHost} />
         </div>
+        <ResizeHandle
+          axis="x"
+          onDelta={dragEditor}
+          onCommit={persistSizes}
+          title="Drag to resize the editor"
+        />
         <div className="viewer">
           <canvas ref={canvasRef} />
+          <button
+            className="viewer-fit"
+            onClick={() => viewerRef.current?.fit()}
+            title="Zoom to fit — frame the model without changing the angle (⌘⇧F)"
+            aria-label="Zoom to fit"
+          >
+            ⤢ Fit
+          </button>
         </div>
-        <CustomizerPanel
+        {!dockCollapsed && (
+          <ResizeHandle
+            axis="x"
+            onDelta={dragDock}
+            onCommit={persistSizes}
+            title="Drag to resize the dock"
+          />
+        )}
+        <Dock
           params={schema}
           overrides={overrides}
           onChange={setOverride}
@@ -1800,28 +2505,127 @@ export function App() {
           onDeletePreset={deletePreset}
           onImportPresets={importPresets}
           onExportPresets={exportPresets}
+          model={{
+            ok: status.ok,
+            triangleCount: status.triangleCount,
+            vertexCount: status.vertexCount,
+            area: status.area,
+            volume: status.volume,
+            preview: status.preview,
+            geomErrors: status.geomErrors,
+            dims,
+            groups: lastPreview.current.groups,
+            libraries: files.slice(1).map((f) => f.name),
+          }}
+          collapsed={dockCollapsed}
+          onToggleCollapsed={toggleDock}
+          paramsOpen={paramsOpen}
+          onToggleParams={toggleParamsSection}
+          modelOpen={modelOpen}
+          onToggleModel={toggleModelSection}
         />
       </div>
 
       {consoleOpen && (
-        <div className="console">
-          {consoleLines.length === 0 ? (
-            <div className="console-line muted">No output.</div>
-          ) : (
-            consoleLines.map((l, i) => (
-              <div className={`console-line ${l.kind}`} key={i}>
-                {l.text}
-              </div>
-            ))
-          )}
-        </div>
+        <ResizeHandle
+          axis="y"
+          onDelta={dragConsole}
+          onCommit={persistSizes}
+          title="Drag to resize the console"
+        />
       )}
+      {consoleOpen &&
+        (() => {
+          const counts = {
+            error: consoleLines.filter((l) => l.kind === "error").length,
+            warn: consoleLines.filter((l) => l.kind === "warn").length,
+            echo: consoleLines.filter((l) => l.kind === "echo").length,
+          };
+          const shown = consoleLines.filter(
+            (l) => consoleFilter === "all" || l.kind === consoleFilter,
+          );
+          const chip = (
+            key: "all" | "error" | "warn" | "echo",
+            label: string,
+          ) => (
+            <button
+              className={`console-chip ${key} ${
+                consoleFilter === key ? "active" : ""
+              }`}
+              onClick={() => setConsoleFilter(key)}
+            >
+              {label}
+            </button>
+          );
+          return (
+            <div className="console" style={{ height: effConsoleH }}>
+              <div className="console-filters">
+                {chip("all", "All")}
+                {chip("error", `Errors ${counts.error}`)}
+                {chip("warn", `Warnings ${counts.warn}`)}
+                {chip("echo", `Echo ${counts.echo}`)}
+              </div>
+              <div className="console-body">
+                {shown.length === 0 ? (
+                  <div className="console-line muted">No output.</div>
+                ) : (
+                  shown.map((l, i) =>
+                    l.span ? (
+                      <button
+                        className={`console-line ${l.kind} clickable`}
+                        key={i}
+                        onClick={() => jumpToSpan(l.span!)}
+                        title="Jump to source"
+                      >
+                        {l.text}
+                      </button>
+                    ) : (
+                      <div className={`console-line ${l.kind}`} key={i}>
+                        {l.text}
+                      </div>
+                    ),
+                  )
+                )}
+              </div>
+            </div>
+          );
+        })()}
 
-      <footer className={`statusbar ${status.ok ? "ok" : "err"}`}>
+      <footer
+        className={`statusbar ${status.ok ? "ok" : "err"}`}
+        data-render-rev={renderRev}
+      >
+        {/* Fixed-width control cell so Render↔(rendering… Stop) can't shift the
+            numbers sideways every render. */}
+        <span className="status-controls">
+          {rendering ? (
+            <>
+              <span className="status-rendering">rendering…</span>
+              <button
+                className="status-stop"
+                onClick={() => engineRef.current?.cancel()}
+                title="Stop the current render"
+              >
+                Stop
+              </button>
+            </>
+          ) : (
+            <button
+              className="status-render"
+              onClick={() => renderNowRef.current()}
+              title="Render the current model"
+            >
+              Render
+            </button>
+          )}
+        </span>
         <span className="status-main">{status.message}</span>
-        {status.ok && !rendering && (
+        {/* Hold the last-good numbers across renders (don't gate on !rendering)
+            so they don't blink ~15×/s during animation playback. */}
+        {status.ok && (
           <span className="status-meta">
-            {dims && `${fmtDim(dims.x)} × ${fmtDim(dims.y)} × ${fmtDim(dims.z)} mm · `}
+            {dims &&
+              `${fmtDim(dims.x)} × ${fmtDim(dims.y)} × ${fmtDim(dims.z)} mm · `}
             {status.preview ? (
               <span title="Fast preview is on: unions are skipped, so volume is approximate. Turn off Fast (or export) for the exact value.">
                 vol ≈ {status.volume.toFixed(2)} (preview)
@@ -1832,25 +2636,29 @@ export function App() {
             · {status.ms.toFixed(0)} ms
           </span>
         )}
-        {rendering ? (
-          <>
-            <span className="status-rendering">rendering…</span>
-            <button
-              className="status-stop"
-              onClick={() => engineRef.current?.cancel()}
-              title="Stop the current render"
-            >
-              Stop
-            </button>
-          </>
-        ) : (
-          <button
-            className="status-render"
-            onClick={() => renderNowRef.current()}
-            title="Render the current model"
+        {status.ok && (
+          <span
+            className={`status-integrity ${
+              status.geomErrors
+                ? "degraded"
+                : status.preview
+                  ? "preview"
+                  : "exact"
+            }`}
+            title={
+              status.geomErrors
+                ? "Degraded: a CSG op failed and a fallback mesh is shown — the geometry is not trustworthy."
+                : status.preview
+                  ? "Fast preview: unions are skipped, so the mesh isn't watertight and the volume is approximate. Exports re-render exact."
+                  : "Exact: watertight geometry; the numbers are trustworthy."
+            }
           >
-            Render
-          </button>
+            {status.geomErrors
+              ? "DEGRADED"
+              : status.preview
+                ? "FAST PREVIEW"
+                : "EXACT"}
+          </span>
         )}
         <button
           className={`console-toggle ${consoleLines.some((l) => l.kind !== "echo") ? "alert" : ""}`}
@@ -1861,6 +2669,17 @@ export function App() {
         </button>
         <span className="status-version">{version && `engine ${version}`}</span>
       </footer>
+
+      {paletteOpen && (
+        <CommandPalette
+          commands={commands}
+          onClose={() => setPaletteOpen(false)}
+        />
+      )}
+      {helpOpen && <HelpSheet onClose={() => setHelpOpen(false)} />}
+      {dragActive && (
+        <div className="drop-overlay">Drop .scad or data files to import</div>
+      )}
     </div>
   );
 }

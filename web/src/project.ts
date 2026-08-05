@@ -21,11 +21,15 @@ export interface Project {
 
 const KEY = "quito.project.v1";
 
-export function saveProject(p: Project): void {
+/** Persist the project. Returns false when storage is full/unavailable so the
+ *  caller can warn the user their work isn't being saved (a silent failure here
+ *  is a data-loss trap). */
+export function saveProject(p: Project): boolean {
   try {
     localStorage.setItem(KEY, JSON.stringify(p));
+    return true;
   } catch {
-    // storage full / unavailable — non-fatal, just don't persist
+    return false;
   }
 }
 
@@ -36,13 +40,21 @@ export function loadProject(): Project | null {
     const p = JSON.parse(raw) as Project;
     if (!Array.isArray(p.files) || p.files.length === 0) return null;
     // Validate shape defensively.
-    if (!p.files.every((f) => typeof f.name === "string" && typeof f.content === "string"))
+    if (
+      !p.files.every(
+        (f) => typeof f.name === "string" && typeof f.content === "string",
+      )
+    )
       return null;
     return {
       files: p.files,
-      overrides: p.overrides && typeof p.overrides === "object" ? p.overrides : {},
-      active: Number.isInteger(p.active) ? Math.min(Math.max(0, p.active), p.files.length - 1) : 0,
-      paramSets: p.paramSets && typeof p.paramSets === "object" ? p.paramSets : {},
+      overrides:
+        p.overrides && typeof p.overrides === "object" ? p.overrides : {},
+      active: Number.isInteger(p.active)
+        ? Math.min(Math.max(0, p.active), p.files.length - 1)
+        : 0,
+      paramSets:
+        p.paramSets && typeof p.paramSets === "object" ? p.paramSets : {},
     };
   } catch {
     return null;

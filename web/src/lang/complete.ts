@@ -56,7 +56,9 @@ function collectUserSymbols(ctx: CompletionContext): Completion[] {
 
 /** CodeMirror completion source for OpenSCAD. Triggers on identifier/`$var`
  *  prefixes (and explicitly via Ctrl-Space). */
-export function openscadCompletion(ctx: CompletionContext): CompletionResult | null {
+export function openscadCompletion(
+  ctx: CompletionContext,
+): CompletionResult | null {
   const word = ctx.matchBefore(/\$?[\w]*/);
   if (!word || (word.from === word.to && !ctx.explicit)) return null;
 

@@ -36,7 +36,9 @@ describe("builtins TS/Rust parity", () => {
   it("agrees on module vs function for every name", () => {
     const rsKind = new Map(rust.map((b) => [b.name, b.isModule]));
     for (const b of BUILTINS) {
-      expect(b.isModule, `${b.name} module/function kind`).toBe(rsKind.get(b.name));
+      expect(b.isModule, `${b.name} module/function kind`).toBe(
+        rsKind.get(b.name),
+      );
     }
   });
 

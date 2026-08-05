@@ -16,7 +16,10 @@ interface Props {
 export function UpdateBanner({ state, onInstall, onDismiss }: Props) {
   const [showNotes, setShowNotes] = useState(false);
   const rawNotes = state.kind === "available" ? state.notes : "";
-  const notesHtml = useMemo(() => (rawNotes ? renderMarkdown(rawNotes) : ""), [rawNotes]);
+  const notesHtml = useMemo(
+    () => (rawNotes ? renderMarkdown(rawNotes) : ""),
+    [rawNotes],
+  );
 
   // The interactive "you're up to date" confirmation self-dismisses so it
   // doesn't linger — it's a transient acknowledgement, not a persistent state.
@@ -29,16 +32,22 @@ export function UpdateBanner({ state, onInstall, onDismiss }: Props) {
   if (state.kind === "idle") return null;
 
   return (
-    <div className={`update-banner ${state.kind === "error" ? "error" : ""}`} role="status">
+    <div
+      className={`update-banner ${state.kind === "error" ? "error" : ""}`}
+      role="status"
+    >
       <div className="update-banner-row">
         <span className="update-banner-msg">
           {state.kind === "checking" && "Checking for updates…"}
           {state.kind === "available" &&
             `Quito ${state.version} is available (you have ${state.currentVersion}).`}
           {state.kind === "downloading" && "Downloading update…"}
-          {state.kind === "installing" && "Installing update… the app will restart."}
-          {state.kind === "uptodate" && "You're running the latest version of Quito."}
-          {state.kind === "error" && `Couldn't check for updates: ${state.message}`}
+          {state.kind === "installing" &&
+            "Installing update… the app will restart."}
+          {state.kind === "uptodate" &&
+            "You're running the latest version of Quito."}
+          {state.kind === "error" &&
+            `Couldn't check for updates: ${state.message}`}
         </span>
 
         {state.kind === "downloading" && (
@@ -48,13 +57,18 @@ export function UpdateBanner({ state, onInstall, onDismiss }: Props) {
               max={100}
               value={state.pct ?? undefined}
             />
-            <span className="update-progress-pct">{state.pct == null ? "" : `${state.pct}%`}</span>
+            <span className="update-progress-pct">
+              {state.pct == null ? "" : `${state.pct}%`}
+            </span>
           </div>
         )}
 
         <div className="update-banner-actions">
           {state.kind === "available" && state.notes && (
-            <button className="update-link" onClick={() => setShowNotes((s) => !s)}>
+            <button
+              className="update-link"
+              onClick={() => setShowNotes((s) => !s)}
+            >
               {showNotes ? "Hide notes" : "What's new"}
             </button>
           )}
@@ -65,7 +79,11 @@ export function UpdateBanner({ state, onInstall, onDismiss }: Props) {
           )}
           {/* Everything except the in-flight install/download is dismissible. */}
           {state.kind !== "installing" && state.kind !== "downloading" && (
-            <button className="update-dismiss" onClick={onDismiss} aria-label="Dismiss">
+            <button
+              className="update-dismiss"
+              onClick={onDismiss}
+              aria-label="Dismiss"
+            >
               ✕
             </button>
           )}
@@ -73,7 +91,10 @@ export function UpdateBanner({ state, onInstall, onDismiss }: Props) {
       </div>
 
       {state.kind === "available" && showNotes && notesHtml && (
-        <div className="update-notes" dangerouslySetInnerHTML={{ __html: notesHtml }} />
+        <div
+          className="update-notes"
+          dangerouslySetInnerHTML={{ __html: notesHtml }}
+        />
       )}
     </div>
   );

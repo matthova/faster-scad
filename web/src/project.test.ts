@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   clearRenderPending,
   markRenderPending,
+  saveProject,
   settleRenderPending,
   wasRenderPending,
 } from "./project";
@@ -75,5 +76,34 @@ describe("render-pending crash sentinel", () => {
     // spuriously arm recovery for the next launch.
     settleRenderPending(true);
     expect(wasRenderPending()).toBe(false);
+  });
+});
+
+describe("saveProject storage-quota signalling", () => {
+  afterEach(() => {
+    delete (globalThis as unknown as { localStorage?: Storage }).localStorage;
+  });
+
+  const project = {
+    files: [{ name: "main.scad", content: "cube(1);" }],
+    overrides: {},
+    active: 0,
+  };
+
+  it("returns true on a successful save", () => {
+    (globalThis as unknown as { localStorage: Storage }).localStorage =
+      new MemStorage() as unknown as Storage;
+    expect(saveProject(project)).toBe(true);
+  });
+
+  it("returns false (not throw) when storage is full", () => {
+    (globalThis as unknown as { localStorage: Storage }).localStorage = {
+      setItem() {
+        throw new DOMException("quota", "QuotaExceededError");
+      },
+      getItem: () => null,
+      removeItem() {},
+    } as unknown as Storage;
+    expect(saveProject(project)).toBe(false);
   });
 });

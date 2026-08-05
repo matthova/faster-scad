@@ -5,7 +5,14 @@ describe("parseSchema", () => {
   it("returns the params array from a well-formed schema", () => {
     const json = JSON.stringify({
       params: [
-        { name: "w", group: "", description: null, type: "number", value: 10, control: { kind: "number" } },
+        {
+          name: "w",
+          group: "",
+          description: null,
+          type: "number",
+          value: 10,
+          control: { kind: "number" },
+        },
       ],
     });
     const ps = parseSchema(json);
@@ -55,7 +62,9 @@ describe("sameShape", () => {
   it("is false on length, name, type, or control-kind differences", () => {
     expect(sameShape([p({})], [])).toBe(false);
     expect(sameShape([p({ name: "a" })], [p({ name: "b" })])).toBe(false);
-    expect(sameShape([p({ type: "number" })], [p({ type: "string" })])).toBe(false);
+    expect(sameShape([p({ type: "number" })], [p({ type: "string" })])).toBe(
+      false,
+    );
     expect(
       sameShape(
         [p({ control: { kind: "number" } })],

@@ -39,7 +39,9 @@ interface OpenSCADModule {
   callMain(args: string[]): number;
   FS: OpenSCADFS;
 }
-type OpenSCADFactory = (opts: Record<string, unknown>) => Promise<OpenSCADModule>;
+type OpenSCADFactory = (
+  opts: Record<string, unknown>,
+) => Promise<OpenSCADModule>;
 
 /** Ensure every parent directory of `path` exists in the Emscripten FS. */
 function mkdirp(FS: OpenSCADFS, path: string) {
@@ -56,7 +58,16 @@ function mkdirp(FS: OpenSCADFS, path: string) {
 }
 
 self.onmessage = async (e: MessageEvent<RenderRequest>) => {
-  const { seq, source, names, values, fileNames, fileContents, openscadUrl, preview } = e.data;
+  const {
+    seq,
+    source,
+    names,
+    values,
+    fileNames,
+    fileContents,
+    openscadUrl,
+    preview,
+  } = e.data;
   const t0 = performance.now();
 
   const fail = (error: string) => {

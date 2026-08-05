@@ -50,7 +50,9 @@ export function shareUrl(p: Project, anim?: Anim): string {
 export type SharedProject = Project & { anim?: Anim };
 
 /** Decode a project from a URL hash, or null if it isn't a valid share link. */
-export function decodeSharedProject(hash: string = window.location.hash): SharedProject | null {
+export function decodeSharedProject(
+  hash: string = window.location.hash,
+): SharedProject | null {
   if (!hash.startsWith(PREFIX)) return null;
   const raw = decompressFromEncodedURIComponent(hash.slice(PREFIX.length));
   if (!raw) return null;
@@ -79,7 +81,8 @@ function decodeAnim(a: unknown): Anim | undefined {
   const anim: Anim = {};
   if (typeof src.t === "number" && isFinite(src.t)) anim.t = src.t;
   if (typeof src.fps === "number" && isFinite(src.fps)) anim.fps = src.fps;
-  if (typeof src.steps === "number" && isFinite(src.steps)) anim.steps = src.steps;
+  if (typeof src.steps === "number" && isFinite(src.steps))
+    anim.steps = src.steps;
   if (typeof src.playing === "boolean") anim.playing = src.playing;
   return Object.keys(anim).length ? anim : undefined;
 }

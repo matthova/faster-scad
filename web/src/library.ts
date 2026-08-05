@@ -14,7 +14,8 @@ const LIBRARIES: Record<string, string> = {
   // BOSL2 (BSD-2): `include <BOSL2/std.scad>` → jsDelivr. Pinned to the exact
   // commit vendored as the corpus submodule (v2.0.747), which the engine's
   // BOSL2 render test verifies against.
-  BOSL2: "https://cdn.jsdelivr.net/gh/BelfrySCAD/BOSL2@afe82db884ee4409aa76ecfcfbbf54d446964af1/",
+  BOSL2:
+    "https://cdn.jsdelivr.net/gh/BelfrySCAD/BOSL2@afe82db884ee4409aa76ecfcfbbf54d446964af1/",
 };
 
 // resolved path → content, or null when known-missing (don't refetch).
@@ -47,7 +48,10 @@ export function normJoin(dir: string, path: string): string {
   return parts.join("/");
 }
 
-async function fetchLib(resolved: string, libBase: string): Promise<string | null> {
+async function fetchLib(
+  resolved: string,
+  libBase: string,
+): Promise<string | null> {
   if (cache.has(resolved)) return cache.get(resolved)!;
   const top = resolved.split("/")[0];
   const url = LIBRARIES[top]

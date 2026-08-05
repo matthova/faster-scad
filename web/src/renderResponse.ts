@@ -6,7 +6,10 @@
 import type { RenderResponse } from "./engineWorker";
 
 /** A blank (empty-geometry) RenderResponse with `patch` applied on top. */
-export function blankResponse(seq: number, patch: Partial<RenderResponse> = {}): RenderResponse {
+export function blankResponse(
+  seq: number,
+  patch: Partial<RenderResponse> = {},
+): RenderResponse {
   return {
     seq,
     ok: false,
