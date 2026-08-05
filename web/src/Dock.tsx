@@ -5,7 +5,8 @@
 import type { ReactNode } from "react";
 import { CustomizerPanel } from "./CustomizerPanel";
 import type { Param, ParamValue } from "./customizer";
-import type { PreviewGroup, MeshInfo } from "./viewer";
+import type { PreviewGroup, MeshInfo, Span } from "./viewer";
+import type { ObjectRow } from "./objectTree";
 
 /** The Model-section data (a subset of the render status). */
 export interface ModelInfo {
@@ -35,6 +36,15 @@ interface DockProps {
   onDeletePreset: (name: string) => void;
   onImportPresets: (file: File) => void;
   onExportPresets: () => void;
+  // Objects (isolate)
+  objects: {
+    rows: ObjectRow[];
+    selected: Span | null;
+    isolated: { triangles: number; size: MeshInfo } | null;
+    onIsolate: (span: Span | null) => void;
+    /** True when the engine provides no provenance (e.g. the OpenSCAD engine). */
+    unsupported: boolean;
+  };
   // Model
   model: ModelInfo;
   // Layout
@@ -42,6 +52,8 @@ interface DockProps {
   onToggleCollapsed: () => void;
   paramsOpen: boolean;
   onToggleParams: () => void;
+  objectsOpen: boolean;
+  onToggleObjects: () => void;
   modelOpen: boolean;
   onToggleModel: () => void;
 }
@@ -82,6 +94,58 @@ const cssColor = (c: [number, number, number, number]) =>
   `rgba(${Math.round(c[0] * 255)}, ${Math.round(c[1] * 255)}, ${Math.round(
     c[2] * 255,
   )}, ${c[3]})`;
+
+function ObjectsPanel({ objects }: { objects: DockProps["objects"] }) {
+  if (objects.unsupported) {
+    return (
+      <div className="dock-empty">
+        The OpenSCAD engine provides no provenance, so parts can’t be isolated.
+        Switch to the Quito engine to inspect and isolate objects.
+      </div>
+    );
+  }
+  if (objects.rows.length === 0) {
+    return <div className="dock-empty">No geometry to inspect yet.</div>;
+  }
+  const key = (s: Span | null) => (s ? `${s[0]}:${s[1]}` : "");
+  const selKey = key(objects.selected);
+  return (
+    <div className="objects">
+      {objects.isolated && (
+        <div className="objects-isolated">
+          Isolated: {int(objects.isolated.triangles)} tris ·{" "}
+          {f2(objects.isolated.size.x)} × {f2(objects.isolated.size.y)} ×{" "}
+          {f2(objects.isolated.size.z)} mm
+          <button
+            className="objects-clear"
+            onClick={() => objects.onIsolate(null)}
+          >
+            Show all (Esc)
+          </button>
+        </div>
+      )}
+      <ul className="objects-list">
+        {objects.rows.map((r) => {
+          const active = key(r.span) === selKey;
+          const isLib = r.span[0] < 0;
+          return (
+            <li key={`${r.start}:${r.label}`}>
+              <button
+                className={`objects-row ${active ? "active" : ""}`}
+                disabled={isLib}
+                title={isLib ? "Unattributable geometry" : "Isolate this part"}
+                onClick={() => objects.onIsolate(active ? null : r.span)}
+              >
+                <span className="objects-label">{r.label}</span>
+                <span className="objects-count">{int(r.triangles)}</span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
 
 function ModelPanel({ model }: { model: ModelInfo }) {
   if (!model.ok) return <div className="dock-empty">No model yet.</div>;
@@ -210,6 +274,13 @@ export function Dock(props: DockProps) {
         ) : (
           <div className="dock-empty">This script has no parameters.</div>
         )}
+      </Section>
+      <Section
+        title="Objects"
+        open={props.objectsOpen}
+        onToggle={props.onToggleObjects}
+      >
+        <ObjectsPanel objects={props.objects} />
       </Section>
       <Section
         title="Model"

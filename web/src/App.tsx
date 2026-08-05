@@ -88,6 +88,7 @@ import {
   type QualitySettings,
 } from "./prefs";
 import { usePref } from "./usePref";
+import { buildObjectRows, type ObjectRow } from "./objectTree";
 import { EXAMPLES } from "./examples";
 import { decodeSharedProject, shareUrl } from "./share";
 import { resolveClosure } from "./library";
@@ -455,6 +456,15 @@ export function App() {
   // Code⎪Model segmented switch instead of side-by-side. "model" first — the
   // customizer and viewer are the point at tablet/phone widths.
   const [paneView, setPaneView] = useState<"code" | "model">("model");
+  // Objects section (isolate, §6). Rows come from the render's provenance; the
+  // viewer owns the authoritative selection and reports back via onSelection.
+  const [objectRows, setObjectRows] = useState<ObjectRow[]>([]);
+  const [selectionSpanUi, setSelectionSpanUi] = useState<Span | null>(null);
+  const [isolatedInfo, setIsolatedInfo] = useState<{
+    triangles: number;
+    size: MeshInfo;
+  } | null>(null);
+  const [objectsOpen, setObjectsOpen] = useState(true);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   // Right-dock layout: spine collapse (null = auto: spine only when no params)
@@ -530,6 +540,13 @@ export function App() {
 
     const viewer = new Viewer(canvasRef.current, (info) => setDims(info));
     viewerRef.current = viewer;
+    // The viewer owns the committed isolate selection (it re-resolves every
+    // render); mirror its reports into React for the Objects section. A null
+    // report means it un-isolated (cleared, or the span vanished on a re-render).
+    viewer.onSelection = (info) => {
+      setIsolatedInfo(info);
+      if (!info) setSelectionSpanUi(null);
+    };
     // Apply persisted display toggles (defaults are on, so this only bites when
     // the user had turned the grid/edges off).
     const prefs0 = loadPrefs();
@@ -543,11 +560,12 @@ export function App() {
     // it. Spans index into the main file, so switch to it first if needed.
     const unsubPick = viewer.onPick((span) => {
       if (!linkHighlightRef.current) return;
-      // Clicking empty space deselects: dismiss the highlight and leave the
-      // editor cursor where it is.
+      // Clicking empty space deselects: dismiss the highlight, un-isolate, and
+      // leave the editor cursor where it is.
       if (!span) {
         highlightDismissedRef.current = true;
         viewer.highlightSpan(null);
+        viewer.isolate(null);
         return;
       }
       const view = viewRef.current;
@@ -567,6 +585,10 @@ export function App() {
       // dismiss), which wouldn't fire the selection listener.
       highlightDismissedRef.current = false;
       highlightFromCursorRef.current();
+      // A click is a *committed* selection: isolate this part (transient
+      // cursor/hover highlighting stays a wash only).
+      viewer.isolate(span);
+      setSelectionSpanUi(span);
     });
 
     // Busy transitions drive the Stop/rendering UI and arm crash-recovery. The
@@ -903,10 +925,14 @@ export function App() {
         }
         return;
       }
-      // Escape deselects the highlighted item (like clicking empty preview).
-      if (e.key === "Escape" && linkHighlightRef.current) {
-        highlightDismissedRef.current = true;
-        viewerRef.current?.highlightSpan(null);
+      // Escape un-isolates and deselects the highlighted item (like clicking
+      // empty preview). Isolate clears regardless of the link-highlight setting.
+      if (e.key === "Escape") {
+        if (viewerRef.current?.isolated) viewerRef.current.isolate(null);
+        if (linkHighlightRef.current) {
+          highlightDismissedRef.current = true;
+          viewerRef.current?.highlightSpan(null);
+        }
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -1199,6 +1225,13 @@ export function App() {
     const v = !modelOpen;
     setModelOpen(v);
     savePrefs({ modelOpen: v });
+  }
+
+  /** Isolate a part from the Objects list (or clear). Toggling the active row
+   *  off, or passing null, shows the whole model again. */
+  function isolatePart(span: Span | null) {
+    viewerRef.current?.isolate(span);
+    setSelectionSpanUi(span);
   }
 
   // --- resizable panels: apply a pointer delta, then persist on release ---
@@ -1568,6 +1601,14 @@ export function App() {
         r.provenancePositions,
         r.provenanceNormals,
         prov,
+      );
+      // Objects section rows: derived from provenance against the source that
+      // produced this mesh (never the live buffer). Built here rather than in
+      // render so the section reflects the shown geometry.
+      setObjectRows(
+        buildObjectRows(prov, renderedSourceRef.current, (byte) =>
+          byteToChar(renderedSourceRef.current, byte),
+        ),
       );
       // Re-apply the code→model highlight for the current cursor (setProvenance
       // cleared the stale overlay).
@@ -2618,10 +2659,19 @@ export function App() {
             groups: lastPreview.current.groups,
             libraries: files.slice(1).map((f) => f.name),
           }}
+          objects={{
+            rows: objectRows,
+            selected: selectionSpanUi,
+            isolated: isolatedInfo,
+            onIsolate: isolatePart,
+            unsupported: engineKind === "openscad",
+          }}
           collapsed={dockCollapsed}
           onToggleCollapsed={toggleDock}
           paramsOpen={paramsOpen}
           onToggleParams={toggleParamsSection}
+          objectsOpen={objectsOpen}
+          onToggleObjects={() => setObjectsOpen((o) => !o)}
           modelOpen={modelOpen}
           onToggleModel={toggleModelSection}
         />

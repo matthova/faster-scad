@@ -112,6 +112,22 @@ export class Viewer {
   /** Pointer-down screen position, to tell a click from an orbit drag. */
   private downPos: { x: number; y: number } | null = null;
 
+  // ---- isolate (committed selection) ----
+  /** The committed selection span: only geometry under it is shown, callouts
+   *  retarget to its bbox. Lives here (not React) because rebuildDims runs
+   *  ~15×/s during playback; re-resolved from provGroups after each render. */
+  private selectionSpan: Span | null = null;
+  private isolateMesh: THREE.Mesh | null = null;
+  private isolateGeom: THREE.BufferGeometry | null = null;
+  private isolateMat: THREE.MeshStandardMaterial | null = null;
+  /** Bbox the dimension callouts retarget to while isolated (null = whole model). */
+  private selectionBox: THREE.Box3 | null = null;
+  /** Notified with the isolated subset's triangle count + extent (never volume —
+   *  a subset of leaves isn't a closed solid), or null when un-isolated. */
+  onSelection:
+    ((info: { triangles: number; size: MeshInfo } | null) => void) | null =
+    null;
+
   // ---- navigation view cube (top-right gizmo) ----
   private cubeRenderer: THREE.WebGLRenderer | null = null;
   private cubeScene: THREE.Scene | null = null;
@@ -247,6 +263,8 @@ export class Viewer {
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
     this.controls.dispose();
+    this.isolateGeom?.dispose();
+    this.isolateMat?.dispose();
     if (this.cubeRenderer) {
       this.cubeRenderer.dispose();
       this.cubeRenderer.domElement.remove();
@@ -686,6 +704,9 @@ export class Viewer {
     this.provPositions = positions;
     this.provNormals = normals;
     this.provGroups = groups;
+    // Re-resolve a committed isolate against this render's provenance (rebuilds
+    // its mesh, or clears itself if the selected span no longer produces geometry).
+    if (this.selectionSpan) this.applyIsolation();
     if (positions.length === 0 || groups.length === 0) return;
     const geom = new THREE.BufferGeometry();
     geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
@@ -771,6 +792,93 @@ export class Viewer {
     mesh.renderOrder = 999; // draw last, on top (material has depthTest off)
     this.highlightMesh = mesh;
     this.scene.add(mesh);
+  }
+
+  /** Commit (or clear) an isolate selection: hide every mesh leaf not under
+   *  `span`'s provenance, show only that subtree, and retarget the dimension
+   *  callouts to its bbox. `null` restores the whole model. */
+  isolate(span: Span | null) {
+    this.selectionSpan = span;
+    this.applyIsolation();
+  }
+
+  /** Whether a part is currently isolated. */
+  get isolated(): boolean {
+    return this.selectionSpan !== null;
+  }
+
+  private isolateMaterial(): THREE.MeshStandardMaterial {
+    if (!this.isolateMat) {
+      this.isolateMat = new THREE.MeshStandardMaterial({
+        color: viewerConst.mesh,
+        metalness: 0.1,
+        roughness: 0.6,
+        flatShading: true,
+        side: THREE.DoubleSide,
+      });
+    }
+    return this.isolateMat;
+  }
+
+  /** (Re)build the isolate mesh from the current provenance for `selectionSpan`.
+   *  Called on isolate() and re-resolved after every setProvenance so the
+   *  selection survives re-renders (and clears itself when the span vanishes). */
+  private applyIsolation() {
+    if (this.isolateMesh) {
+      this.scene.remove(this.isolateMesh);
+      this.isolateGeom?.dispose();
+      this.isolateMesh = null;
+      this.isolateGeom = null;
+    }
+    const span = this.selectionSpan;
+    const unisolate = () => {
+      this.selectionSpan = null;
+      this.selectionBox = null;
+      if (this.mesh) this.mesh.visible = true;
+      this.rebuildDims();
+      this.onSelection?.(null);
+    };
+    if (!span || this.provPositions.length === 0) {
+      unisolate();
+      return;
+    }
+    // Every group whose span stack contains the selection (a module call lights
+    // all its instances; a leaf lights just itself).
+    const ranges = this.provGroups.filter((g) =>
+      g.spans.some((s) => s[0] === span[0] && s[1] === span[1]),
+    );
+    if (ranges.length === 0) {
+      unisolate(); // the span no longer matches this render — clear silently
+      return;
+    }
+    let total = 0;
+    for (const g of ranges) total += g.count * 3;
+    const pos = new Float32Array(total);
+    const nrm = new Float32Array(total);
+    let off = 0;
+    for (const g of ranges) {
+      const s = g.start * 3;
+      const len = g.count * 3;
+      pos.set(this.provPositions.subarray(s, s + len), off);
+      nrm.set(this.provNormals.subarray(s, s + len), off);
+      off += len;
+    }
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    geom.setAttribute("normal", new THREE.BufferAttribute(nrm, 3));
+    geom.computeBoundingBox();
+    this.isolateGeom = geom;
+    this.isolateMesh = new THREE.Mesh(geom, this.isolateMaterial());
+    this.scene.add(this.isolateMesh);
+    if (this.mesh) this.mesh.visible = false;
+    this.selectionBox = geom.boundingBox!.clone();
+    this.rebuildDims(this.selectionBox);
+    const size = new THREE.Vector3();
+    geom.boundingBox!.getSize(size);
+    this.onSelection?.({
+      triangles: total / 9,
+      size: { x: size.x, y: size.y, z: size.z },
+    });
   }
 
   /** Unit view direction (camera → target points opposite this) + up vector. */
@@ -973,10 +1081,11 @@ export class Viewer {
   /** Draw the bounding box's width/depth/height as drafting dimension callouts
    *  (extension lines, an arrowed dimension line, and the value in millimetres),
    *  in a dedicated scene group so setMesh/setColoredMesh never clobber it. */
-  private rebuildDims() {
+  private rebuildDims(box3?: THREE.Box3) {
     this.disposeDims();
     if (!this.showDims || !this.geometry) return;
-    const box = this.geometry.boundingBox!;
+    // While isolated, dimension the selected part's bbox, not the whole model.
+    const box = box3 ?? this.selectionBox ?? this.geometry.boundingBox!;
     const { min, max } = box;
     const size = new THREE.Vector3();
     box.getSize(size);
