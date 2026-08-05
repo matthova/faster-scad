@@ -47,6 +47,13 @@ export interface Prefs {
   sectionOn: boolean;
   sectionAxis: "x" | "y" | "z";
   sectionT: number;
+  /** Orthographic (vs perspective) camera. Persisted like its Display siblings. */
+  ortho: boolean;
+  /** App appearance: "auto" follows the OS (prefers-color-scheme); else forced. */
+  theme: "auto" | "light" | "dark";
+  /** Console drawer: open/closed and the active severity filter. */
+  consoleOpen: boolean;
+  consoleFilter: "all" | "error" | "warn" | "echo";
 }
 
 const DEFAULTS: Prefs = {
@@ -69,9 +76,22 @@ const DEFAULTS: Prefs = {
   sectionOn: false,
   sectionAxis: "z",
   sectionT: 0.5,
+  ortho: false,
+  theme: "auto",
+  consoleOpen: false,
+  consoleFilter: "all",
 };
 
+const THEMES: Prefs["theme"][] = ["auto", "light", "dark"];
+
 const AXES: Array<"x" | "y" | "z"> = ["x", "y", "z"];
+
+const CONSOLE_FILTERS: Prefs["consoleFilter"][] = [
+  "all",
+  "error",
+  "warn",
+  "echo",
+];
 
 const QUALITIES: Quality[] = ["draft", "normal", "fine", "custom"];
 
@@ -145,6 +165,19 @@ export function loadPrefs(): Prefs {
         ? (p.sectionAxis as "x" | "y" | "z")
         : DEFAULTS.sectionAxis,
       sectionT: num(p.sectionT) ?? DEFAULTS.sectionT,
+      ortho: typeof p.ortho === "boolean" ? p.ortho : DEFAULTS.ortho,
+      theme: THEMES.includes(p.theme as Prefs["theme"])
+        ? (p.theme as Prefs["theme"])
+        : DEFAULTS.theme,
+      consoleOpen:
+        typeof p.consoleOpen === "boolean"
+          ? p.consoleOpen
+          : DEFAULTS.consoleOpen,
+      consoleFilter: CONSOLE_FILTERS.includes(
+        p.consoleFilter as Prefs["consoleFilter"],
+      )
+        ? (p.consoleFilter as Prefs["consoleFilter"])
+        : DEFAULTS.consoleFilter,
     };
   } catch {
     return { ...DEFAULTS };

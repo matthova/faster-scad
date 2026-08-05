@@ -112,7 +112,10 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # 22, not 20: jsdom 30 (the vitest DOM env) bundles an undici that
+          # calls webidl.util.markAsUncloneable, which needs a newer Node than
+          # 20.x — on 20 the jsdom import throws before any test runs.
+          node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
 
@@ -120,9 +123,20 @@ jobs:
         working-directory: web
         run: npm ci
 
+      # Style and lint gates, before the slow wasm build so they fail fast.
+      # ESLint errors block (react-hooks correctness); jsx-a11y is warn-only
+      # until Track E Phase 4 lands the a11y fixes.
+      - name: Prettier check
+        working-directory: web
+        run: npm run format:check
+
+      - name: ESLint
+        working-directory: web
+        run: npm run lint
+
       # Vitest unit tests for the pure-logic modules (export writers, customizer
-      # schema parsing, share-link round-trip). No DOM/wasm needed, so they run
-      # before the wasm build and fail fast.
+      # schema parsing, share-link round-trip) plus jsdom component tests. No
+      # wasm needed, so they run before the wasm build and fail fast.
       - name: Unit tests (vitest)
         working-directory: web
         run: npm test
@@ -136,6 +150,34 @@ jobs:
       - name: Typecheck and build site
         working-directory: web
         run: npm run build
+
+      # End-to-end (Playwright, against `vite preview` — the built site, not the
+      # dev server). Two nets:
+      #   - a11y (axe-core) + focus: deterministic across platforms, gated here.
+      #   - visual regression (baseline/display/dimensions/…): the __screenshots__
+      #     PNGs are Linux-rendered; after any chrome change they must be
+      #     re-blessed on Linux (`npm run e2e:update` in this environment) and
+      #     committed. Add those spec files to the run below once re-blessed.
+      - name: Install Playwright browser
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+
+      - name: E2E — a11y, focus, render loop (Playwright)
+        working-directory: web
+        run: >-
+          npx playwright test
+          e2e/a11y.spec.ts e2e/focus.spec.ts
+          e2e/render.spec.ts e2e/customizer.spec.ts e2e/prefs.spec.ts
+          e2e/palette.spec.ts e2e/theme.spec.ts e2e/quality-tolerance.spec.ts
+          e2e/topbar.spec.ts e2e/responsive.spec.ts e2e/objects.spec.ts
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: web/playwright-report
+          retention-days: 7
 
   # Compile the Tauri desktop app on every PR. desktop/src-tauri is a
   # standalone cargo workspace outside the main one, so no other job builds it —

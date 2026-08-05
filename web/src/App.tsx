@@ -28,6 +28,19 @@ import {
 } from "./engine";
 import type { RenderResponse } from "./engineWorker";
 import {
+  reduce,
+  parseDiagnostics,
+  keepOverrides,
+  FORMATS_2D,
+  FORMATS_3D,
+  INITIAL_RENDER_STATE,
+  type RenderState,
+  type ReduceCtx,
+  type Status,
+  type EngineDiag,
+  type ExportFmt,
+} from "./renderState";
+import {
   buildBinarySTL,
   buildOFF,
   buildOBJ,
@@ -39,15 +52,22 @@ import {
 } from "./stl";
 import { Dock } from "./Dock";
 import { ResizeHandle } from "./ResizeHandle";
-import { Popover, PopoverToggle } from "./Popover";
-import { CommandPalette, type Command } from "./CommandPalette";
+import { Popover, PopoverToggle, PopoverAction } from "./Popover";
+import { CommandPalette } from "./CommandPalette";
 import { HelpSheet } from "./HelpSheet";
+import {
+  resolveCommands,
+  paletteIds,
+  shortcutRows,
+  titleOf,
+  displayKey,
+  type Ctx as CmdCtx,
+} from "./commands";
 import {
   parseSchema,
   toLiteral,
   toParamSetsJson,
   fromParamSetsJson,
-  type Param,
   type ParamValue,
 } from "./customizer";
 import {
@@ -67,6 +87,8 @@ import {
   type Quality,
   type QualitySettings,
 } from "./prefs";
+import { usePref } from "./usePref";
+import { buildObjectRows, type ObjectRow } from "./objectTree";
 import { EXAMPLES } from "./examples";
 import { decodeSharedProject, shareUrl } from "./share";
 import { resolveClosure } from "./library";
@@ -103,6 +125,12 @@ function currentMode(): ThemeMode {
   return window.matchMedia("(prefers-color-scheme: dark)").matches
     ? "dark"
     : "light";
+}
+
+/** The effective light/dark to paint first, honoring a forced theme pref. */
+function initialMode(): ThemeMode {
+  const t = loadPrefs().theme;
+  return t === "auto" ? currentMode() : t;
 }
 
 /** Editor theme + syntax-highlighting extensions for a given appearance. Placed
@@ -152,8 +180,6 @@ module rounded_box(sz, r) {
   },
 ];
 
-type ExportFmt = "stl" | "off" | "obj" | "3mf" | "amf" | "dxf" | "svg";
-
 /** Format a bounding-box dimension: whole numbers plain, else up to 2 decimals. */
 function fmtDim(v: number): string {
   return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, "");
@@ -163,14 +189,6 @@ function fmtDim(v: number): string {
 function basename(path: string): string {
   const seg = path.split(/[/\\]/).pop();
   return seg && seg.length ? seg : path;
-}
-
-/** A structured diagnostic from the engine (byte offsets into the main source). */
-interface EngineDiag {
-  severity: "error" | "warning";
-  message: string;
-  start: number; // UTF-8 byte offset, or -1 when unknown
-  end: number;
 }
 
 /** UTF-8 byte length of a Unicode code point. */
@@ -215,31 +233,13 @@ function toCmDiagnostics(diags: EngineDiag[], source: string): Diagnostic[] {
   const out: Diagnostic[] = [];
   for (const d of diags) {
     if (d.start < 0 || d.end < 0) continue;
-    let from = byteToChar(source, d.start);
+    const from = byteToChar(source, d.start);
     let to = byteToChar(source, d.end);
     if (to < from) to = from;
     if (to === from) to = Math.min(source.length, from + 1); // widen a point marker
     out.push({ from, to, severity: d.severity, message: d.message });
   }
   return out;
-}
-
-// Formats offered per model dimensionality — 2D profiles export to vector
-// formats, 3D solids to mesh formats.
-const FORMATS_3D: ExportFmt[] = ["stl", "off", "obj", "3mf", "amf"];
-const FORMATS_2D: ExportFmt[] = ["dxf", "svg"];
-
-// A model is "multi-color" for export purposes when its exportable (non-`%`
-// background) color groups use more than one distinct color. STL silently drops
-// color; 3MF preserves it as separate objects — so we default multi-color models
-// to 3MF until the user picks a format themselves.
-function distinctExportColors(groups: PreviewGroup[]): number {
-  const seen = new Set<string>();
-  for (const g of groups) {
-    if (g.mode === "background") continue;
-    seen.add(g.color.join(","));
-  }
-  return seen.size;
 }
 
 // A render running longer than this is considered a death-spiral candidate and
@@ -253,26 +253,6 @@ const DOCK_W_DEFAULT = 288;
 const CONSOLE_H_DEFAULT = 160;
 const clampNum = (v: number, lo: number, hi: number) =>
   Math.max(lo, Math.min(hi, v));
-
-interface Status {
-  ok: boolean;
-  message: string;
-  triangleCount: number;
-  vertexCount: number;
-  /** Total surface area (3D) or enclosed area (2D). */
-  area: number;
-  volume: number;
-  ms: number;
-  echo: string;
-  warnings: string;
-  error: string;
-  /** Recoverable geometry errors (degraded render): a mesh is shown but a CSG op
-   *  failed and was replaced by a fallback. Empty when geometry is exact. */
-  geomErrors: string;
-  /** The shown mesh came from the fast, non-watertight preview path, so `volume`
-   *  is approximate (it counts skipped-union interior walls). */
-  preview: boolean;
-}
 
 export function App() {
   const editorHost = useRef<HTMLDivElement>(null);
@@ -311,12 +291,17 @@ export function App() {
   // cleared until the next cursor move / item click so a re-render (which re-runs
   // the cursor→model highlight) doesn't resurrect it.
   const highlightDismissedRef = useRef(false);
-  // Editor↔preview highlighting toggle. Mirrored to a ref so the once-wired pick
-  // handler (in useEffect) reads the live value, not a stale closure.
-  const linkHighlightRef = useRef(loadPrefs().linkHighlight);
-  // Fast (non-watertight) preview toggle. Mirrored to a ref so the once-wired
-  // `renderNow` closure reads the live value.
-  const fastPreviewRef = useRef(loadPrefs().fastPreview);
+  // Editor↔preview highlighting, Fast preview, and the active engine are
+  // persisted values whose shadow ref is read by the []-deps render/pick
+  // closures — usePref keeps state + ref + savePrefs atomic (see usePref.ts).
+  const [linkHighlight, linkHighlightRef, setLinkHighlightPref] = usePref(
+    "linkHighlight",
+    loadPrefs().linkHighlight,
+  );
+  const [fastPreview, fastPreviewRef, setFastPreviewPref] = usePref(
+    "fastPreview",
+    loadPrefs().fastPreview,
+  );
   // Render quality ($fn/$fa/$fs). Mirrored to a ref so `renderNow` injects the
   // live setting; a NOT-in-share-link pref (quality is a viewing preference).
   const qualityRef = useRef<QualitySettings>({
@@ -327,10 +312,13 @@ export function App() {
   });
   // Active render engine. "quito" is our engine (native C++ kernel on desktop,
   // wasm in the browser); "openscad" is the vendored OpenSCAD wasm build, which
-  // runs in-webview on both. Mirrored to a ref so the once-wired render closures
-  // read the live value. `swapEngineRef` is set inside the mount effect (it needs
-  // the effect's onResult/onBusyChange).
-  const engineKindRef = useRef<EngineKind>(loadPrefs().engine);
+  // runs in-webview on both. usePref mirrors it to a ref the once-wired render
+  // closures read. `swapEngineRef` is set inside the mount effect (it needs the
+  // effect's onResult/onBusyChange).
+  const [engineKind, engineKindRef, setEngineKindPref] = usePref(
+    "engine",
+    loadPrefs().engine,
+  );
   const swapEngineRef = useRef<(kind: EngineKind) => void>(() => {});
 
   // File + customizer state. A `#code/…` share link (browser only) wins over
@@ -357,6 +345,13 @@ export function App() {
     saved?.paramSets ?? {},
   );
   const paramsJsonRef = useRef("");
+  // The main source snapshotted at render-request time, so onResult can record
+  // which source produced the shown mesh (renderState.renderedSource) without
+  // reading the possibly-newer live editor buffer.
+  const renderedSourceRef = useRef("");
+  // Hidden <input type=file> backing the web Project ▾ → Import… action (web
+  // import was drag-only before).
+  const importInputRef = useRef<HTMLInputElement>(null);
   const requestRenderRef = useRef<() => void>(() => {});
   const renderNowRef = useRef<() => void>(() => {}); // immediate render (animation frames bypass the debounce)
   // During frame export: resolved by onResult when the current frame's render lands.
@@ -389,23 +384,49 @@ export function App() {
 
   const [files, setFiles] = useState<File[]>(filesRef.current);
   const [active, setActive] = useState(activeRef.current);
-  const [status, setStatus] = useState<Status>({
-    ok: true,
-    message: "initializing…",
-    triangleCount: 0,
-    vertexCount: 0,
-    area: 0,
-    volume: 0,
-    ms: 0,
-    echo: "",
-    warnings: "",
-    error: "",
-    geomErrors: "",
-    preview: false,
+  // The nine fields a completed render replaces, in one state so onResult can
+  // fold them through the pure `reduce` (see renderState.ts) reading `prev` from
+  // inside the []-deps mount effect. Reads use the destructured names below, so
+  // the rest of the component is unchanged; writers outside onResult go through
+  // the partial updaters.
+  const [renderState, setRenderState] = useState<RenderState>({
+    ...INITIAL_RENDER_STATE,
+    overrides: overridesRef.current,
   });
-  const [version, setVersion] = useState("");
+  const {
+    status,
+    version,
+    renderRev,
+    exportFmt,
+    is2D,
+    schema,
+    overrides,
+    diagCounts,
+  } = renderState;
+  const setStatus = (u: Status | ((s: Status) => Status)) =>
+    setRenderState((p) => ({
+      ...p,
+      status:
+        typeof u === "function" ? (u as (s: Status) => Status)(p.status) : u,
+    }));
+  const setOverrides = (
+    u:
+      | Record<string, ParamValue>
+      | ((o: Record<string, ParamValue>) => Record<string, ParamValue>),
+  ) =>
+    setRenderState((p) => ({
+      ...p,
+      overrides: typeof u === "function" ? u(p.overrides) : u,
+    }));
+  const setExportFmt = (u: ExportFmt | ((f: ExportFmt) => ExportFmt)) =>
+    setRenderState((p) => ({
+      ...p,
+      exportFmt: typeof u === "function" ? u(p.exportFmt) : u,
+    }));
   // A render is in flight (drives the "rendering…" indicator + Stop button).
   const [rendering, setRendering] = useState(false);
+  // (status/version/renderRev/exportFmt/is2D/schema/overrides/diagCounts are
+  // fields of `renderState` above.)
   // Recovery mode: the restored project wasn't auto-rendered because the last
   // render never finished. Shows a banner and waits for the user to press Render.
   const [recovering, setRecovering] = useState(wasStuck);
@@ -415,15 +436,37 @@ export function App() {
   // Drag-and-drop file import: highlight state + a message for unsupported files.
   const [dragActive, setDragActive] = useState(false);
   const [importMsg, setImportMsg] = useState("");
-  const [consoleOpen, setConsoleOpen] = useState(false);
-  const [consoleFilter, setConsoleFilter] = useState<
-    "all" | "error" | "warn" | "echo"
-  >("all");
+  // True while the OpenSCAD engine is downloading its ~10 MB wasm (first use);
+  // shown as a banner so the wait isn't mistaken for a hung render.
+  const [engineDownloading, setEngineDownloading] = useState(false);
+  // Console drawer open + filter, persisted (usePref). The keydown toggle reads
+  // the ref (it's in the []-deps handler), so a thin wrapper supports the
+  // functional `(o) => !o` form the call sites use.
+  const [consoleOpen, consoleOpenRef, setConsoleOpenPref] = usePref(
+    "consoleOpen",
+    loadPrefs().consoleOpen,
+  );
+  const setConsoleOpen = (u: boolean | ((o: boolean) => boolean)) =>
+    setConsoleOpenPref(typeof u === "function" ? u(consoleOpenRef.current) : u);
+  const [consoleFilter, , setConsoleFilter] = usePref(
+    "consoleFilter",
+    loadPrefs().consoleFilter,
+  );
+  // Narrow-screen pane selection (≤1023px): the editor and viewer become a
+  // Code⎪Model segmented switch instead of side-by-side. "model" first — the
+  // customizer and viewer are the point at tablet/phone widths.
+  const [paneView, setPaneView] = useState<"code" | "model">("model");
+  // Objects section (isolate, §6). Rows come from the render's provenance; the
+  // viewer owns the authoritative selection and reports back via onSelection.
+  const [objectRows, setObjectRows] = useState<ObjectRow[]>([]);
+  const [selectionSpanUi, setSelectionSpanUi] = useState<Span | null>(null);
+  const [isolatedInfo, setIsolatedInfo] = useState<{
+    triangles: number;
+    size: MeshInfo;
+  } | null>(null);
+  const [objectsOpen, setObjectsOpen] = useState(true);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
-  // Monotonic render counter, surfaced as data-render-rev on the status bar so a
-  // completed render is observable even though the meta is always visible.
-  const [renderRev, setRenderRev] = useState(0);
   // Right-dock layout: spine collapse (null = auto: spine only when no params)
   // and per-section open state. All persisted.
   const [dockPref, setDockPref] = useState<boolean | null>(
@@ -447,46 +490,38 @@ export function App() {
   const [sectionOn, setSectionOn] = useState(loadPrefs().sectionOn);
   const [sectionAxis, setSectionAxis] = useState(loadPrefs().sectionAxis);
   const [sectionT, setSectionT] = useState(loadPrefs().sectionT);
-  const [exportFmt, setExportFmt] = useState<ExportFmt>("stl");
   // Whether the user has manually chosen an export format. Until they do, the
   // format auto-tracks the model: 3MF for multi-color 3D models, STL otherwise.
   const userPickedFmtRef = useRef(false);
-  const [is2D, setIs2D] = useState(false);
   const [dims, setDims] = useState<MeshInfo | null>(null);
-  const [ortho, setOrtho] = useState(false);
-  const [linkHighlight, setLinkHighlight] = useState(linkHighlightRef.current);
-  const [fastPreview, setFastPreview] = useState(fastPreviewRef.current);
+  // Orthographic camera — persisted (usePref), unlike its old bare useState.
+  const [ortho, , setOrthoPref] = usePref("ortho", loadPrefs().ortho);
   const [quality, setQuality] = useState<Quality>(qualityRef.current.quality);
-  // Custom-quality $fn (the crash banner tells users to lower it). $fa/$fs get a
-  // fuller editor with the Quality popover in a later phase.
+  // Custom-quality tolerances. $fn forces a fixed segment count; $fa (max angle,
+  // °) and $fs (max segment size, mm) are the tolerance knobs that match
+  // OpenSCAD's 12°/2mm defaults when $fn is left blank.
   const [customFn, setCustomFn] = useState<number | null>(
     qualityRef.current.customFn,
   );
-  const [engineKind, setEngineKind] = useState<EngineKind>(
-    engineKindRef.current,
+  const [customFa, setCustomFa] = useState<number | null>(
+    qualityRef.current.customFa,
   );
-  // OS light/dark appearance. Auto-follows `prefers-color-scheme`; no toggle.
-  const [mode, setMode] = useState<ThemeMode>(currentMode);
+  const [customFs, setCustomFs] = useState<number | null>(
+    qualityRef.current.customFs,
+  );
+  // App appearance. `theme` is the user's choice (auto/light/dark, persisted);
+  // `mode` is the effective light/dark it resolves to — "auto" tracks the OS.
+  const [theme, , setThemePref] = usePref("theme", loadPrefs().theme);
+  const [osMode, setOsMode] = useState<ThemeMode>(currentMode);
+  const mode: ThemeMode = theme === "auto" ? osMode : theme;
   const [time, setTime] = useState(sharedAnim?.t ?? 0);
   const [playing, setPlaying] = useState(sharedAnim?.playing ?? false);
   const [fps, setFps] = useState(sharedAnim?.fps ?? 15);
   const [steps, setSteps] = useState(sharedAnim?.steps ?? 20);
-  const [schema, setSchema] = useState<Param[]>([]);
-  const [overrides, setOverrides] = useState<Record<string, ParamValue>>(
-    overridesRef.current,
-  );
   const [paramSets, setParamSets] = useState<
     Record<string, Record<string, ParamValue>>
   >(paramSetsRef.current);
   const [shareMsg, setShareMsg] = useState("");
-  // Diagnostic counts for the main file (error/warning), for the tab badge.
-  const [diagCounts, setDiagCounts] = useState<{
-    errors: number;
-    warnings: number;
-  }>({
-    errors: 0,
-    warnings: 0,
-  });
 
   function persist() {
     const ok = saveProject({
@@ -505,6 +540,13 @@ export function App() {
 
     const viewer = new Viewer(canvasRef.current, (info) => setDims(info));
     viewerRef.current = viewer;
+    // The viewer owns the committed isolate selection (it re-resolves every
+    // render); mirror its reports into React for the Objects section. A null
+    // report means it un-isolated (cleared, or the span vanished on a re-render).
+    viewer.onSelection = (info) => {
+      setIsolatedInfo(info);
+      if (!info) setSelectionSpanUi(null);
+    };
     // Apply persisted display toggles (defaults are on, so this only bites when
     // the user had turned the grid/edges off).
     const prefs0 = loadPrefs();
@@ -512,16 +554,18 @@ export function App() {
     viewer.setEdgesVisible(prefs0.showEdges);
     viewer.setDimensionsVisible(prefs0.showDims);
     viewer.setSection(prefs0.sectionOn, prefs0.sectionAxis, prefs0.sectionT);
+    if (prefs0.ortho) viewer.setProjection("orthographic");
 
     // Model → code: clicking a face selects the source statement that produced
     // it. Spans index into the main file, so switch to it first if needed.
     const unsubPick = viewer.onPick((span) => {
       if (!linkHighlightRef.current) return;
-      // Clicking empty space deselects: dismiss the highlight and leave the
-      // editor cursor where it is.
+      // Clicking empty space deselects: dismiss the highlight, un-isolate, and
+      // leave the editor cursor where it is.
       if (!span) {
         highlightDismissedRef.current = true;
         viewer.highlightSpan(null);
+        viewer.isolate(null);
         return;
       }
       const view = viewRef.current;
@@ -541,6 +585,10 @@ export function App() {
       // dismiss), which wouldn't fire the selection listener.
       highlightDismissedRef.current = false;
       highlightFromCursorRef.current();
+      // A click is a *committed* selection: isolate this part (transient
+      // cursor/hover highlighting stays a wash only).
+      viewer.isolate(span);
+      setSelectionSpanUi(span);
     });
 
     // Busy transitions drive the Stop/rendering UI and arm crash-recovery. The
@@ -563,18 +611,21 @@ export function App() {
     // installed binary on desktop (falling back to wasm if none is installed), or
     // the vendored wasm build in the browser. "quito" uses the native C++ engine
     // on desktop and the wasm engine in the browser.
+    const onDownloadChange = (downloading: boolean) =>
+      setEngineDownloading(downloading);
     const buildEngine = (
       kind: EngineKind,
     ): Engine | DesktopEngine | DesktopOpenscadEngine => {
       const cb = (r: RenderResponse) => onResult(r);
+      const opts = { onBusyChange, onDownloadChange };
       if (kind === "openscad") {
-        if (!TAURI) return new OpenscadEngine(cb, { onBusyChange });
-        const osc = new DesktopOpenscadEngine(cb, { onBusyChange });
+        if (!TAURI) return new OpenscadEngine(cb, opts);
+        const osc = new DesktopOpenscadEngine(cb, opts);
         osc.dir = engineDirRef.current; // disk include/use via OPENSCADPATH
         return osc;
       }
-      if (!TAURI) return new Engine(cb, { onBusyChange });
-      const native = new DesktopEngine(cb, { onBusyChange });
+      if (!TAURI) return new Engine(cb, opts);
+      const native = new DesktopEngine(cb, opts);
       native.dir = engineDirRef.current; // re-seed disk include/use resolution
       return native;
     };
@@ -621,6 +672,8 @@ export function App() {
         );
       }
       const libs = fs.slice(1);
+      // Snapshot the source this render will reflect (for renderedSource).
+      renderedSourceRef.current = fs[0].content;
       if (engineRef.current instanceof DesktopEngine) {
         // Native engine resolves include/use from disk (OPENSCADPATH) + the
         // in-memory tabs; no CDN fetch needed. Only the native engine can read
@@ -672,6 +725,10 @@ export function App() {
       state: EditorState.create({
         doc: filesRef.current[activeRef.current].content,
         extensions: [
+          // The CodeMirror textbox needs an accessible name (WCAG 4.1.2).
+          EditorView.contentAttributes.of({
+            "aria-label": "OpenSCAD source editor",
+          }),
           // ⌘↵ renders. Highest precedence so it beats basicSetup's
           // defaultKeymap, where Mod-Enter is insertBlankLine.
           Prec.highest(
@@ -688,8 +745,9 @@ export function App() {
           ),
           basicSetup,
           keymap.of([
-            // ⌘S / ⌘⇧S save the active tab to disk (desktop). preventDefault
-            // stops the browser's own save dialog even in the web build.
+            // ⌘S saves the active tab to disk (desktop) or downloads it (web);
+            // ⌘⇧S is Save As (desktop). preventDefault stops the browser's own
+            // save dialog either way.
             {
               key: "Mod-s",
               preventDefault: true,
@@ -711,7 +769,7 @@ export function App() {
           openscad(),
           // After basicSetup so our HighlightStyle beats the fallback default.
           // Reconfigured live by the [mode] effect below.
-          themeComp.current.of(themeExts(currentMode())),
+          themeComp.current.of(themeExts(initialMode())),
           EditorView.updateListener.of((u) => {
             if (u.docChanged && !suppressRef.current) {
               const idx = activeRef.current;
@@ -848,6 +906,17 @@ export function App() {
         viewerRef.current?.fit();
         return;
       }
+      // ⌘S outside the editor: the CM keymap only fires when the editor has
+      // focus, so mirror it here (save on desktop, download on web) and stop
+      // the browser's save dialog. Plain ⌘S is not a native accelerator.
+      if (mod && !e.shiftKey && key === "s") {
+        const inEditor = (e.target as HTMLElement)?.closest?.(".cm-editor");
+        if (!inEditor) {
+          e.preventDefault();
+          saveActiveRef.current();
+        }
+        return;
+      }
       if (mod && key === "enter") {
         const inEditor = (e.target as HTMLElement)?.closest?.(".cm-editor");
         if (!inEditor) {
@@ -856,10 +925,14 @@ export function App() {
         }
         return;
       }
-      // Escape deselects the highlighted item (like clicking empty preview).
-      if (e.key === "Escape" && linkHighlightRef.current) {
-        highlightDismissedRef.current = true;
-        viewerRef.current?.highlightSpan(null);
+      // Escape un-isolates and deselects the highlighted item (like clicking
+      // empty preview). Isolate clears regardless of the link-highlight setting.
+      if (e.key === "Escape") {
+        if (viewerRef.current?.isolated) viewerRef.current.isolate(null);
+        if (linkHighlightRef.current) {
+          highlightDismissedRef.current = true;
+          viewerRef.current?.highlightSpan(null);
+        }
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -876,11 +949,11 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Follow the OS appearance: subscribe once to prefers-color-scheme and mirror
-  // changes into `mode`. The [mode] effect below propagates them everywhere.
+  // Track the OS appearance so "auto" theme follows it. When the user forces
+  // light/dark, `mode` ignores this (but we keep tracking, cheaply).
   useEffect(() => {
     const mql = window.matchMedia("(prefers-color-scheme: dark)");
-    const onChange = () => setMode(currentMode());
+    const onChange = () => setOsMode(currentMode());
     mql.addEventListener("change", onChange);
     return () => mql.removeEventListener("change", onChange);
   }, []);
@@ -1112,9 +1185,7 @@ export function App() {
    *  the highlight for the current cursor. */
   function toggleLinkHighlight() {
     const next = !linkHighlightRef.current;
-    linkHighlightRef.current = next;
-    setLinkHighlight(next);
-    savePrefs({ linkHighlight: next });
+    setLinkHighlightPref(next);
     if (next) highlightFromCursor();
     else viewerRef.current?.highlightSpan(null);
   }
@@ -1122,10 +1193,7 @@ export function App() {
   /** Toggle the fast (non-watertight) preview and re-render so the change is
    *  visible immediately. Remembered across sessions. */
   function toggleFastPreview() {
-    const next = !fastPreviewRef.current;
-    fastPreviewRef.current = next;
-    setFastPreview(next);
-    savePrefs({ fastPreview: next });
+    setFastPreviewPref(!fastPreviewRef.current);
     renderNowRef.current?.();
   }
 
@@ -1135,6 +1203,8 @@ export function App() {
     qualityRef.current = { ...qualityRef.current, ...next };
     if (next.quality !== undefined) setQuality(next.quality);
     if (next.customFn !== undefined) setCustomFn(next.customFn);
+    if (next.customFa !== undefined) setCustomFa(next.customFa);
+    if (next.customFs !== undefined) setCustomFs(next.customFs);
     savePrefs(next);
     renderNowRef.current?.();
   }
@@ -1155,6 +1225,13 @@ export function App() {
     const v = !modelOpen;
     setModelOpen(v);
     savePrefs({ modelOpen: v });
+  }
+
+  /** Isolate a part from the Objects list (or clear). Toggling the active row
+   *  off, or passing null, shows the whole model again. */
+  function isolatePart(span: Span | null) {
+    viewerRef.current?.isolate(span);
+    setSelectionSpanUi(span);
   }
 
   // --- resizable panels: apply a pointer delta, then persist on release ---
@@ -1210,7 +1287,7 @@ export function App() {
   }
   function setOrthoProjection(next: boolean) {
     viewerRef.current?.setProjection(next ? "orthographic" : "perspective");
-    setOrtho(next);
+    setOrthoPref(next);
   }
 
   /** Swap the render engine between Quito and the vendored OpenSCAD wasm, then
@@ -1219,9 +1296,7 @@ export function App() {
   function toggleEngine() {
     const next: EngineKind =
       engineKindRef.current === "openscad" ? "quito" : "openscad";
-    engineKindRef.current = next;
-    setEngineKind(next);
-    savePrefs({ engine: next });
+    setEngineKindPref(next);
     swapEngineRef.current(next);
   }
 
@@ -1348,9 +1423,25 @@ export function App() {
   }
 
   // Text extensions we can load in the browser (binary STL/3MF/PNG need a
-  // Vec<u8> channel through the engine — not wired yet).
-  const TEXT_IMPORT = /\.(scad|txt|dat|csv|json|off|obj|amf|dxf|svg|stl)$/i;
+  // Vec<u8> channel through the engine — not wired yet). `.stl` is sniffed
+  // below: ASCII STL is text, binary STL joins BINARY_IMPORT.
+  const TEXT_IMPORT = /\.(scad|txt|dat|csv|json|off|obj|amf|dxf|svg)$/i;
+  const STL_IMPORT = /\.stl$/i;
   const BINARY_IMPORT = /\.(3mf|png|jpg|jpeg)$/i;
+
+  /** True if a `.stl` File is binary (80-byte header + uint32 count + 50
+   *  bytes/triangle). Binary STLs UTF-8-decode to U+FFFD-mangled garbage that a
+   *  lenient parser then "succeeds" on, so we route them to the binary message
+   *  instead of corrupting them. ASCII STL starts with the "solid" token and
+   *  has no such size relation; anything we can't confirm as ASCII is refused. */
+  async function stlIsBinary(f: globalThis.File): Promise<boolean> {
+    if (f.size >= 84) {
+      const dv = new DataView(await f.slice(80, 84).arrayBuffer());
+      if (f.size === 84 + dv.getUint32(0, true) * 50) return true;
+    }
+    const head = new TextDecoder().decode(await f.slice(0, 6).arrayBuffer());
+    return !head.trimStart().toLowerCase().startsWith("solid");
+  }
 
   /** Import dropped/opened local files (browser). A .scad replaces the pristine
    *  default main so it renders immediately; everything else is added as a tab.
@@ -1359,6 +1450,11 @@ export function App() {
     const arr = Array.from(fileList);
     const binary = arr.filter((f) => BINARY_IMPORT.test(f.name));
     const text = arr.filter((f) => TEXT_IMPORT.test(f.name));
+    // Sniff each .stl: ASCII is safe to read as text, binary is refused.
+    for (const f of arr.filter((f) => STL_IMPORT.test(f.name))) {
+      if (await stlIsBinary(f)) binary.push(f);
+      else text.push(f);
+    }
     if (binary.length) {
       setImportMsg(
         `Can't import ${binary
@@ -1439,42 +1535,37 @@ export function App() {
     window.clearTimeout(slowTimer.current);
     if (!r.stopped) markRenderPending();
 
-    if (r.version) setVersion(r.version);
-
     // Unblock a frame-export step waiting on this render (mesh is applied below).
     const frameWaiter = frameWaiterRef.current;
 
-    // Inline diagnostics: parse the structured channel, remember it (for the
-    // tab badge), and squiggle it in the editor when the main tab is showing.
-    let diags: EngineDiag[] = [];
-    try {
-      diags = JSON.parse(r.diagnostics || "[]") as EngineDiag[];
-    } catch {
-      diags = [];
-    }
-    diagRef.current = diags;
-    setDiagCounts({
-      errors: diags.filter((d) => d.severity === "error").length,
-      warnings: diags.filter((d) => d.severity === "warning").length,
-    });
+    // Inline diagnostics: remember them (for the tab badge) and squiggle them in
+    // the editor when the main tab is showing.
+    diagRef.current = parseDiagnostics(r.diagnostics);
     applyDiagnostics();
 
-    if (r.params && r.params !== paramsJsonRef.current) {
+    // Params changed → the reducer re-parses the schema and drops overrides no
+    // longer in it; mirror the shadow ref + parse cache here since the render
+    // path reads them. The parse gate avoids re-filtering every playback frame.
+    const paramsChanged = !!r.params && r.params !== paramsJsonRef.current;
+    if (paramsChanged) {
       paramsJsonRef.current = r.params;
-      const next = parseSchema(r.params);
-      setSchema(next);
-      const kept: Record<string, ParamValue> = {};
-      for (const [k, v] of Object.entries(overridesRef.current)) {
-        if (next.some((p) => p.name === k)) kept[k] = v;
-      }
-      if (
-        Object.keys(kept).length !== Object.keys(overridesRef.current).length
-      ) {
-        overridesRef.current = kept;
-        setOverrides(kept);
-      }
+      overridesRef.current = keepOverrides(
+        overridesRef.current,
+        parseSchema(r.params),
+      );
     }
 
+    // Fold the nine display fields in one batched update, reading `prev` via the
+    // updater (this call site is inside the []-deps mount effect and cannot read
+    // state any other way). All side effects stay below.
+    const ctx: ReduceCtx = {
+      userPickedFmt: userPickedFmtRef.current,
+      renderedSource: renderedSourceRef.current,
+      paramsChanged,
+    };
+    setRenderState((prev) => reduce(prev, r, ctx));
+
+    // ---- side effects (refs + imperative viewer APIs only, never state) ----
     if (r.ok) {
       lastPositions.current = r.positions;
       // Colored preview groups (present only when the model uses color/`#`/`%`).
@@ -1511,6 +1602,14 @@ export function App() {
         r.provenanceNormals,
         prov,
       );
+      // Objects section rows: derived from provenance against the source that
+      // produced this mesh (never the live buffer). Built here rather than in
+      // render so the section reflects the shown geometry.
+      setObjectRows(
+        buildObjectRows(prov, renderedSourceRef.current, (byte) =>
+          byteToChar(renderedSourceRef.current, byte),
+        ),
+      );
       // Re-apply the code→model highlight for the current cursor (setProvenance
       // cleared the stale overlay).
       highlightFromCursor();
@@ -1519,47 +1618,10 @@ export function App() {
       if (r.viewport && viewerRef.current && !exportingRef.current) {
         applyScriptCamera(r.viewport);
       }
-      // Offer vector formats for 2D models, mesh formats for 3D; keep the
-      // selected format valid when the model's dimensionality changes.
-      setIs2D(r.is2D);
-      const multiColor = distinctExportColors(groups) > 1;
-      setExportFmt((f) => {
-        if (r.is2D) return FORMATS_2D.includes(f) ? f : "dxf";
-        // Until the user picks a format, default multi-color models to 3MF (which
-        // preserves the colors) and everything else to STL.
-        if (!userPickedFmtRef.current) return multiColor ? "3mf" : "stl";
-        return FORMATS_3D.includes(f) ? f : "stl";
-      });
-      setStatus({
-        ok: true,
-        message: r.geomErrors
-          ? `${r.triangleCount.toLocaleString()} triangles · geometry errors`
-          : `${r.triangleCount.toLocaleString()} triangles`,
-        triangleCount: r.triangleCount,
-        vertexCount: r.vertexCount,
-        area: r.area,
-        volume: r.volume,
-        ms: r.ms,
-        echo: r.echo,
-        warnings: r.warnings,
-        error: "",
-        geomErrors: r.geomErrors,
-        preview: r.preview ?? false,
-      });
       // A degraded render still shows a mesh, but the user should know it's
       // wrong somewhere — pop the console so the error is visible.
       if (r.geomErrors) setConsoleOpen(true);
     } else {
-      setStatus((s) => ({
-        ...s,
-        ok: false,
-        message: r.error,
-        ms: r.ms,
-        echo: r.echo,
-        warnings: r.warnings,
-        error: r.error,
-        geomErrors: r.geomErrors,
-      }));
       setConsoleOpen(true);
     }
 
@@ -1574,10 +1636,6 @@ export function App() {
     // we never reach here and the sentinel stays set so the next load recovers.
     // A *stopped* result (watchdog/Stop) is exempt — see settleRenderPending.
     settleRenderPending(!!r.stopped);
-
-    // Bump a monotonic revision so a "new render landed" is observable (the
-    // status meta is now always visible, so its presence no longer signals it).
-    setRenderRev((n) => n + 1);
   }
 
   // A console line carries a source span only when the structured diagnostics
@@ -1902,101 +1960,59 @@ export function App() {
 
   // Keep the imperative refs (editor keymap, native menu) pointing at the latest
   // closures so they never see stale state.
-  saveActiveRef.current = () => void saveActive(false);
+  // On desktop ⌘S saves to disk; in the browser there is no disk, so it
+  // downloads the active .scad instead of being a swallowed no-op.
+  saveActiveRef.current = TAURI
+    ? () => void saveActive(false)
+    : () => onDownloadScad();
   saveAsRef.current = () => void saveActive(true);
   menuExportRef.current = () => void onDownload(exportFmt);
   highlightFromCursorRef.current = highlightFromCursor;
 
   // Command registry (⌘K). Web actions only — the desktop native menu is a
   // separate Rust-driven surface and isn't unified here.
-  const commands: Command[] = [
-    {
-      id: "render",
-      title: "Render",
-      shortcut: "⌘↵",
-      run: () => renderNowRef.current(),
-    },
-    {
-      id: "stop",
-      title: "Stop render",
-      when: rendering,
-      run: () => engineRef.current?.cancel(),
-    },
-    {
-      id: "fit",
-      title: "Zoom to fit",
-      shortcut: "⌘⇧F",
-      run: () => viewerRef.current?.fit(),
-    },
-    {
-      id: "reset-view",
-      title: "Reset view",
-      run: () => viewerRef.current?.resetView(),
-    },
-    {
-      id: "console",
-      title: "Toggle console",
-      shortcut: "⌘J",
-      run: () => setConsoleOpen((o) => !o),
-    },
-    { id: "dock", title: "Toggle dock", run: toggleDock },
-    {
-      id: "grid",
-      title: "Toggle grid & axes",
-      run: () => toggleGrid(!showGrid),
-    },
-    {
-      id: "edges",
-      title: "Toggle edge overlay",
-      run: () => toggleEdges(!showEdges),
-    },
-    {
-      id: "dims",
-      title: "Toggle dimensions",
-      run: () => toggleDims(!showDims),
-    },
-    {
-      id: "section",
-      title: "Toggle section plane",
-      run: () => applySection(!sectionOn, sectionAxis, sectionT),
-    },
-    { id: "fast", title: "Toggle fast preview", run: toggleFastPreview },
-    {
-      id: "engine",
-      title: `Switch engine (${engineKind === "openscad" ? "→ Quito" : "→ OpenSCAD"})`,
-      run: toggleEngine,
-    },
-    {
-      id: "q-draft",
-      title: "Quality: Draft",
-      run: () => setQualityPref({ quality: "draft" }),
-    },
-    {
-      id: "q-normal",
-      title: "Quality: Normal",
-      run: () => setQualityPref({ quality: "normal" }),
-    },
-    {
-      id: "q-fine",
-      title: "Quality: Fine",
-      run: () => setQualityPref({ quality: "fine" }),
-    },
-    { id: "png", title: "Save PNG", run: () => void onSavePng() },
-    {
-      id: "export",
-      title: `Export (${exportFmt.toUpperCase()})`,
-      run: () => void onDownload(exportFmt),
-    },
-    {
-      id: "help",
-      title: "Help & keyboard shortcuts",
-      run: () => setHelpOpen(true),
-    },
-    { id: "new", title: "New project", run: newProject },
-    ...(TAURI
-      ? []
-      : [{ id: "share", title: "Copy share link", run: () => void onShare() }]),
-  ];
+  // Command registry projection: one `run` per id (see commands/). The palette,
+  // help sheet, and shortcut display all derive from the same registry, so a
+  // control is countable and its keyboard hint can't drift from its binding.
+  const cmdCtx: CmdCtx = { rendering, engineKind, exportFmt };
+  const cmdRuns: Record<string, () => void> = {
+    render: () => renderNowRef.current(),
+    stop: () => engineRef.current?.cancel(),
+    fit: () => viewerRef.current?.fit(),
+    "reset-view": () => viewerRef.current?.resetView(),
+    console: () => setConsoleOpen((o) => !o),
+    dock: toggleDock,
+    palette: () => setPaletteOpen((o) => !o),
+    "download-scad": onDownloadScad,
+    grid: () => toggleGrid(!showGrid),
+    edges: () => toggleEdges(!showEdges),
+    dims: () => toggleDims(!showDims),
+    section: () => applySection(!sectionOn, sectionAxis, sectionT),
+    fast: toggleFastPreview,
+    engine: toggleEngine,
+    "q-draft": () => setQualityPref({ quality: "draft" }),
+    "q-normal": () => setQualityPref({ quality: "normal" }),
+    "q-fine": () => setQualityPref({ quality: "fine" }),
+    png: () => void onSavePng(),
+    export: () => void onDownload(exportFmt),
+    "theme-auto": () => setThemePref("auto"),
+    "theme-light": () => setThemePref("light"),
+    "theme-dark": () => setThemePref("dark"),
+    help: () => setHelpOpen(true),
+    new: newProject,
+    ...(TAURI ? {} : { share: () => void onShare() }),
+  };
+  const registry = resolveCommands(cmdRuns);
+  const paletteSet = new Set(paletteIds());
+  const commands = registry
+    .filter((c) => paletteSet.has(c.id))
+    .filter((c) => !c.when || c.when(cmdCtx))
+    .map((c) => ({
+      id: c.id,
+      title: titleOf(c, cmdCtx),
+      shortcut: c.key ? displayKey(c.key) : undefined,
+      run: c.run,
+    }));
 
   return (
     <div
@@ -2018,11 +2034,11 @@ export function App() {
       }}
     >
       <header className="topbar">
+        <h1 className="sr-only">Quito playground</h1>
         <div className="brand">
           Quito <span className="tag">playground</span>
         </div>
         <div className="actions">
-          <button onClick={newProject}>New</button>
           <select
             className="examples-select"
             aria-label="Load example"
@@ -2041,35 +2057,49 @@ export function App() {
               </option>
             ))}
           </select>
-          {TAURI && <button onClick={openNative}>Open…</button>}
-          {TAURI && (
-            <button
-              onClick={() => saveActiveRef.current()}
-              title="Save the active file (⌘S)"
-            >
-              Save
-            </button>
-          )}
-          {!TAURI && (
-            <button
-              onClick={onShare}
-              title="Copy a shareable link to this project"
-            >
-              {shareMsg || "Share"}
-            </button>
-          )}
-          {!TAURI && (
-            <button
-              onClick={onDownloadScad}
-              title="Download the active file as .scad"
-            >
-              .scad
-            </button>
-          )}
+          <Popover
+            label="Project"
+            title="Project files, sharing, and export to disk"
+          >
+            <PopoverAction onClick={newProject}>New project</PopoverAction>
+            {!TAURI && (
+              <PopoverAction onClick={() => importInputRef.current?.click()}>
+                Import file…
+              </PopoverAction>
+            )}
+            {TAURI && <PopoverAction onClick={openNative}>Open…</PopoverAction>}
+            {TAURI && (
+              <PopoverAction onClick={() => saveActiveRef.current()}>
+                Save
+              </PopoverAction>
+            )}
+            {TAURI && (
+              <PopoverAction onClick={() => saveAsRef.current()}>
+                Save As…
+              </PopoverAction>
+            )}
+            {!TAURI && (
+              <PopoverAction onClick={onShare}>
+                {shareMsg || "Copy share link"}
+              </PopoverAction>
+            )}
+            {!TAURI && (
+              <PopoverAction onClick={onDownloadScad}>
+                Download .scad
+              </PopoverAction>
+            )}
+          </Popover>
           <Popover
             label="Display"
             title="Viewport display options"
-            active={ortho || !showGrid || !showEdges || !linkHighlight}
+            active={
+              ortho ||
+              !showGrid ||
+              !showEdges ||
+              !linkHighlight ||
+              showDims ||
+              sectionOn
+            }
           >
             <PopoverToggle checked={ortho} onChange={setOrthoProjection}>
               Orthographic projection
@@ -2124,6 +2154,8 @@ export function App() {
           </Popover>
           <button
             className={engineKind === "openscad" ? "active" : undefined}
+            data-cmd="engine"
+            aria-pressed={engineKind === "openscad"}
             onClick={toggleEngine}
             title={
               engineKind === "openscad"
@@ -2139,6 +2171,8 @@ export function App() {
           </button>
           <button
             className={fastPreview ? "active" : undefined}
+            data-cmd="fast"
+            aria-pressed={fastPreview}
             onClick={toggleFastPreview}
             title={
               engineKind === "openscad"
@@ -2152,171 +2186,180 @@ export function App() {
           >
             Fast
           </button>
-          <select
-            className="quality-select"
-            aria-label="Render quality"
-            value={quality}
-            onChange={(e) =>
-              setQualityPref({ quality: e.target.value as Quality })
-            }
-            title="Render resolution ($fn/$fa/$fs). Draft is coarse and fast; Fine is smooth and slow; Normal respects the script."
+          <Popover
+            label={`Quality: ${quality[0].toUpperCase()}${quality.slice(1)}`}
+            active={quality !== "normal"}
+            title="Render resolution. Draft is coarse and fast; Fine is smooth and slow; Normal respects the script; Custom sets $fn/$fa/$fs."
           >
-            <option value="draft">Draft</option>
-            <option value="normal">Normal</option>
-            <option value="fine">Fine</option>
-            <option value="custom">Custom</option>
-          </select>
-          {quality === "custom" && (
-            <label
-              className="quality-fn"
-              title="Custom $fn (blank = leave to $fa/$fs)"
-            >
-              $fn
-              <input
-                type="number"
-                min={0}
-                step={1}
-                value={customFn ?? ""}
-                onChange={(e) =>
-                  setQualityPref({
-                    customFn:
-                      e.target.value === ""
-                        ? null
-                        : Math.max(0, Math.round(Number(e.target.value))),
-                  })
-                }
-              />
-            </label>
-          )}
-          <button
-            onClick={onSavePng}
-            title="Save the current view as a PNG image"
-          >
-            PNG
-          </button>
-          <div className="anim" title="Animation ($t sweeps 0→1)">
-            <button
-              className="anim-play"
-              onClick={() => setPlaying((p) => !p)}
-              title={playing ? "Pause animation" : "Play animation"}
-              aria-label={playing ? "Pause animation" : "Play animation"}
-            >
-              {playing ? "⏸" : "▶"}
-            </button>
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.001}
-              value={time}
-              onChange={(e) => seekTime(parseFloat(e.target.value))}
-              title="Animation time $t (0–1)"
-            />
-            <span className="anim-val" title="Current $t">
-              {time.toFixed(3)}
-            </span>
-            <label className="anim-field" title="Frames per second">
-              FPS
-              <input
-                type="number"
-                min={1}
-                max={60}
-                value={fps}
-                onChange={(e) =>
-                  setFps(
-                    Math.max(
-                      1,
-                      Math.min(60, Math.round(parseFloat(e.target.value) || 1)),
-                    ),
-                  )
-                }
-              />
-            </label>
-            <label
-              className="anim-field"
-              title="Number of frames as $t goes 0→1"
-            >
-              Steps
-              <input
-                type="number"
-                min={1}
-                max={1000}
-                value={steps}
-                onChange={(e) =>
-                  setSteps(
-                    Math.max(
-                      1,
-                      Math.min(
-                        1000,
-                        Math.round(parseFloat(e.target.value) || 1),
-                      ),
-                    ),
-                  )
-                }
-              />
-            </label>
-            <button
-              onClick={onExportFrames}
-              disabled={status.triangleCount === 0}
-              title="Render every frame and download a zip of PNGs"
-            >
-              Frames
-            </button>
-          </div>
+            {(["draft", "normal", "fine", "custom"] as Quality[]).map((q) => (
+              <button
+                key={q}
+                className={`popover-row popover-choice ${quality === q ? "active" : ""}`}
+                role="menuitemradio"
+                aria-checked={quality === q}
+                onClick={() => setQualityPref({ quality: q })}
+              >
+                {q[0].toUpperCase() + q.slice(1)}
+              </button>
+            ))}
+            {quality === "custom" && (
+              <div className="popover-custom">
+                <label
+                  className="quality-fn"
+                  title="Fixed segment count (blank = leave to $fa/$fs)"
+                >
+                  $fn
+                  <input
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={customFn ?? ""}
+                    onChange={(e) =>
+                      setQualityPref({
+                        customFn:
+                          e.target.value === ""
+                            ? null
+                            : Math.max(0, Math.round(Number(e.target.value))),
+                      })
+                    }
+                  />
+                </label>
+                <label
+                  className="quality-fn"
+                  title="Max fragment angle, ° (OpenSCAD default 12)"
+                >
+                  $fa
+                  <input
+                    type="number"
+                    min={0.01}
+                    step={1}
+                    placeholder="12"
+                    value={customFa ?? ""}
+                    onChange={(e) =>
+                      setQualityPref({
+                        customFa:
+                          e.target.value === ""
+                            ? null
+                            : Math.max(0.01, Number(e.target.value)),
+                      })
+                    }
+                  />
+                </label>
+                <label
+                  className="quality-fn"
+                  title="Max fragment size, mm (OpenSCAD default 2)"
+                >
+                  $fs
+                  <input
+                    type="number"
+                    min={0.01}
+                    step={0.1}
+                    placeholder="2"
+                    value={customFs ?? ""}
+                    onChange={(e) =>
+                      setQualityPref({
+                        customFs:
+                          e.target.value === ""
+                            ? null
+                            : Math.max(0.01, Number(e.target.value)),
+                      })
+                    }
+                  />
+                </label>
+              </div>
+            )}
+          </Popover>
           <div className="export">
             <button
+              className="export-primary"
+              data-cmd="export"
               onClick={() => onDownload(exportFmt)}
               disabled={status.triangleCount === 0}
+              title={`Export ${exportFmt.toUpperCase()}`}
             >
-              Export
+              Export {exportFmt.toUpperCase()}
             </button>
-            <select
-              aria-label="Export format"
-              value={exportFmt}
-              onChange={(e) => {
-                userPickedFmtRef.current = true;
-                setExportFmt(e.target.value as ExportFmt);
-              }}
-            >
+            <Popover label="" title="Export format, PNG, and animation frames">
               {(is2D ? FORMATS_2D : FORMATS_3D).map((f) => (
-                <option key={f} value={f}>
-                  {f.toUpperCase()}
-                </option>
+                <PopoverAction
+                  key={f}
+                  disabled={status.triangleCount === 0}
+                  onClick={() => {
+                    userPickedFmtRef.current = true;
+                    setExportFmt(f);
+                    void onDownload(f);
+                  }}
+                >
+                  Export {f.toUpperCase()}
+                </PopoverAction>
               ))}
-            </select>
+              <PopoverAction onClick={() => void onSavePng()}>
+                PNG (screenshot)
+              </PopoverAction>
+              <PopoverAction
+                disabled={status.triangleCount === 0}
+                onClick={() => void onExportFrames()}
+              >
+                Frames (zip)
+              </PopoverAction>
+            </Popover>
           </div>
           <button
             className="cmdk"
+            data-cmd="palette"
             onClick={() => setPaletteOpen(true)}
             title="Command palette (⌘K)"
             aria-label="Open command palette"
           >
             ⌘K
           </button>
-          <button
-            className="help-btn"
-            onClick={() => setHelpOpen(true)}
-            title="Help & keyboard shortcuts"
-            aria-label="Help"
-          >
-            ?
-          </button>
-          <button
-            className="github-link"
-            onClick={() => openExternal(GITHUB_URL)}
-            title="View source on GitHub"
-            aria-label="View source on GitHub"
-          >
-            <svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true">
-              <path
-                fill="currentColor"
-                fillRule="evenodd"
-                d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"
-              />
-            </svg>
-          </button>
+          <Popover label="?" title="Help, theme, and source">
+            <PopoverAction onClick={() => setHelpOpen(true)}>
+              Help &amp; keyboard shortcuts
+            </PopoverAction>
+            <div className="popover-section-label">Theme</div>
+            {(["auto", "light", "dark"] as const).map((t) => (
+              <button
+                key={t}
+                className={`popover-row popover-choice ${theme === t ? "active" : ""}`}
+                role="menuitemradio"
+                aria-checked={theme === t}
+                onClick={() => setThemePref(t)}
+              >
+                {t[0].toUpperCase() + t.slice(1)}
+                {t === "auto" ? " (follow OS)" : ""}
+              </button>
+            ))}
+            <PopoverAction onClick={() => openExternal(GITHUB_URL)}>
+              View source on GitHub ↗
+            </PopoverAction>
+            <div className="popover-version">{version || "quito"}</div>
+          </Popover>
         </div>
       </header>
+
+      <input
+        ref={importInputRef}
+        type="file"
+        multiple
+        className="sr-only"
+        aria-hidden="true"
+        tabIndex={-1}
+        onChange={(e) => {
+          if (e.target.files?.length) void importFiles(e.target.files);
+          e.target.value = ""; // allow re-importing the same file
+        }}
+      />
+
+      {engineDownloading && (
+        <div className="update-banner" role="status" aria-live="polite">
+          <div className="update-banner-row">
+            <span className="update-banner-msg">
+              Downloading the OpenSCAD engine (~10 MB, first use)…
+            </span>
+          </div>
+        </div>
+      )}
 
       {importMsg && (
         <div className="update-banner error" role="alert">
@@ -2394,8 +2437,28 @@ export function App() {
         />
       )}
 
-      <div
+      <div className="pane-switch" role="tablist" aria-label="Pane">
+        <button
+          role="tab"
+          aria-selected={paneView === "code"}
+          className={paneView === "code" ? "active" : undefined}
+          onClick={() => setPaneView("code")}
+        >
+          Code
+        </button>
+        <button
+          role="tab"
+          aria-selected={paneView === "model"}
+          className={paneView === "model" ? "active" : undefined}
+          onClick={() => setPaneView("model")}
+        >
+          Model
+        </button>
+      </div>
+
+      <main
         className="workspace"
+        data-pane={paneView}
         style={{
           gridTemplateColumns: `${effEditorW}px 6px 1fr ${
             dockCollapsed ? "28px" : `6px ${effDockW}px`
@@ -2485,6 +2548,85 @@ export function App() {
           >
             ⤢ Fit
           </button>
+          {(() => {
+            // Transport strip below the canvas. Only 2 of 10 examples read $t, so
+            // it collapses to a thin bar and expands (FPS/Steps) when the main
+            // file uses $t — it doesn't tax every script with 5 controls.
+            const hasT = files[0]?.content.includes("$t") ?? false;
+            return (
+              <div
+                className={`transport ${hasT ? "expanded" : "collapsed"}`}
+                title="Animation ($t sweeps 0→1)"
+              >
+                <button
+                  className="anim-play"
+                  onClick={() => setPlaying((p) => !p)}
+                  title={playing ? "Pause animation" : "Play animation"}
+                  aria-label={playing ? "Pause animation" : "Play animation"}
+                >
+                  {playing ? "⏸" : "▶"}
+                </button>
+                <input
+                  type="range"
+                  className="transport-scrub"
+                  min={0}
+                  max={1}
+                  step={0.001}
+                  value={time}
+                  onChange={(e) => seekTime(parseFloat(e.target.value))}
+                  aria-label="Animation time $t (0–1)"
+                />
+                <span className="anim-val">$t {time.toFixed(3)}</span>
+                {hasT && (
+                  <>
+                    <label className="anim-field" title="Frames per second">
+                      FPS
+                      <input
+                        type="number"
+                        min={1}
+                        max={60}
+                        value={fps}
+                        onChange={(e) =>
+                          setFps(
+                            Math.max(
+                              1,
+                              Math.min(
+                                60,
+                                Math.round(parseFloat(e.target.value) || 1),
+                              ),
+                            ),
+                          )
+                        }
+                      />
+                    </label>
+                    <label
+                      className="anim-field"
+                      title="Number of frames as $t goes 0→1"
+                    >
+                      Steps
+                      <input
+                        type="number"
+                        min={1}
+                        max={1000}
+                        value={steps}
+                        onChange={(e) =>
+                          setSteps(
+                            Math.max(
+                              1,
+                              Math.min(
+                                1000,
+                                Math.round(parseFloat(e.target.value) || 1),
+                              ),
+                            ),
+                          )
+                        }
+                      />
+                    </label>
+                  </>
+                )}
+              </div>
+            );
+          })()}
         </div>
         {!dockCollapsed && (
           <ResizeHandle
@@ -2517,14 +2659,23 @@ export function App() {
             groups: lastPreview.current.groups,
             libraries: files.slice(1).map((f) => f.name),
           }}
+          objects={{
+            rows: objectRows,
+            selected: selectionSpanUi,
+            isolated: isolatedInfo,
+            onIsolate: isolatePart,
+            unsupported: engineKind === "openscad",
+          }}
           collapsed={dockCollapsed}
           onToggleCollapsed={toggleDock}
           paramsOpen={paramsOpen}
           onToggleParams={toggleParamsSection}
+          objectsOpen={objectsOpen}
+          onToggleObjects={() => setObjectsOpen((o) => !o)}
           modelOpen={modelOpen}
           onToggleModel={toggleModelSection}
         />
-      </div>
+      </main>
 
       {consoleOpen && (
         <ResizeHandle
@@ -2619,7 +2770,9 @@ export function App() {
             </button>
           )}
         </span>
-        <span className="status-main">{status.message}</span>
+        <span className="status-main" aria-live="polite">
+          {status.message}
+        </span>
         {/* Hold the last-good numbers across renders (don't gate on !rendering)
             so they don't blink ~15×/s during animation playback. */}
         {status.ok && (
@@ -2676,7 +2829,12 @@ export function App() {
           onClose={() => setPaletteOpen(false)}
         />
       )}
-      {helpOpen && <HelpSheet onClose={() => setHelpOpen(false)} />}
+      {helpOpen && (
+        <HelpSheet
+          onClose={() => setHelpOpen(false)}
+          shortcuts={shortcutRows(cmdCtx)}
+        />
+      )}
       {dragActive && (
         <div className="drop-overlay">Drop .scad or data files to import</div>
       )}

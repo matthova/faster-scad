@@ -1,6 +1,17 @@
 // A small toolbar popover: a trigger button and a panel that opens beneath it,
-// closing on outside pointerdown or Escape. Used for the Display ▾ menu.
-import { useEffect, useRef, useState, type ReactNode } from "react";
+// closing on outside pointerdown or Escape. Toggles (PopoverToggle) keep it
+// open; actions (PopoverAction) close it on activate, so a menu of verbs
+// (Project ▾, Export ▾) behaves like a menu while Display's toggles don't.
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+
+const PopoverCloseCtx = createContext<() => void>(() => {});
 
 interface Props {
   label: ReactNode;
@@ -46,8 +57,43 @@ export function Popover({ label, title, active, children }: Props) {
       >
         {label} ▾
       </button>
-      {open && <div className="popover-panel">{children}</div>}
+      {open && (
+        <div className="popover-panel" role="menu">
+          <PopoverCloseCtx.Provider value={() => setOpen(false)}>
+            {children}
+          </PopoverCloseCtx.Provider>
+        </div>
+      )}
     </div>
+  );
+}
+
+/** A verb row inside a Popover: runs its action and closes the menu. */
+export function PopoverAction({
+  onClick,
+  disabled,
+  title,
+  children,
+}: {
+  onClick: () => void;
+  disabled?: boolean;
+  title?: string;
+  children: ReactNode;
+}) {
+  const close = useContext(PopoverCloseCtx);
+  return (
+    <button
+      className="popover-row popover-action"
+      role="menuitem"
+      disabled={disabled}
+      title={title}
+      onClick={() => {
+        close();
+        onClick();
+      }}
+    >
+      {children}
+    </button>
   );
 }
 

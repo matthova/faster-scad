@@ -55,9 +55,14 @@
   --panel: #1a1d23;
   --raised: #23272f;
   --border: #2a2e37;
+  /* Control boundaries need 3:1 (WCAG 1.4.11); --border (1.24:1) is a hairline
+     for surface seams only. --accent-strong is accent in a text/border/focus
+     role (identical to --accent in dark, where it already clears contrast). */
+  --border-strong: #565d6b;
   --text: #e6e8ec;
   --muted: #9aa0aa;
   --accent: #f5a623;
+  --accent-strong: #f5a623;
   --err: #ff6b6b;
   --warn: #e0b341;
 }
@@ -71,15 +76,61 @@
   --panel: #eef0f3;
   --raised: #ffffff;
   --border: #d5d9e0;
+  /* --border was 1.24:1 (a hairline). Control boundaries and the focus ring use
+     the stronger variants, which clear WCAG 1.4.11's 3:1 / 1.4.3's text ratios.
+     --accent-strong darkens the amber to 4.5:1 for text/border/focus, where the
+     brand --accent (2.79:1 on --panel) is illegible. */
+  --border-strong: #8b929e;
   --text: #1b1e23;
-  --muted: #667085;
+  --muted: #5b6472;
   --accent: #d97706;
-  --err: #d32f2f;
-  --warn: #b7791f;
+  --accent-strong: #a45a06;
+  --err: #c62222;
+  --warn: #8a5a00;
+}
+
+/* Focus ring color: the accent in a role that must clear 3:1 in both themes. */
+:root {
+  --focus: var(--accent-strong);
 }
 
 * {
   box-sizing: border-box;
+}
+
+/* Visually hidden but available to screen readers (labels, the page heading). */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Keyboard focus is always visible (WCAG 2.4.7). :focus-visible keeps the ring
+   off mouse/touch clicks. --focus clears 3:1 on --panel in both themes. Outlines
+   don't affect layout, so this is safe to apply globally. */
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* Honour "reduce motion": drop CSS transitions/animations to near-instant.
+   rAF-driven motion (the viewer camera) is handled in viewer.ts via matchMedia,
+   which CSS can't reach. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 html,
@@ -122,15 +173,27 @@ body {
   margin-left: var(--space-2);
 }
 
+/* The control row. A real flex rule with an explicit gap (M8 shipped none, so
+   the row silently reflowed to two lines) — nowrap at the topbar so overflow is
+   a measurable failure, not a silent wrap. Below 1024 the responsive layer
+   (Phase 6) takes over. */
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
 .actions button {
   background: var(--panel);
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  padding: var(--space-3) var(--space-6);
-  margin-left: var(--space-4);
+  padding: var(--space-3) var(--space-5);
   cursor: pointer;
   font-size: var(--text-md);
+  white-space: nowrap;
 }
 
 .actions button:hover:not(:disabled) {
@@ -166,7 +229,6 @@ body {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: var(--space-3) var(--space-4);
-  margin-left: var(--space-4);
   cursor: pointer;
   font-size: var(--text-md);
 }
@@ -332,13 +394,21 @@ body {
   font-size: var(--text-md);
 }
 .palette-item.active {
+  /* Amber is a light colour in both themes, so the selected row needs dark
+     text either way (white-on-amber is only 3.18:1; the old var(--bg) went
+     white in light mode). */
   background: var(--accent);
-  color: var(--bg);
+  color: #1b1e23;
 }
 .palette-shortcut {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   opacity: 0.8;
+}
+/* On the active (amber) row, 0.8 opacity drops the shortcut to 3.95:1; full
+   strength keeps it ≥4.5:1 against the accent background. */
+.palette-item.active .palette-shortcut {
+  opacity: 1;
 }
 .palette-empty {
   padding: var(--space-5) var(--space-6);
@@ -349,7 +419,6 @@ body {
 .popover {
   position: relative;
   display: inline-block;
-  margin-left: var(--space-4);
 }
 .popover-trigger {
   background: var(--panel);
@@ -438,7 +507,6 @@ body {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: var(--space-3) var(--space-4);
-  margin-left: var(--space-4);
   cursor: pointer;
   font-size: var(--text-md);
 }
@@ -541,15 +609,16 @@ body {
 .tab-close {
   border: 0;
   background: transparent;
-  color: inherit;
+  /* Was opacity:.6 (2.22:1 in light) — too faint for an enabled destructive
+     control. Full-strength --muted clears the text ratio; hover goes red. */
+  color: var(--muted);
   padding: 0 var(--space-1);
   font-size: var(--text-md);
   line-height: 1;
   cursor: pointer;
-  opacity: 0.6;
 }
 .tab-close:hover {
-  opacity: 1;
+  color: var(--err);
 }
 .tab-add {
   border: 0;
@@ -589,7 +658,10 @@ body {
   z-index: var(--z-overlay);
   background: var(--panel);
   color: var(--text);
-  border: 1px solid var(--border);
+  /* Floats over the canvas: in dark mode --panel is near the viewport clear
+     color, so a hairline --border (1.24:1) makes the button vanish. Use the
+     3:1 boundary token. */
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
   padding: var(--space-1) var(--space-3);
   font-size: var(--text-xs);
@@ -690,6 +762,75 @@ body {
   padding: var(--space-3) var(--space-6) var(--space-6);
   color: var(--muted);
   font-size: var(--text-sm);
+}
+
+/* Objects section (isolate). */
+.objects {
+  padding: 0 var(--space-4) var(--space-4);
+}
+.objects-isolated {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  margin-bottom: var(--space-3);
+  background: var(--panel);
+  border: 1px solid var(--accent-strong);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+.objects-clear {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xs);
+  color: var(--text);
+  font-size: var(--text-xs);
+  padding: 2px var(--space-3);
+  cursor: pointer;
+}
+.objects-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.objects-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-family: var(--font-mono);
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+  text-align: left;
+}
+.objects-row:hover:not(:disabled) {
+  background: var(--panel);
+}
+.objects-row.active {
+  border-color: var(--accent-strong);
+  color: var(--accent-strong);
+}
+.objects-row:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+.objects-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.objects-count {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 
 /* Model section. */
@@ -925,6 +1066,77 @@ body {
   font-size: var(--text-sm);
 }
 
+/* Transport strip — animation controls below the canvas (overlays the bottom
+   edge). A thin bar unless the main file reads $t; then it expands (FPS/Steps).
+   The full flex refactor of .viewer is Phase 5. */
+.transport {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: var(--z-overlay);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-1) var(--space-4);
+  background: var(--panel);
+  border-top: 1px solid var(--border-strong);
+  font-size: var(--text-sm);
+  font-family: var(--font-mono);
+  color: var(--muted);
+}
+.transport.collapsed {
+  opacity: 0.75;
+}
+.transport.collapsed:hover {
+  opacity: 1;
+}
+.transport-scrub {
+  flex: 1;
+  min-width: 80px;
+}
+
+/* Radio-style choice rows (Quality presets, Theme) inside a popover. */
+.popover-choice {
+  background: transparent;
+  border: 1px solid transparent;
+  color: inherit;
+  text-align: left;
+  font: inherit;
+}
+.popover-choice.active {
+  border-color: var(--border-strong);
+  color: var(--accent-strong);
+}
+.popover-section-label {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  padding: var(--space-3) var(--space-3) 0;
+}
+.popover-version {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  padding: var(--space-3) var(--space-3) 0;
+}
+.popover-custom {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3) 0;
+}
+
+/* Export split button: primary + caret popover trigger flush together. */
+.export-primary {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.export .popover-trigger {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
 .console {
   /* Height is set inline (resizable); this is the pre-hydration fallback. */
   height: 160px;
@@ -960,7 +1172,7 @@ body {
 }
 .console-chip.active {
   border-color: var(--accent);
-  color: var(--accent);
+  color: var(--accent-strong);
 }
 .console-chip.error.active {
   border-color: var(--err);
@@ -1008,8 +1220,16 @@ button.console-line.clickable:hover {
 }
 
 .console-toggle {
+  /* No explicit background means the UA button colour (a mid-grey in the dark
+     color-scheme) shows through, tanking the .alert warn-text contrast. Sit it
+     on the status bar's own surface instead. */
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
+  color: var(--muted);
   font-size: var(--text-xs);
   padding: var(--space-1) var(--space-4);
+  cursor: pointer;
 }
 .console-toggle.alert {
   border-color: var(--warn);
@@ -1278,4 +1498,87 @@ button.console-line.clickable:hover {
 .update-notes a {
   color: var(--accent);
   text-decoration: underline;
+}
+
+/* ── Responsive ──────────────────────────────────────────────────────────
+   The core loop (edit → render → read the numbers → tweak a param) must work at
+   every width. At ≥1024 the resizable columns stand; below, the layout collapses
+   to a single pane toggled by a Code⎪Model switch so nothing overflows. */
+.pane-switch {
+  display: none;
+}
+
+@media (max-width: 1023px) {
+  .pane-switch {
+    display: flex;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-4);
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+  }
+  .pane-switch button {
+    flex: 1;
+    min-height: 44px;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    font-size: var(--text-md);
+    cursor: pointer;
+  }
+  .pane-switch button.active {
+    border-color: var(--accent-strong);
+    color: var(--accent-strong);
+  }
+
+  /* Single pane: stack the workspace and show one side per the switch. */
+  .workspace {
+    display: flex !important;
+    flex-direction: column;
+  }
+  .workspace > .resize-handle {
+    display: none;
+  }
+  .workspace[data-pane="code"] > .viewer,
+  .workspace[data-pane="code"] > .dock {
+    display: none;
+  }
+  .workspace[data-pane="model"] > .editor-col {
+    display: none;
+  }
+  .editor-col,
+  .viewer {
+    flex: 1;
+    min-height: 0;
+    width: auto;
+  }
+  .dock {
+    flex: none;
+    max-height: 45vh;
+  }
+
+  /* Touch targets ≥44px; let the control row scroll rather than overflow. */
+  .actions {
+    overflow-x: auto;
+    min-width: 0;
+  }
+  .actions button,
+  .actions select,
+  .popover-trigger,
+  .examples-select {
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 767px) {
+  /* Read-and-tweak, not authoring: shed secondary chrome. */
+  .brand .tag {
+    display: none;
+  }
+  .status-version {
+    display: none;
+  }
+  .topbar {
+    padding: var(--space-3) var(--space-4);
+  }
 }
