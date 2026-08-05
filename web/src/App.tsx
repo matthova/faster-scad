@@ -2091,14 +2091,17 @@ export function App() {
           </Popover>
           <Popover
             label="Display"
-            title="Viewport display options"
+            title="Viewport and rendering options"
             active={
               ortho ||
               !showGrid ||
               !showEdges ||
               !linkHighlight ||
               showDims ||
-              sectionOn
+              sectionOn ||
+              engineKind !== "quito" ||
+              fastPreview ||
+              quality !== "normal"
             }
           >
             <PopoverToggle checked={ortho} onChange={setOrthoProjection}>
@@ -2151,57 +2154,64 @@ export function App() {
                 />
               </div>
             )}
-          </Popover>
-          <button
-            className={engineKind === "openscad" ? "active" : undefined}
-            data-cmd="engine"
-            aria-pressed={engineKind === "openscad"}
-            onClick={toggleEngine}
-            title={
-              engineKind === "openscad"
-                ? TAURI
-                  ? "Rendering with OpenSCAD (Manifold) — your locally-installed OpenSCAD if available, otherwise the bundled wasm build. Click to switch back to Quito."
-                  : "Rendering with OpenSCAD 2025.03.25 (Manifold) — the vendored OpenSCAD wasm engine. Click to switch back to Quito."
-                : TAURI
-                  ? "Rendering with Quito — our native engine. Click to switch to OpenSCAD (uses your local install if available, else the bundled wasm build)."
-                  : "Rendering with Quito — our engine. Click to switch to the OpenSCAD wasm engine (first use downloads ~10 MB)."
-            }
-          >
-            {engineKind === "openscad" ? "OpenSCAD" : "Quito"}
-          </button>
-          <button
-            className={fastPreview ? "active" : undefined}
-            data-cmd="fast"
-            aria-pressed={fastPreview}
-            onClick={toggleFastPreview}
-            title={
-              engineKind === "openscad"
-                ? fastPreview
-                  ? "Preview on — OpenSCAD F5-style colored render (shows color(...)). Click for a plain exact render."
-                  : "Preview off — plain exact (F6-style) render. Click for an F5-style colored preview."
-                : fastPreview
-                  ? "Fast preview on — unions are skipped (not watertight); much faster to render. Exports & volume stay exact. Click to disable."
-                  : "Fast preview off — exact, watertight render. Click to enable a faster, non-watertight preview."
-            }
-          >
-            Fast
-          </button>
-          <Popover
-            label={`Quality: ${quality[0].toUpperCase()}${quality.slice(1)}`}
-            active={quality !== "normal"}
-            title="Render resolution. Draft is coarse and fast; Fine is smooth and slow; Normal respects the script; Custom sets $fn/$fa/$fs."
-          >
-            {(["draft", "normal", "fine", "custom"] as Quality[]).map((q) => (
-              <button
-                key={q}
-                className={`popover-row popover-choice ${quality === q ? "active" : ""}`}
-                role="menuitemradio"
-                aria-checked={quality === q}
-                onClick={() => setQualityPref({ quality: q })}
+            <div className="popover-section-label">Rendering</div>
+            <button
+              className={`popover-row popover-choice ${engineKind === "openscad" ? "active" : ""}`}
+              data-cmd="engine"
+              aria-pressed={engineKind === "openscad"}
+              onClick={toggleEngine}
+              title={
+                engineKind === "openscad"
+                  ? TAURI
+                    ? "Rendering with OpenSCAD (Manifold) — your locally-installed OpenSCAD if available, otherwise the bundled wasm build. Click to switch back to Quito."
+                    : "Rendering with OpenSCAD 2025.03.25 (Manifold) — the vendored OpenSCAD wasm engine. Click to switch back to Quito."
+                  : TAURI
+                    ? "Rendering with Quito — our native engine. Click to switch to OpenSCAD (uses your local install if available, else the bundled wasm build)."
+                    : "Rendering with Quito — our engine. Click to switch to the OpenSCAD wasm engine (first use downloads ~10 MB)."
+              }
+            >
+              Engine: {engineKind === "openscad" ? "OpenSCAD" : "Quito"}
+            </button>
+            <button
+              className={`popover-row popover-choice ${fastPreview ? "active" : ""}`}
+              data-cmd="fast"
+              aria-pressed={fastPreview}
+              onClick={toggleFastPreview}
+              title={
+                engineKind === "openscad"
+                  ? fastPreview
+                    ? "Preview on — OpenSCAD F5-style colored render (shows color(...)). Click for a plain exact render."
+                    : "Preview off — plain exact (F6-style) render. Click for an F5-style colored preview."
+                  : fastPreview
+                    ? "Fast preview on — unions are skipped (not watertight); much faster to render. Exports & volume stay exact. Click to disable."
+                    : "Fast preview off — exact, watertight render. Click to enable a faster, non-watertight preview."
+              }
+            >
+              Fast preview
+            </button>
+            <label
+              className="popover-row popover-setting"
+              htmlFor="render-quality"
+            >
+              <span>Quality</span>
+              <select
+                id="render-quality"
+                className="quality-select"
+                value={quality}
+                title="Render resolution. Draft is coarse and fast; Fine is smooth and slow; Normal respects the script; Custom sets $fn/$fa/$fs."
+                onChange={(e) =>
+                  setQualityPref({ quality: e.target.value as Quality })
+                }
               >
-                {q[0].toUpperCase() + q.slice(1)}
-              </button>
-            ))}
+                {(["draft", "normal", "fine", "custom"] as Quality[]).map(
+                  (q) => (
+                    <option key={q} value={q}>
+                      {q[0].toUpperCase() + q.slice(1)}
+                    </option>
+                  ),
+                )}
+              </select>
+            </label>
             {quality === "custom" && (
               <div className="popover-custom">
                 <label

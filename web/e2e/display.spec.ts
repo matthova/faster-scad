@@ -24,7 +24,9 @@ test("Display popover toggles persist and it closes on outside click", async ({
   expect(stored.showEdges).toBe(false);
 
   // The trigger flags a non-default state.
-  await expect(page.locator(".popover-trigger")).toHaveClass(/active/);
+  await expect(page.getByRole("button", { name: "Display" })).toHaveClass(
+    /active/,
+  );
 
   // Clicking outside closes the panel.
   await page.locator(".editor").click();

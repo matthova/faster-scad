@@ -27,10 +27,18 @@ test("Project ▾ groups the file actions", async ({ page }) => {
   ).toBeVisible();
 });
 
-test("Quality ▾ reveals $fn/$fa/$fs on Custom", async ({ page }) => {
+test("Display ▾ groups rendering controls and reveals custom quality", async ({
+  page,
+}) => {
   await gotoApp(page);
-  await page.getByRole("button", { name: /^Quality/ }).click();
-  await page.getByRole("menuitemradio", { name: "Custom" }).click();
+  await page.getByRole("button", { name: "Display" }).click();
+  await expect(
+    page.getByRole("button", { name: "Engine: Quito" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Fast preview" }),
+  ).toBeVisible();
+  await page.getByRole("combobox", { name: "Quality" }).selectOption("custom");
   await expect(page.getByRole("spinbutton", { name: /\$fa/ })).toBeVisible();
   await expect(page.getByRole("spinbutton", { name: /\$fs/ })).toBeVisible();
 });

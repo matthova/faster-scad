@@ -13,9 +13,11 @@ async function triangleCount(page: Page): Promise<number> {
 }
 
 async function setQuality(page: Page, value: string) {
-  await waitForRerender(page, () =>
-    page.locator(".quality-select").selectOption(value),
-  );
+  const select = page.locator(".quality-select");
+  if (!(await select.isVisible())) {
+    await page.getByRole("button", { name: "Display" }).click();
+  }
+  await waitForRerender(page, () => select.selectOption(value));
 }
 
 test("quality preset changes triangle count and persists", async ({ page }) => {

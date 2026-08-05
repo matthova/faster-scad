@@ -23,10 +23,12 @@ test("custom $fa tightens tessellation (more triangles)", async ({ page }) => {
     .toBeGreaterThan(0);
   const before = await triangles(page);
 
-  await page.getByRole("button", { name: /^Quality/ }).click();
-  await page.getByRole("menuitemradio", { name: "Custom" }).click();
+  await page.getByRole("button", { name: "Display" }).click();
+  await waitForRerender(page, () =>
+    page.getByRole("combobox", { name: "Quality" }).selectOption("custom"),
+  );
   const fa = page.getByRole("spinbutton", { name: /\$fa/ });
-  await fa.fill("2"); // finer than the 12° default
+  await waitForRerender(page, () => fa.fill("2")); // finer than the 12° default
   await expect
     .poll(() => triangles(page), { timeout: 30_000 })
     .toBeGreaterThan(before);
