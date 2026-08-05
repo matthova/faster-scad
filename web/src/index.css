@@ -545,8 +545,19 @@ body {
   border-top: 1px solid var(--border);
   font-size: var(--text-sm);
   font-family: var(--font-mono);
+  /* Equal-width digits so a changing triangle/ms count can't nudge the layout. */
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
   overflow: hidden;
+}
+
+/* Fixed-width so Render and (rendering… + Stop) occupy the same space — the
+   numbers to their right then hold still across every render. */
+.status-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 132px;
 }
 
 .statusbar .status-version {
@@ -566,6 +577,25 @@ body {
 
 .status-meta {
   color: var(--muted);
+}
+
+/* Render-integrity badge: is what I'm looking at the real thing? */
+.status-integrity {
+  font-size: var(--text-xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-xs);
+}
+.status-integrity.exact {
+  color: var(--muted);
+}
+.status-integrity.preview {
+  color: var(--warn);
+}
+.status-integrity.degraded {
+  color: var(--err);
+  font-weight: 600;
 }
 
 .status-echo {

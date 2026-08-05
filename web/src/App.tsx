@@ -248,6 +248,9 @@ interface Status {
   ok: boolean;
   message: string;
   triangleCount: number;
+  vertexCount: number;
+  /** Total surface area (3D) or enclosed area (2D). */
+  area: number;
   volume: number;
   ms: number;
   echo: string;
@@ -380,6 +383,8 @@ export function App() {
     ok: true,
     message: "initializing…",
     triangleCount: 0,
+    vertexCount: 0,
+    area: 0,
     volume: 0,
     ms: 0,
     echo: "",
@@ -1308,6 +1313,8 @@ export function App() {
           ? `${r.triangleCount.toLocaleString()} triangles · geometry errors`
           : `${r.triangleCount.toLocaleString()} triangles`,
         triangleCount: r.triangleCount,
+        vertexCount: r.vertexCount,
+        area: r.area,
         volume: r.volume,
         ms: r.ms,
         echo: r.echo,
@@ -2042,8 +2049,34 @@ export function App() {
       )}
 
       <footer className={`statusbar ${status.ok ? "ok" : "err"}`}>
+        {/* Fixed-width control cell so Render↔(rendering… Stop) can't shift the
+            numbers sideways every render. */}
+        <span className="status-controls">
+          {rendering ? (
+            <>
+              <span className="status-rendering">rendering…</span>
+              <button
+                className="status-stop"
+                onClick={() => engineRef.current?.cancel()}
+                title="Stop the current render"
+              >
+                Stop
+              </button>
+            </>
+          ) : (
+            <button
+              className="status-render"
+              onClick={() => renderNowRef.current()}
+              title="Render the current model"
+            >
+              Render
+            </button>
+          )}
+        </span>
         <span className="status-main">{status.message}</span>
-        {status.ok && !rendering && (
+        {/* Hold the last-good numbers across renders (don't gate on !rendering)
+            so they don't blink ~15×/s during animation playback. */}
+        {status.ok && (
           <span className="status-meta">
             {dims &&
               `${fmtDim(dims.x)} × ${fmtDim(dims.y)} × ${fmtDim(dims.z)} mm · `}
@@ -2057,25 +2090,29 @@ export function App() {
             · {status.ms.toFixed(0)} ms
           </span>
         )}
-        {rendering ? (
-          <>
-            <span className="status-rendering">rendering…</span>
-            <button
-              className="status-stop"
-              onClick={() => engineRef.current?.cancel()}
-              title="Stop the current render"
-            >
-              Stop
-            </button>
-          </>
-        ) : (
-          <button
-            className="status-render"
-            onClick={() => renderNowRef.current()}
-            title="Render the current model"
+        {status.ok && (
+          <span
+            className={`status-integrity ${
+              status.geomErrors
+                ? "degraded"
+                : status.preview
+                  ? "preview"
+                  : "exact"
+            }`}
+            title={
+              status.geomErrors
+                ? "Degraded: a CSG op failed and a fallback mesh is shown — the geometry is not trustworthy."
+                : status.preview
+                  ? "Fast preview: unions are skipped, so the mesh isn't watertight and the volume is approximate. Exports re-render exact."
+                  : "Exact: watertight geometry; the numbers are trustworthy."
+            }
           >
-            Render
-          </button>
+            {status.geomErrors
+              ? "DEGRADED"
+              : status.preview
+                ? "FAST PREVIEW"
+                : "EXACT"}
+          </span>
         )}
         <button
           className={`console-toggle ${consoleLines.some((l) => l.kind !== "echo") ? "alert" : ""}`}
