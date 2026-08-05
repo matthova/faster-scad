@@ -84,7 +84,11 @@ describe("saveProject storage-quota signalling", () => {
     delete (globalThis as unknown as { localStorage?: Storage }).localStorage;
   });
 
-  const project = { files: [{ name: "main.scad", content: "cube(1);" }] };
+  const project = {
+    files: [{ name: "main.scad", content: "cube(1);" }],
+    overrides: {},
+    active: 0,
+  };
 
   it("returns true on a successful save", () => {
     (globalThis as unknown as { localStorage: Storage }).localStorage =

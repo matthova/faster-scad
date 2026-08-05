@@ -89,6 +89,10 @@ export class Viewer {
    *  the grid's numeric tick labels are suppressed so the two don't collide. */
   private showDims = false;
   private dimGroup: THREE.Group | null = null;
+  /** Section (clipping) plane state. When enabled, one axis-aligned plane cuts
+   *  the mesh so you can see inside; `t` is 0..1 along that axis's bounding box. */
+  private section = { enabled: false, axis: "z" as "x" | "y" | "z", t: 0.5 };
+  private sectionPlane = new THREE.Plane();
   /** Cache key of the last-built grid, so per-frame `updateGrid` calls that
    *  wouldn't change anything early-return instead of rebuilding. */
   private lastGridKey = "";
@@ -152,6 +156,9 @@ export class Viewer {
       preserveDrawingBuffer: true,
     });
     this.renderer.setPixelRatio(window.devicePixelRatio);
+    // Per-material clipping (the section plane) is applied to mesh materials only,
+    // so the grid/axes/cube stay whole.
+    this.renderer.localClippingEnabled = true;
 
     this.scene = new THREE.Scene();
 
@@ -618,6 +625,8 @@ export class Viewer {
     }
     // Rebuild dimension callouts for the new bounding box (if the mode is on).
     this.rebuildDims();
+    // Re-apply the section plane to the new material(s) and bbox.
+    this.applySection();
   }
 
   setMesh(positions: Float32Array, normals: Float32Array) {
@@ -905,6 +914,42 @@ export class Viewer {
   }
   isDimensionsVisible() {
     return this.showDims;
+  }
+
+  /** Configure the section (clipping) plane. `t` is 0..1 along `axis`'s bounding
+   *  box; disabling clears clipping from all mesh materials. */
+  setSection(enabled: boolean, axis: "x" | "y" | "z", t: number) {
+    this.section = { enabled, axis, t: Math.min(1, Math.max(0, t)) };
+    this.applySection();
+  }
+
+  private applySection() {
+    const { enabled, axis, t } = this.section;
+    const planes: THREE.Plane[] = [];
+    if (enabled && this.geometry) {
+      const box = this.geometry.boundingBox!;
+      const size = new THREE.Vector3();
+      box.getSize(size);
+      // Keep the half below the cut (normal points along -axis): as t goes 0→1
+      // more of the model is revealed from the low side up.
+      const n =
+        axis === "x"
+          ? new THREE.Vector3(-1, 0, 0)
+          : axis === "y"
+            ? new THREE.Vector3(0, -1, 0)
+            : new THREE.Vector3(0, 0, -1);
+      const min =
+        axis === "x" ? box.min.x : axis === "y" ? box.min.y : box.min.z;
+      const s = axis === "x" ? size.x : axis === "y" ? size.y : size.z;
+      // Small epsilon so t=1 keeps the whole model (no clipped sliver).
+      this.sectionPlane.set(n, min + t * s + s * 1e-3);
+      planes.push(this.sectionPlane);
+    }
+    for (const m of this.materials) {
+      m.clippingPlanes = planes;
+      m.clipShadows = true;
+      m.needsUpdate = true;
+    }
   }
 
   private disposeDims() {

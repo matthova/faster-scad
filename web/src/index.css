@@ -380,6 +380,41 @@ body {
 .popover-row:hover {
   background: var(--panel);
 }
+/* Section-plane axis buttons + position slider inside the Display popover. */
+.section-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3) var(--space-3);
+}
+.section-axes {
+  display: inline-flex;
+}
+.section-axes button {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-left-width: 0;
+  padding: var(--space-1) var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+.section-axes button:first-child {
+  border-left-width: 1px;
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+}
+.section-axes button:last-child {
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+.section-axes button.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.section-controls input[type="range"] {
+  flex: 1;
+  min-width: 90px;
+}
 
 /* Render-quality picker + its inline custom-$fn field. */
 .quality-select {

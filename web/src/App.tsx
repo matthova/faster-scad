@@ -441,6 +441,9 @@ export function App() {
   const [showGrid, setShowGrid] = useState(loadPrefs().showGrid);
   const [showEdges, setShowEdges] = useState(loadPrefs().showEdges);
   const [showDims, setShowDims] = useState(loadPrefs().showDims);
+  const [sectionOn, setSectionOn] = useState(loadPrefs().sectionOn);
+  const [sectionAxis, setSectionAxis] = useState(loadPrefs().sectionAxis);
+  const [sectionT, setSectionT] = useState(loadPrefs().sectionT);
   const [exportFmt, setExportFmt] = useState<ExportFmt>("stl");
   // Whether the user has manually chosen an export format. Until they do, the
   // format auto-tracks the model: 3MF for multi-color 3D models, STL otherwise.
@@ -505,6 +508,7 @@ export function App() {
     viewer.setGridVisible(prefs0.showGrid);
     viewer.setEdgesVisible(prefs0.showEdges);
     viewer.setDimensionsVisible(prefs0.showDims);
+    viewer.setSection(prefs0.sectionOn, prefs0.sectionAxis, prefs0.sectionT);
 
     // Model → code: clicking a face selects the source statement that produced
     // it. Spans index into the main file, so switch to it first if needed.
@@ -1193,6 +1197,13 @@ export function App() {
     setShowDims(v);
     viewerRef.current?.setDimensionsVisible(v);
     savePrefs({ showDims: v });
+  }
+  function applySection(on: boolean, axis: "x" | "y" | "z", t: number) {
+    setSectionOn(on);
+    setSectionAxis(axis);
+    setSectionT(t);
+    viewerRef.current?.setSection(on, axis, t);
+    savePrefs({ sectionOn: on, sectionAxis: axis, sectionT: t });
   }
   function setOrthoProjection(next: boolean) {
     viewerRef.current?.setProjection(next ? "orthographic" : "perspective");
@@ -1886,6 +1897,16 @@ export function App() {
       title: "Toggle edge overlay",
       run: () => toggleEdges(!showEdges),
     },
+    {
+      id: "dims",
+      title: "Toggle dimensions",
+      run: () => toggleDims(!showDims),
+    },
+    {
+      id: "section",
+      title: "Toggle section plane",
+      run: () => applySection(!sectionOn, sectionAxis, sectionT),
+    },
     { id: "fast", title: "Toggle fast preview", run: toggleFastPreview },
     {
       id: "engine",
@@ -1998,6 +2019,38 @@ export function App() {
             <PopoverToggle checked={showDims} onChange={toggleDims}>
               Dimensions
             </PopoverToggle>
+            <PopoverToggle
+              checked={sectionOn}
+              onChange={(v) => applySection(v, sectionAxis, sectionT)}
+            >
+              Section plane
+            </PopoverToggle>
+            {sectionOn && (
+              <div className="section-controls">
+                <div className="section-axes">
+                  {(["x", "y", "z"] as const).map((ax) => (
+                    <button
+                      key={ax}
+                      className={sectionAxis === ax ? "active" : undefined}
+                      onClick={() => applySection(true, ax, sectionT)}
+                    >
+                      {ax.toUpperCase()}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={sectionT}
+                  onChange={(e) =>
+                    applySection(true, sectionAxis, Number(e.target.value))
+                  }
+                  aria-label="Section position"
+                />
+              </div>
+            )}
           </Popover>
           <button
             className={engineKind === "openscad" ? "active" : undefined}

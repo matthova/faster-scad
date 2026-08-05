@@ -43,6 +43,10 @@ export interface Prefs {
   showEdges: boolean;
   /** ISO dimension callouts on the bounding box (off by default). */
   showDims: boolean;
+  /** Section (clipping) plane: on/off, which axis, and 0..1 position. */
+  sectionOn: boolean;
+  sectionAxis: "x" | "y" | "z";
+  sectionT: number;
 }
 
 const DEFAULTS: Prefs = {
@@ -62,7 +66,12 @@ const DEFAULTS: Prefs = {
   showGrid: true,
   showEdges: true,
   showDims: false,
+  sectionOn: false,
+  sectionAxis: "z",
+  sectionT: 0.5,
 };
+
+const AXES: Array<"x" | "y" | "z"> = ["x", "y", "z"];
 
 const QUALITIES: Quality[] = ["draft", "normal", "fine", "custom"];
 
@@ -130,6 +139,12 @@ export function loadPrefs(): Prefs {
         typeof p.showEdges === "boolean" ? p.showEdges : DEFAULTS.showEdges,
       showDims:
         typeof p.showDims === "boolean" ? p.showDims : DEFAULTS.showDims,
+      sectionOn:
+        typeof p.sectionOn === "boolean" ? p.sectionOn : DEFAULTS.sectionOn,
+      sectionAxis: AXES.includes(p.sectionAxis as "x" | "y" | "z")
+        ? (p.sectionAxis as "x" | "y" | "z")
+        : DEFAULTS.sectionAxis,
+      sectionT: num(p.sectionT) ?? DEFAULTS.sectionT,
     };
   } catch {
     return { ...DEFAULTS };
