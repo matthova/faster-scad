@@ -82,6 +82,9 @@ export class Viewer {
   private themeDark = false;
   /** Current viewer palette, updated on every setTheme. */
   private vt: ViewerTheme = viewerTheme("dark");
+  /** Display toggles (Display ▾ popover). */
+  private showGrid = true;
+  private showEdges = true;
   /** Cache key of the last-built grid, so per-frame `updateGrid` calls that
    *  wouldn't change anything early-return instead of rebuilding. */
   private lastGridKey = "";
@@ -282,6 +285,12 @@ export class Viewer {
    *  target-snapped center has changed (or `force`, e.g. on a theme flip). Cheap
    *  to call every frame: unchanged views hit the cache-key early return. */
   private updateGrid(force = false) {
+    // Grid hidden: tear down any existing group and skip the rebuild entirely.
+    if (!this.showGrid) {
+      this.disposeGrid();
+      this.lastGridKey = "";
+      return;
+    }
     const visH = Math.max(this.visibleWorldHeight(), 1e-4);
     const el = this.renderer.domElement;
     const aspect =
@@ -583,6 +592,8 @@ export class Viewer {
         transparent: true,
       }),
     );
+    edges.name = "edges";
+    edges.visible = this.showEdges;
     mesh.add(edges);
 
     this.mesh = mesh;
@@ -854,6 +865,25 @@ export class Viewer {
   resetView() {
     this.preset = "iso";
     if (this.geometry) this.frame(this.geometry);
+  }
+
+  /** Show/hide the floor grid, world axes, and their tick labels (one group). */
+  setGridVisible(v: boolean) {
+    this.showGrid = v;
+    this.updateGrid(true);
+  }
+  isGridVisible() {
+    return this.showGrid;
+  }
+
+  /** Show/hide the thin wireframe drawn over the mesh. */
+  setEdgesVisible(v: boolean) {
+    this.showEdges = v;
+    const edges = this.mesh?.getObjectByName("edges");
+    if (edges) edges.visible = v;
+  }
+  isEdgesVisible() {
+    return this.showEdges;
   }
 
   /** Frame the model to fill the view WITHOUT changing the current orientation

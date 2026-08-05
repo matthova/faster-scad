@@ -38,6 +38,9 @@ export interface Prefs {
   editorWidth: number | null;
   dockWidth: number | null;
   consoleHeight: number | null;
+  /** Viewport display toggles (Display ▾ popover). */
+  showGrid: boolean;
+  showEdges: boolean;
 }
 
 const DEFAULTS: Prefs = {
@@ -54,6 +57,8 @@ const DEFAULTS: Prefs = {
   editorWidth: null,
   dockWidth: null,
   consoleHeight: null,
+  showGrid: true,
+  showEdges: true,
 };
 
 const QUALITIES: Quality[] = ["draft", "normal", "fine", "custom"];
@@ -116,6 +121,10 @@ export function loadPrefs(): Prefs {
       editorWidth: num(p.editorWidth),
       dockWidth: num(p.dockWidth),
       consoleHeight: num(p.consoleHeight),
+      showGrid:
+        typeof p.showGrid === "boolean" ? p.showGrid : DEFAULTS.showGrid,
+      showEdges:
+        typeof p.showEdges === "boolean" ? p.showEdges : DEFAULTS.showEdges,
     };
   } catch {
     return { ...DEFAULTS };

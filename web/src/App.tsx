@@ -39,6 +39,7 @@ import {
 } from "./stl";
 import { Dock } from "./Dock";
 import { ResizeHandle } from "./ResizeHandle";
+import { Popover, PopoverToggle } from "./Popover";
 import {
   parseSchema,
   toLiteral,
@@ -427,6 +428,8 @@ export function App() {
   const [consoleHeight, setConsoleHeight] = useState<number | null>(
     loadPrefs().consoleHeight,
   );
+  const [showGrid, setShowGrid] = useState(loadPrefs().showGrid);
+  const [showEdges, setShowEdges] = useState(loadPrefs().showEdges);
   const [exportFmt, setExportFmt] = useState<ExportFmt>("stl");
   // Whether the user has manually chosen an export format. Until they do, the
   // format auto-tracks the model: 3MF for multi-color 3D models, STL otherwise.
@@ -482,6 +485,11 @@ export function App() {
 
     const viewer = new Viewer(canvasRef.current, (info) => setDims(info));
     viewerRef.current = viewer;
+    // Apply persisted display toggles (defaults are on, so this only bites when
+    // the user had turned the grid/edges off).
+    const prefs0 = loadPrefs();
+    viewer.setGridVisible(prefs0.showGrid);
+    viewer.setEdgesVisible(prefs0.showEdges);
 
     // Model → code: clicking a face selects the source statement that produced
     // it. Spans index into the main file, so switch to it first if needed.
@@ -1113,6 +1121,21 @@ export function App() {
     );
   }
   const persistSizes = () => savePrefs(sizeRef.current);
+
+  function toggleGrid(v: boolean) {
+    setShowGrid(v);
+    viewerRef.current?.setGridVisible(v);
+    savePrefs({ showGrid: v });
+  }
+  function toggleEdges(v: boolean) {
+    setShowEdges(v);
+    viewerRef.current?.setEdgesVisible(v);
+    savePrefs({ showEdges: v });
+  }
+  function setOrthoProjection(next: boolean) {
+    viewerRef.current?.setProjection(next ? "orthographic" : "perspective");
+    setOrtho(next);
+  }
 
   /** Swap the render engine between Quito and the vendored OpenSCAD wasm, then
    *  re-render on the new engine. Remembered across sessions. On desktop, "quito"
@@ -1809,34 +1832,27 @@ export function App() {
               .scad
             </button>
           )}
-          <button
-            className={ortho ? "active" : undefined}
-            onClick={() => {
-              const next = !ortho;
-              viewerRef.current?.setProjection(
-                next ? "orthographic" : "perspective",
-              );
-              setOrtho(next);
-            }}
-            title={
-              ortho
-                ? "Orthographic projection (parallel) — click for perspective"
-                : "Perspective projection — click for orthographic (isometric)"
-            }
+          <Popover
+            label="Display"
+            title="Viewport display options"
+            active={ortho || !showGrid || !showEdges || !linkHighlight}
           >
-            {ortho ? "Ortho" : "Persp"}
-          </button>
-          <button
-            className={linkHighlight ? "active" : undefined}
-            onClick={toggleLinkHighlight}
-            title={
-              linkHighlight
-                ? "Editor↔preview highlighting on — click to disable"
-                : "Editor↔preview highlighting off — click to enable"
-            }
-          >
-            Link
-          </button>
+            <PopoverToggle checked={ortho} onChange={setOrthoProjection}>
+              Orthographic projection
+            </PopoverToggle>
+            <PopoverToggle
+              checked={linkHighlight}
+              onChange={() => toggleLinkHighlight()}
+            >
+              Link editor ↔ preview
+            </PopoverToggle>
+            <PopoverToggle checked={showGrid} onChange={toggleGrid}>
+              Grid &amp; axes
+            </PopoverToggle>
+            <PopoverToggle checked={showEdges} onChange={toggleEdges}>
+              Edge overlay
+            </PopoverToggle>
+          </Popover>
           <button
             className={engineKind === "openscad" ? "active" : undefined}
             onClick={toggleEngine}
