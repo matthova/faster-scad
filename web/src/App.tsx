@@ -41,6 +41,7 @@ import { Dock } from "./Dock";
 import { ResizeHandle } from "./ResizeHandle";
 import { Popover, PopoverToggle } from "./Popover";
 import { CommandPalette, type Command } from "./CommandPalette";
+import { HelpSheet } from "./HelpSheet";
 import {
   parseSchema,
   toLiteral,
@@ -413,6 +414,7 @@ export function App() {
     "all" | "error" | "warn" | "echo"
   >("all");
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   // Monotonic render counter, surfaced as data-render-rev on the status bar so a
   // completed render is observable even though the meta is always visible.
   const [renderRev, setRenderRev] = useState(0);
@@ -1905,6 +1907,11 @@ export function App() {
       title: `Export (${exportFmt.toUpperCase()})`,
       run: () => void onDownload(exportFmt),
     },
+    {
+      id: "help",
+      title: "Help & keyboard shortcuts",
+      run: () => setHelpOpen(true),
+    },
     { id: "new", title: "New project", run: newProject },
     ...(TAURI
       ? []
@@ -2156,6 +2163,14 @@ export function App() {
             aria-label="Open command palette"
           >
             ⌘K
+          </button>
+          <button
+            className="help-btn"
+            onClick={() => setHelpOpen(true)}
+            title="Help & keyboard shortcuts"
+            aria-label="Help"
+          >
+            ?
           </button>
           <button
             className="github-link"
@@ -2495,6 +2510,7 @@ export function App() {
           onClose={() => setPaletteOpen(false)}
         />
       )}
+      {helpOpen && <HelpSheet onClose={() => setHelpOpen(false)} />}
     </div>
   );
 }

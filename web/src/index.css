@@ -180,6 +180,95 @@ body {
   font-family: var(--font-mono);
   letter-spacing: 0.02em;
 }
+.help-btn {
+  font-weight: 700;
+}
+
+/* Help / shortcut sheet. */
+.help-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 8vh;
+}
+.help {
+  width: min(720px, 92vw);
+  max-height: 80vh;
+  overflow-y: auto;
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+.help-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-5) var(--space-6);
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+.help-close {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: var(--text-md);
+}
+.help-close:hover {
+  color: var(--text);
+}
+.help-body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-8);
+  padding: var(--space-6);
+}
+.help-body h3 {
+  margin: 0 0 var(--space-4);
+  font-size: var(--text-xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.help-keys > div {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-1) 0;
+}
+.help-keys dt {
+  width: 64px;
+  flex: none;
+}
+.help-keys kbd {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 1px var(--space-2);
+}
+.help-keys dd,
+.help-tips dd {
+  margin: 0;
+  color: var(--text);
+}
+.help-tips > div {
+  padding: var(--space-2) 0;
+}
+.help-tips dt {
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+.help-tips dd {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
 
 /* Command palette. */
 .palette-overlay {
