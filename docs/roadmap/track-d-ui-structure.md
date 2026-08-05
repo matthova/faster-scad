@@ -83,6 +83,12 @@ Section/clipping plane; local file import + a `Vec<u8>` channel for binary
 STL/3MF and PNG heightmaps; examples browser (JSON, thumbnails); silent-
 degradation surfaces; help/shortcut sheet + first-run. Each its own PR.
 
+**Landed:** section plane, drag-and-drop text import (with a binary-not-supported
+surface), help/shortcut sheet, and the storage-quota autosave warning.
+**Deferred** (each needs work outside the web layer): the binary `Vec<u8>`
+import channel (Rust + a desktop release cycle) and the examples browser
+(thumbnail asset generation).
+
 ---
 
 ## Changesets
