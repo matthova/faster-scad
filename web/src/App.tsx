@@ -56,7 +56,14 @@ import {
   wasRenderPending,
   type File,
 } from "./project";
-import { loadPrefs, savePrefs, type EngineKind } from "./prefs";
+import {
+  loadPrefs,
+  savePrefs,
+  qualityOverrides,
+  type EngineKind,
+  type Quality,
+  type QualitySettings,
+} from "./prefs";
 import { EXAMPLES } from "./examples";
 import { decodeSharedProject, shareUrl } from "./share";
 import { resolveClosure } from "./library";
@@ -297,6 +304,14 @@ export function App() {
   // Fast (non-watertight) preview toggle. Mirrored to a ref so the once-wired
   // `renderNow` closure reads the live value.
   const fastPreviewRef = useRef(loadPrefs().fastPreview);
+  // Render quality ($fn/$fa/$fs). Mirrored to a ref so `renderNow` injects the
+  // live setting; a NOT-in-share-link pref (quality is a viewing preference).
+  const qualityRef = useRef<QualitySettings>({
+    quality: loadPrefs().quality,
+    customFn: loadPrefs().customFn,
+    customFa: loadPrefs().customFa,
+    customFs: loadPrefs().customFs,
+  });
   // Active render engine. "quito" is our engine (native C++ kernel on desktop,
   // wasm in the browser); "openscad" is the vendored OpenSCAD wasm build, which
   // runs in-webview on both. Mirrored to a ref so the once-wired render closures
@@ -389,6 +404,12 @@ export function App() {
   const [ortho, setOrtho] = useState(false);
   const [linkHighlight, setLinkHighlight] = useState(linkHighlightRef.current);
   const [fastPreview, setFastPreview] = useState(fastPreviewRef.current);
+  const [quality, setQuality] = useState<Quality>(qualityRef.current.quality);
+  // Custom-quality $fn (the crash banner tells users to lower it). $fa/$fs get a
+  // fuller editor with the Quality popover in a later phase.
+  const [customFn, setCustomFn] = useState<number | null>(
+    qualityRef.current.customFn,
+  );
   const [engineKind, setEngineKind] = useState<EngineKind>(
     engineKindRef.current,
   );
@@ -511,6 +532,16 @@ export function App() {
       const ov = overridesRef.current;
       const names = Object.keys(ov);
       const values = names.map((n) => toLiteral(ov[n]));
+      // Render-quality overrides ($fn/$fa/$fs), injected like customizer values.
+      // A user param of the same name (unusual) wins, so skip any already set.
+      for (const [n, v] of Object.entries(
+        qualityOverrides(qualityRef.current),
+      )) {
+        if (!names.includes(n)) {
+          names.push(n);
+          values.push(v);
+        }
+      }
       if (timeRef.current !== 0) {
         names.push("$t");
         values.push(String(timeRef.current));
@@ -991,6 +1022,16 @@ export function App() {
     fastPreviewRef.current = next;
     setFastPreview(next);
     savePrefs({ fastPreview: next });
+    renderNowRef.current?.();
+  }
+
+  /** Change the render-quality preset (or the custom $fn), persist it, and
+   *  re-render so the new resolution shows immediately. */
+  function setQualityPref(next: Partial<QualitySettings>) {
+    qualityRef.current = { ...qualityRef.current, ...next };
+    if (next.quality !== undefined) setQuality(next.quality);
+    if (next.customFn !== undefined) setCustomFn(next.customFn);
+    savePrefs(next);
     renderNowRef.current?.();
   }
 
@@ -1712,6 +1753,42 @@ export function App() {
           >
             Fast
           </button>
+          <select
+            className="quality-select"
+            aria-label="Render quality"
+            value={quality}
+            onChange={(e) =>
+              setQualityPref({ quality: e.target.value as Quality })
+            }
+            title="Render resolution ($fn/$fa/$fs). Draft is coarse and fast; Fine is smooth and slow; Normal respects the script."
+          >
+            <option value="draft">Draft</option>
+            <option value="normal">Normal</option>
+            <option value="fine">Fine</option>
+            <option value="custom">Custom</option>
+          </select>
+          {quality === "custom" && (
+            <label
+              className="quality-fn"
+              title="Custom $fn (blank = leave to $fa/$fs)"
+            >
+              $fn
+              <input
+                type="number"
+                min={0}
+                step={1}
+                value={customFn ?? ""}
+                onChange={(e) =>
+                  setQualityPref({
+                    customFn:
+                      e.target.value === ""
+                        ? null
+                        : Math.max(0, Math.round(Number(e.target.value))),
+                  })
+                }
+              />
+            </label>
+          )}
           <button
             onClick={onSavePng}
             title="Save the current view as a PNG image"

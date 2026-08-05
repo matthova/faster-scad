@@ -194,6 +194,39 @@ body {
   border-color: var(--accent);
 }
 
+/* Render-quality picker + its inline custom-$fn field. */
+.quality-select {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  margin-left: var(--space-4);
+  cursor: pointer;
+  font-size: var(--text-md);
+}
+.quality-select:hover {
+  border-color: var(--accent);
+}
+.quality-fn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: var(--space-3);
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  color: var(--muted);
+}
+.quality-fn input[type="number"] {
+  width: 52px;
+  background: var(--panel);
+  color: inherit;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  padding: var(--space-1) var(--space-2);
+}
+
 .workspace {
   display: grid;
   grid-template-columns: minmax(260px, 36%) 1fr auto;

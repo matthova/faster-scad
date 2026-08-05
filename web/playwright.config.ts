@@ -20,9 +20,10 @@ export default defineConfig({
   },
   expect: {
     toHaveScreenshot: {
-      // Chrome is deterministic; allow a tiny slack for sub-pixel text AA so a
-      // font-metrics hiccup on a different box doesn't fail the whole suite.
-      maxDiffPixelRatio: 0.01,
+      // Chrome is deterministic on one machine; keep the tolerance tight enough
+      // that adding/removing a single control is caught (a 1% ratio hid an
+      // 80px-wide dropdown). A small absolute budget still absorbs text AA jitter.
+      maxDiffPixels: 150,
       animations: "disabled",
     },
   },

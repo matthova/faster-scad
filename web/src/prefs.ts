@@ -8,6 +8,11 @@ const KEY = "quito.prefs.v1";
  *  wasm engine; "openscad" is the vendored OpenSCAD wasm build. */
 export type EngineKind = "quito" | "openscad";
 
+/** Render resolution. Presets force `$fn` (so they visibly change a model even
+ *  when its script sets its own `$fn`); "normal" injects nothing, so the script
+ *  (or the OpenSCAD defaults) decide. "custom" uses the `custom*` fields. */
+export type Quality = "draft" | "normal" | "fine" | "custom";
+
 export interface Prefs {
   /** Bidirectional editor↔preview highlighting: code→model (cursor highlights
    *  geometry) and model→code (clicking a face selects its source). */
@@ -18,13 +23,53 @@ export interface Prefs {
   fastPreview: boolean;
   /** Active render engine (browser only; the desktop shell always uses native). */
   engine: EngineKind;
+  /** Render resolution preset (see Quality). */
+  quality: Quality;
+  /** Custom-quality overrides; null means "don't inject this one". */
+  customFn: number | null;
+  customFa: number | null;
+  customFs: number | null;
 }
 
 const DEFAULTS: Prefs = {
   linkHighlight: true,
   fastPreview: false,
   engine: "quito",
+  quality: "normal",
+  customFn: null,
+  customFa: null,
+  customFs: null,
 };
+
+const QUALITIES: Quality[] = ["draft", "normal", "fine", "custom"];
+
+export type QualitySettings = Pick<
+  Prefs,
+  "quality" | "customFn" | "customFa" | "customFs"
+>;
+
+/** The `$fn`/`$fa`/`$fs` overrides (name → literal) a quality setting injects,
+ *  in the same shape the customizer uses. "normal" injects nothing. */
+export function qualityOverrides(p: QualitySettings): Record<string, string> {
+  switch (p.quality) {
+    case "draft":
+      return { $fn: "16" };
+    case "fine":
+      return { $fn: "96" };
+    case "custom": {
+      const o: Record<string, string> = {};
+      if (p.customFn != null) o.$fn = String(p.customFn);
+      if (p.customFa != null) o.$fa = String(p.customFa);
+      if (p.customFs != null) o.$fs = String(p.customFs);
+      return o;
+    }
+    default:
+      return {};
+  }
+}
+
+const num = (v: unknown): number | null =>
+  typeof v === "number" && Number.isFinite(v) ? v : null;
 
 export function loadPrefs(): Prefs {
   try {
@@ -41,6 +86,12 @@ export function loadPrefs(): Prefs {
           ? p.fastPreview
           : DEFAULTS.fastPreview,
       engine: p.engine === "openscad" ? "openscad" : DEFAULTS.engine,
+      quality: QUALITIES.includes(p.quality as Quality)
+        ? (p.quality as Quality)
+        : DEFAULTS.quality,
+      customFn: num(p.customFn),
+      customFa: num(p.customFa),
+      customFs: num(p.customFs),
     };
   } catch {
     return { ...DEFAULTS };
