@@ -1350,7 +1350,12 @@ export class Viewer {
       toUp: up.clone().normalize(),
       dist: this.camera.position.distanceTo(target),
       t0: performance.now(),
-      dur: 350,
+      // Honour "reduce motion": snap instead of flying. CSS can't reach this
+      // rAF-driven camera, so read the preference here. (1ms, not 0, so
+      // stepCamAnim's k = elapsed/dur never divides by zero.)
+      dur: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+        ? 1
+        : 350,
     };
   }
 

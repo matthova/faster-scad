@@ -55,9 +55,14 @@
   --panel: #1a1d23;
   --raised: #23272f;
   --border: #2a2e37;
+  /* Control boundaries need 3:1 (WCAG 1.4.11); --border (1.24:1) is a hairline
+     for surface seams only. --accent-strong is accent in a text/border/focus
+     role (identical to --accent in dark, where it already clears contrast). */
+  --border-strong: #565d6b;
   --text: #e6e8ec;
   --muted: #9aa0aa;
   --accent: #f5a623;
+  --accent-strong: #f5a623;
   --err: #ff6b6b;
   --warn: #e0b341;
 }
@@ -71,15 +76,48 @@
   --panel: #eef0f3;
   --raised: #ffffff;
   --border: #d5d9e0;
+  /* --border was 1.24:1 (a hairline). Control boundaries and the focus ring use
+     the stronger variants, which clear WCAG 1.4.11's 3:1 / 1.4.3's text ratios.
+     --accent-strong darkens the amber to 4.5:1 for text/border/focus, where the
+     brand --accent (2.79:1 on --panel) is illegible. */
+  --border-strong: #8b929e;
   --text: #1b1e23;
-  --muted: #667085;
+  --muted: #5b6472;
   --accent: #d97706;
+  --accent-strong: #a45a06;
   --err: #d32f2f;
-  --warn: #b7791f;
+  --warn: #8a5a00;
+}
+
+/* Focus ring color: the accent in a role that must clear 3:1 in both themes. */
+:root {
+  --focus: var(--accent-strong);
 }
 
 * {
   box-sizing: border-box;
+}
+
+/* Keyboard focus is always visible (WCAG 2.4.7). :focus-visible keeps the ring
+   off mouse/touch clicks. --focus clears 3:1 on --panel in both themes. Outlines
+   don't affect layout, so this is safe to apply globally. */
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* Honour "reduce motion": drop CSS transitions/animations to near-instant.
+   rAF-driven motion (the viewer camera) is handled in viewer.ts via matchMedia,
+   which CSS can't reach. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 html,
@@ -541,15 +579,16 @@ body {
 .tab-close {
   border: 0;
   background: transparent;
-  color: inherit;
+  /* Was opacity:.6 (2.22:1 in light) — too faint for an enabled destructive
+     control. Full-strength --muted clears the text ratio; hover goes red. */
+  color: var(--muted);
   padding: 0 var(--space-1);
   font-size: var(--text-md);
   line-height: 1;
   cursor: pointer;
-  opacity: 0.6;
 }
 .tab-close:hover {
-  opacity: 1;
+  color: var(--err);
 }
 .tab-add {
   border: 0;
@@ -589,7 +628,10 @@ body {
   z-index: var(--z-overlay);
   background: var(--panel);
   color: var(--text);
-  border: 1px solid var(--border);
+  /* Floats over the canvas: in dark mode --panel is near the viewport clear
+     color, so a hairline --border (1.24:1) makes the button vanish. Use the
+     3:1 boundary token. */
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
   padding: var(--space-1) var(--space-3);
   font-size: var(--text-xs);
