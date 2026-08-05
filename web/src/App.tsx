@@ -79,6 +79,7 @@ import {
   type Quality,
   type QualitySettings,
 } from "./prefs";
+import { usePref } from "./usePref";
 import { EXAMPLES } from "./examples";
 import { decodeSharedProject, shareUrl } from "./share";
 import { resolveClosure } from "./library";
@@ -275,12 +276,17 @@ export function App() {
   // cleared until the next cursor move / item click so a re-render (which re-runs
   // the cursor→model highlight) doesn't resurrect it.
   const highlightDismissedRef = useRef(false);
-  // Editor↔preview highlighting toggle. Mirrored to a ref so the once-wired pick
-  // handler (in useEffect) reads the live value, not a stale closure.
-  const linkHighlightRef = useRef(loadPrefs().linkHighlight);
-  // Fast (non-watertight) preview toggle. Mirrored to a ref so the once-wired
-  // `renderNow` closure reads the live value.
-  const fastPreviewRef = useRef(loadPrefs().fastPreview);
+  // Editor↔preview highlighting, Fast preview, and the active engine are
+  // persisted values whose shadow ref is read by the []-deps render/pick
+  // closures — usePref keeps state + ref + savePrefs atomic (see usePref.ts).
+  const [linkHighlight, linkHighlightRef, setLinkHighlightPref] = usePref(
+    "linkHighlight",
+    loadPrefs().linkHighlight,
+  );
+  const [fastPreview, fastPreviewRef, setFastPreviewPref] = usePref(
+    "fastPreview",
+    loadPrefs().fastPreview,
+  );
   // Render quality ($fn/$fa/$fs). Mirrored to a ref so `renderNow` injects the
   // live setting; a NOT-in-share-link pref (quality is a viewing preference).
   const qualityRef = useRef<QualitySettings>({
@@ -291,10 +297,13 @@ export function App() {
   });
   // Active render engine. "quito" is our engine (native C++ kernel on desktop,
   // wasm in the browser); "openscad" is the vendored OpenSCAD wasm build, which
-  // runs in-webview on both. Mirrored to a ref so the once-wired render closures
-  // read the live value. `swapEngineRef` is set inside the mount effect (it needs
-  // the effect's onResult/onBusyChange).
-  const engineKindRef = useRef<EngineKind>(loadPrefs().engine);
+  // runs in-webview on both. usePref mirrors it to a ref the once-wired render
+  // closures read. `swapEngineRef` is set inside the mount effect (it needs the
+  // effect's onResult/onBusyChange).
+  const [engineKind, engineKindRef, setEngineKindPref] = usePref(
+    "engine",
+    loadPrefs().engine,
+  );
   const swapEngineRef = useRef<(kind: EngineKind) => void>(() => {});
 
   // File + customizer state. A `#code/…` share link (browser only) wins over
@@ -412,10 +421,19 @@ export function App() {
   // True while the OpenSCAD engine is downloading its ~10 MB wasm (first use);
   // shown as a banner so the wait isn't mistaken for a hung render.
   const [engineDownloading, setEngineDownloading] = useState(false);
-  const [consoleOpen, setConsoleOpen] = useState(false);
-  const [consoleFilter, setConsoleFilter] = useState<
-    "all" | "error" | "warn" | "echo"
-  >("all");
+  // Console drawer open + filter, persisted (usePref). The keydown toggle reads
+  // the ref (it's in the []-deps handler), so a thin wrapper supports the
+  // functional `(o) => !o` form the call sites use.
+  const [consoleOpen, consoleOpenRef, setConsoleOpenPref] = usePref(
+    "consoleOpen",
+    loadPrefs().consoleOpen,
+  );
+  const setConsoleOpen = (u: boolean | ((o: boolean) => boolean)) =>
+    setConsoleOpenPref(typeof u === "function" ? u(consoleOpenRef.current) : u);
+  const [consoleFilter, , setConsoleFilter] = usePref(
+    "consoleFilter",
+    loadPrefs().consoleFilter,
+  );
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   // Right-dock layout: spine collapse (null = auto: spine only when no params)
@@ -445,17 +463,13 @@ export function App() {
   // format auto-tracks the model: 3MF for multi-color 3D models, STL otherwise.
   const userPickedFmtRef = useRef(false);
   const [dims, setDims] = useState<MeshInfo | null>(null);
-  const [ortho, setOrtho] = useState(false);
-  const [linkHighlight, setLinkHighlight] = useState(linkHighlightRef.current);
-  const [fastPreview, setFastPreview] = useState(fastPreviewRef.current);
+  // Orthographic camera — persisted (usePref), unlike its old bare useState.
+  const [ortho, , setOrthoPref] = usePref("ortho", loadPrefs().ortho);
   const [quality, setQuality] = useState<Quality>(qualityRef.current.quality);
   // Custom-quality $fn (the crash banner tells users to lower it). $fa/$fs get a
   // fuller editor with the Quality popover in a later phase.
   const [customFn, setCustomFn] = useState<number | null>(
     qualityRef.current.customFn,
-  );
-  const [engineKind, setEngineKind] = useState<EngineKind>(
-    engineKindRef.current,
   );
   // OS light/dark appearance. Auto-follows `prefers-color-scheme`; no toggle.
   const [mode, setMode] = useState<ThemeMode>(currentMode);
@@ -492,6 +506,7 @@ export function App() {
     viewer.setEdgesVisible(prefs0.showEdges);
     viewer.setDimensionsVisible(prefs0.showDims);
     viewer.setSection(prefs0.sectionOn, prefs0.sectionAxis, prefs0.sectionT);
+    if (prefs0.ortho) viewer.setProjection("orthographic");
 
     // Model → code: clicking a face selects the source statement that produced
     // it. Spans index into the main file, so switch to it first if needed.
@@ -1109,9 +1124,7 @@ export function App() {
    *  the highlight for the current cursor. */
   function toggleLinkHighlight() {
     const next = !linkHighlightRef.current;
-    linkHighlightRef.current = next;
-    setLinkHighlight(next);
-    savePrefs({ linkHighlight: next });
+    setLinkHighlightPref(next);
     if (next) highlightFromCursor();
     else viewerRef.current?.highlightSpan(null);
   }
@@ -1119,10 +1132,7 @@ export function App() {
   /** Toggle the fast (non-watertight) preview and re-render so the change is
    *  visible immediately. Remembered across sessions. */
   function toggleFastPreview() {
-    const next = !fastPreviewRef.current;
-    fastPreviewRef.current = next;
-    setFastPreview(next);
-    savePrefs({ fastPreview: next });
+    setFastPreviewPref(!fastPreviewRef.current);
     renderNowRef.current?.();
   }
 
@@ -1207,7 +1217,7 @@ export function App() {
   }
   function setOrthoProjection(next: boolean) {
     viewerRef.current?.setProjection(next ? "orthographic" : "perspective");
-    setOrtho(next);
+    setOrthoPref(next);
   }
 
   /** Swap the render engine between Quito and the vendored OpenSCAD wasm, then
@@ -1216,9 +1226,7 @@ export function App() {
   function toggleEngine() {
     const next: EngineKind =
       engineKindRef.current === "openscad" ? "quito" : "openscad";
-    engineKindRef.current = next;
-    setEngineKind(next);
-    savePrefs({ engine: next });
+    setEngineKindPref(next);
     swapEngineRef.current(next);
   }
 
