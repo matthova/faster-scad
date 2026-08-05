@@ -120,9 +120,20 @@ jobs:
         working-directory: web
         run: npm ci
 
+      # Style and lint gates, before the slow wasm build so they fail fast.
+      # ESLint errors block (react-hooks correctness); jsx-a11y is warn-only
+      # until Track E Phase 4 lands the a11y fixes.
+      - name: Prettier check
+        working-directory: web
+        run: npm run format:check
+
+      - name: ESLint
+        working-directory: web
+        run: npm run lint
+
       # Vitest unit tests for the pure-logic modules (export writers, customizer
-      # schema parsing, share-link round-trip). No DOM/wasm needed, so they run
-      # before the wasm build and fail fast.
+      # schema parsing, share-link round-trip) plus jsdom component tests. No
+      # wasm needed, so they run before the wasm build and fail fast.
       - name: Unit tests (vitest)
         working-directory: web
         run: npm test

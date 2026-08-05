@@ -215,7 +215,7 @@ function toCmDiagnostics(diags: EngineDiag[], source: string): Diagnostic[] {
   const out: Diagnostic[] = [];
   for (const d of diags) {
     if (d.start < 0 || d.end < 0) continue;
-    let from = byteToChar(source, d.start);
+    const from = byteToChar(source, d.start);
     let to = byteToChar(source, d.end);
     if (to < from) to = from;
     if (to === from) to = Math.min(source.length, from + 1); // widen a point marker
