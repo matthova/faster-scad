@@ -68,12 +68,22 @@ export class DesktopEngine {
   private busy = false;
   private timer: number | undefined;
   private readonly timeoutMs: number;
+  /** Real native engine version, from the `engine_version` command. Falls back
+   *  to "native" until the (one-shot, cached) query resolves. */
+  private version = "native";
 
   constructor(
     private onResult: (r: RenderResponse) => void,
     private opts: EngineOptions = {},
   ) {
     this.timeoutMs = opts.timeoutMs ?? RENDER_TIMEOUT_MS;
+    // Prefetch the engine version so results report it instead of "native".
+    import("@tauri-apps/api/core")
+      .then(({ invoke }) => invoke<string>("engine_version"))
+      .then((v) => {
+        if (v) this.version = v;
+      })
+      .catch(() => {}); // keep the "native" fallback
   }
 
   private setBusy(busy: boolean) {
@@ -136,7 +146,7 @@ export class DesktopEngine {
           area: res.area,
           is2D: res.is2D,
           ms: performance.now() - t0,
-          version: "native",
+          version: this.version,
           params: res.params,
           diagnostics: res.diagnostics,
           previewPositions: new Float32Array(res.previewPositions),
@@ -168,7 +178,7 @@ export class DesktopEngine {
           area: 0,
           is2D: false,
           ms: performance.now() - t0,
-          version: "native",
+          version: this.version,
           params: `{"params":[]}`,
           diagnostics: "[]",
           previewPositions: new Float32Array(0),
@@ -216,7 +226,7 @@ export class DesktopEngine {
     this.seq += 1; // ignore the in-flight native result when it lands
     this.setBusy(false);
     this.onResult(
-      blankResponse(this.seq, { error, version: "native", stopped: true }),
+      blankResponse(this.seq, { error, version: this.version, stopped: true }),
     );
   }
 }
