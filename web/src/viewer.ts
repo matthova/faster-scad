@@ -365,8 +365,7 @@ export class Viewer {
       z: Math.abs(dir.z) > 0.95,
     };
     const sKey = `${+suppress.x}${+suppress.y}${+suppress.z}`;
-    const key =
-      `${spacing}:${halfCells}:${lineHalfCells}:${cx}:${cy}:${this.themeDark}:${sKey}`;
+    const key = `${spacing}:${halfCells}:${lineHalfCells}:${cx}:${cy}:${this.themeDark}:${sKey}`;
     if (!force && key === this.lastGridKey) return;
     this.lastGridKey = key;
     this.buildGrid(
@@ -564,7 +563,14 @@ export class Viewer {
       // Vertical Z axis rising from the origin; the colored line runs the full
       // extent to span the viewport, ticks/labels run the labeled extent.
       line([0, 0, 0], [0, 0, lineHalf], Z_COL);
-      addLabel("Z", hex(Z_COL), -lh * 1.4, -lh * 1.4, labelHalf + lh * 1.8, 1.5);
+      addLabel(
+        "Z",
+        hex(Z_COL),
+        -lh * 1.4,
+        -lh * 1.4,
+        labelHalf + lh * 1.8,
+        1.5,
+      );
       if (!suppress.z) {
         ticks("z", 0, labelHalf, Z_COL);
         for (let i = 2; i <= labelHalfCells && !this.showDims; i += 2) {
@@ -1301,7 +1307,9 @@ export class Viewer {
           3,
         ),
       );
-      scene.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color })));
+      scene.add(
+        new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color })),
+      );
     };
     gnomon([1, 0, 0], viewerConst.axisX);
     gnomon([0, 1, 0], viewerConst.axisY);
