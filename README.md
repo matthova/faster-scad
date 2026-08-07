@@ -96,13 +96,13 @@ CDN usage, and the full API.
 
 ## Fast, and verifiably correct
 
-- **~25× faster** than OpenSCAD's CGAL renderer across a five-model benchmark
+- **~25× faster** than OpenSCAD's CGAL renderer across a six-model benchmark
   (geometric mean), and ~3–5× ahead of OpenSCAD's newest Manifold backend.
 - **Warm edits render incrementally** — a content-addressed geometry cache
   recomputes only the subtrees that changed, so re-renders after a typical edit
   land in well under a millisecond.
 - **Bit-for-bit verified** — a geometry oracle diffs rendered meshes against
-  stock **OpenSCAD 2024.12** across a 69-case corpus (volume, bounding box,
+  stock **OpenSCAD 2024.12** across a 76-case corpus (volume, bounding box,
   centroid, component count, watertight + 2-manifoldness), and BOSL2's function
   suite runs its `[[test]]` blocks in CI. Output meshes are always watertight
   and 2-manifold.

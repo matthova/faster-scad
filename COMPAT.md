@@ -19,17 +19,22 @@ below._
 These produce output that differs from OpenSCAD — several **silently**, which is
 the dangerous kind. Each has a minimal repro. Tracks A/B track the fixes.
 
-- **Non-convex 3D `minkowski()` is a convex approximation (now warned).** The 3D
-  Minkowski sum is the convex hull of pairwise vertex sums — exact only for
-  convex operands. A concave 3D operand yields the convex swept solid; the
-  renderer now emits a warning (`minkowski: non-convex operand; result is the
-  convex approximation`) rather than failing silently. **2D `minkowski()` is now
-  exact** (each operand is triangulated and the pairwise sums are unioned), so
-  the common `minkowski(){ poly; circle; }` rounding case is correct. Exact
-  non-convex *3D* minkowski (convex decomposition) is deferred to a later
-  milestone.
+- **3D `minkowski()` is exact for convex operands and unions of them; a concave
+  *leaf* mesh is a convex approximation (warned).** The convex-convex sum is the
+  convex hull of pairwise vertex sums. Minkowski distributes over `union()`
+  (`(A₁∪A₂) ⊕ B = (A₁⊕B) ∪ (A₂⊕B)`), so a non-convex shape *built from a union of
+  convex parts* — the common way to build concave shapes — is now **exact**
+  (`corpus/geom/minkowski_union.scad`). A genuinely concave *leaf* (e.g. a
+  concave polygon extruded, or a non-convex polyhedron) still falls back to its
+  convex hull with a warning — exact convex decomposition of arbitrary meshes is
+  out of scope (it is research-grade and, as in OpenSCAD's CGAL, impractically
+  slow). **2D `minkowski()` is always exact** (each operand is triangulated and
+  the pairwise sums are unioned).
 
   ```scad
+  // exact: concave shape as a union of convex parts
+  minkowski() { union() { cube([10,4,4]); cube([4,10,4]); } cube(2, center=true); }
+  // approximated + warned: a concave leaf that can't be peeled into a union
   minkowski() { linear_extrude(6) polygon([[0,0],[24,0],[24,6],[6,6],[6,24],[0,24]]); sphere(2); }
   ```
 
