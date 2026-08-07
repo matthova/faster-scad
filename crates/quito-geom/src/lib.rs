@@ -1122,21 +1122,7 @@ fn render_uncached(node: &Node, ctx: &mut Ctx) -> Result<Mesh, GeomError> {
         Node::Hull(children) => with_exact(ctx, |ctx| {
             boolean_or_fallback(children, ctx, "hull", false, |k, m| k.hull(m))
         }),
-        Node::Minkowski(children) => {
-            let meshes = with_exact(ctx, |ctx| render_all(children, ctx))?;
-            // 3D minkowski is exact only for convex operands (hull of vertex
-            // sums); a non-convex operand yields the convex approximation. Warn
-            // rather than silently mislead. (2D minkowski is exact — see
-            // shape2d::minkowski_2d.)
-            if meshes.iter().any(|m| !m.is_empty() && !is_convex(m)) {
-                ctx.warnings.push(
-                    "minkowski: non-convex operand; result is the convex approximation \
-                     (exact 3D minkowski is not yet implemented)"
-                        .to_string(),
-                );
-            }
-            Ok(minkowski_fold(meshes))
-        }
+        Node::Minkowski(children) => with_exact(ctx, |ctx| minkowski_3d(children, ctx)),
         Node::Difference(children) => {
             if children.is_empty() {
                 Ok(Mesh::new())
@@ -1388,19 +1374,107 @@ fn is_convex(m: &Mesh) -> bool {
     hull_vol <= 1e-9 || m.volume() >= hull_vol * (1.0 - 1e-3)
 }
 
-/// Minkowski sum of a chain of meshes. Exact for convex operands (the common
-/// rounding case, e.g. `minkowski(){ cube; sphere; }`); for non-convex operands
-/// it is the convex Minkowski approximation. After the first sum the accumulator
-/// is convex, so the rest are exact.
-fn minkowski_fold(meshes: Vec<Mesh>) -> Mesh {
-    let mut it = meshes.into_iter().filter(|m| !m.is_empty());
-    let Some(mut acc) = it.next() else {
-        return Mesh::new();
-    };
-    for m in it {
-        acc = minkowski_pair(&acc, &m);
+/// The maximum number of convex-piece pairings a distributed Minkowski will
+/// attempt before falling back to the convex approximation. Explicit unions of a
+/// handful of parts stay well under this; it only guards a pathological blowup
+/// (e.g. two operands each built from dozens of unioned parts).
+const MINKOWSKI_MAX_PIECES: usize = 256;
+
+/// 3D Minkowski sum of the operands, distributing over explicit unions:
+/// `(A₁ ∪ A₂) ⊕ B = (A₁ ⊕ B) ∪ (A₂ ⊕ B)`. Each operand is peeled along its
+/// `union()`/`group()` structure into pieces; the sum is the union of the convex
+/// Minkowski of every piece-pairing. This makes a non-convex shape *built from a
+/// union of convex parts* exact and cheap (the common case), while a genuinely
+/// non-convex leaf mesh (a concave primitive) still falls back to its convex hull
+/// with a warning — exact convex decomposition of arbitrary meshes is out of
+/// scope. (2D Minkowski is always exact — see `shape2d::minkowski_2d`.)
+fn minkowski_3d(children: &[Node], ctx: &mut Ctx) -> Result<Mesh, GeomError> {
+    // Render each operand as a set of pieces (its union components).
+    let mut operands: Vec<Vec<Mesh>> = Vec::new();
+    let mut nonconvex_piece = false;
+    for child in children {
+        let mut nodes = Vec::new();
+        collect_minkowski_components(child, &mut nodes);
+        let mut pieces = Vec::new();
+        for n in nodes {
+            let m = render_node(n, ctx)?;
+            if m.is_empty() {
+                continue;
+            }
+            nonconvex_piece |= !is_convex(&m);
+            pieces.push(m);
+        }
+        // An empty operand contributes nothing to the sum (`A ⊕ ∅` collapses),
+        // so skip it — matching the previous fold, which filtered empties.
+        if !pieces.is_empty() {
+            operands.push(pieces);
+        }
     }
-    acc
+    if operands.is_empty() {
+        return Ok(Mesh::new());
+    }
+
+    let pairings: usize = operands.iter().map(Vec::len).product();
+    // Too many piece-pairings: collapse each operand to a single mesh and take
+    // the convex approximation (the old behavior), warning as before.
+    if pairings > MINKOWSKI_MAX_PIECES {
+        ctx.warnings.push(MINKOWSKI_APPROX_WARNING.to_string());
+        let merged = operands
+            .into_iter()
+            .map(|pieces| ctx.kernel.union(pieces))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut it = merged.into_iter();
+        let mut acc = it.next().unwrap_or_default();
+        for m in it {
+            acc = minkowski_pair(&acc, &m);
+        }
+        return Ok(acc);
+    }
+    if nonconvex_piece {
+        ctx.warnings.push(MINKOWSKI_APPROX_WARNING.to_string());
+    }
+
+    // Distribute: fold operands as piece-sets. `minkowski_pair` returns a convex
+    // hull, so after the first product every piece is convex and the rest are
+    // exact; the final union assembles them into the (possibly non-convex) whole.
+    let mut acc = operands.remove(0);
+    for op in operands {
+        let mut next = Vec::with_capacity(acc.len() * op.len());
+        for p in &acc {
+            for q in &op {
+                next.push(minkowski_pair(p, q));
+            }
+        }
+        acc = next;
+    }
+    // A single piece (the common convex `cube ⊕ sphere` rounding case) is already
+    // the answer — skip the kernel union, which would needlessly round-trip the
+    // mesh through the kernel representation.
+    match acc.len() {
+        0 => Ok(Mesh::new()),
+        1 => Ok(acc.pop().unwrap()),
+        _ => ctx.kernel.union(acc),
+    }
+}
+
+const MINKOWSKI_APPROX_WARNING: &str =
+    "minkowski: non-convex operand; result is the convex approximation for that part \
+     (exact minkowski distributes over union() but not over arbitrary concave meshes)";
+
+/// Peel a Minkowski operand into its union components: `union()`/`group()` are
+/// transparent (Minkowski distributes over them) and `Provenance` is a no-op
+/// wrapper. Anything else (a leaf, transform, boolean, hull, extrude, …) is a
+/// single component rendered as one mesh.
+fn collect_minkowski_components<'a>(node: &'a Node, out: &mut Vec<&'a Node>) {
+    match node {
+        Node::Provenance { child, .. } => collect_minkowski_components(child, out),
+        Node::Union(cs) | Node::Group(cs) => {
+            for c in cs {
+                collect_minkowski_components(c, out);
+            }
+        }
+        other => out.push(other),
+    }
 }
 
 fn minkowski_pair(a: &Mesh, b: &Mesh) -> Mesh {
@@ -1955,8 +2029,11 @@ mod tests {
     }
 
     #[test]
-    fn minkowski_nonconvex_3d_warns() {
-        // Two cubes forming an L — a non-convex operand — summed with a cube.
+    fn minkowski_union_of_convex_is_exact() {
+        // An L built as a union of two convex cubes ⊕ a cube. Minkowski
+        // distributes over the union, so the result is *exact* (no warning) and
+        // equals the union of the two convex Minkowski sums — not their convex
+        // hull, which would fill the concave notch. Matches OpenSCAD (vol 2304).
         let lbar = Node::Union(vec![
             Node::Cube {
                 size: [20.0, 6.0, 6.0],
@@ -1974,11 +2051,54 @@ mod tests {
                 center: false,
             },
         ]);
+        let (mesh, warns) =
+            render_cached_warns(&node, &ManifoldKernel::new(), &mut GeomCache::new()).unwrap();
+        assert!(
+            warns.is_empty(),
+            "union of convex parts is exact: {warns:?}"
+        );
+        assert!(
+            (mesh.volume() - 2304.0).abs() < 1.0,
+            "distributed minkowski volume {} (expected 2304)",
+            mesh.volume()
+        );
+    }
+
+    #[test]
+    fn minkowski_nonconvex_leaf_warns() {
+        // A genuinely concave *leaf* (an L-shaped polygon extruded — not a union
+        // of convex parts) cannot be peeled, so it still falls back to the convex
+        // hull with a warning.
+        let l_poly = Node::LinearExtrude {
+            height: 4.0,
+            center: false,
+            twist: 0.0,
+            scale: [1.0, 1.0],
+            slices: 1,
+            child: Box::new(Node::Polygon {
+                points: vec![
+                    [0.0, 0.0],
+                    [10.0, 0.0],
+                    [10.0, 4.0],
+                    [4.0, 4.0],
+                    [4.0, 10.0],
+                    [0.0, 10.0],
+                ],
+                paths: None,
+            }),
+        };
+        let node = Node::Minkowski(vec![
+            l_poly,
+            Node::Cube {
+                size: [2.0, 2.0, 2.0],
+                center: true,
+            },
+        ]);
         let (_, warns) =
             render_cached_warns(&node, &ManifoldKernel::new(), &mut GeomCache::new()).unwrap();
         assert!(
             warns.iter().any(|w| w.contains("non-convex")),
-            "expected non-convex warning, got {warns:?}"
+            "expected non-convex warning for a concave leaf, got {warns:?}"
         );
     }
 
