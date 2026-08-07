@@ -13,6 +13,12 @@ async function triangles(
 // curve into more triangles. Use a sphere with no script-set $fn so the injected
 // tolerance actually governs.
 test("custom $fa tightens tessellation (more triangles)", async ({ page }) => {
+  // Render-heavy and serial: app boot, char-by-char typing, then three
+  // waitForRerender/poll steps (each capped at 30s). That can overrun the
+  // default 30s *test* timeout on a slow CI runner even though every render
+  // itself lands in milliseconds — triple the budget so the deadline, not the
+  // work, isn't the bottleneck.
+  test.slow();
   await gotoApp(page);
   // waitForRerender guarantees the edit replaced the default render; the poll
   // then rides out intermediate renders (an incomplete, error-y "sphere(2" lands
