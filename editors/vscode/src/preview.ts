@@ -21,7 +21,7 @@ export interface ProvenanceGroup {
   spans: Span[];
 }
 
-/** The `quito/preview` notification payload pushed by the language server. */
+/** The `openrscad/preview` notification payload pushed by the language server. */
 export interface PreviewNotification {
   uri: string;
   ok: boolean;
@@ -55,8 +55,8 @@ export interface PreviewHooks {
 
 /**
  * The live 3D preview. A single reused webview panel hosts a three.js viewer.
- * Geometry is computed by the quito-lsp server (native kernel) and pushed to the
- * extension as `quito/preview` notifications; the extension forwards it here via
+ * Geometry is computed by the openrscad-lsp server (native kernel) and pushed to the
+ * extension as `openrscad/preview` notifications; the extension forwards it here via
  * {@link PreviewPanel.push}. The webview itself does no OpenSCAD evaluation.
  */
 export class PreviewPanel {
@@ -80,8 +80,8 @@ export class PreviewPanel {
       return;
     }
     const panel = vscode.window.createWebviewPanel(
-      "quitoPreview",
-      "Quito Preview",
+      "openrscadPreview",
+      "OpenRSCAD Preview",
       column,
       {
         enableScripts: true,
@@ -122,7 +122,7 @@ export class PreviewPanel {
     this.panel.onDidDispose(() => this.dispose(), undefined, this.disposables);
   }
 
-  /** Forward a server `quito/preview` notification to the webview. */
+  /** Forward a server `openrscad/preview` notification to the webview. */
   push(note: PreviewNotification): void {
     if (!this.ready) {
       this.pending = note;

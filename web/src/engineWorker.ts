@@ -5,7 +5,7 @@ import init, {
   render_preview_with_files,
   parameters,
   version,
-} from "../engine/quito.js";
+} from "../engine/openrscad.js";
 
 export interface RenderRequest {
   seq: number;
@@ -22,14 +22,14 @@ export interface RenderRequest {
   preview?: boolean;
   /** Runtime URL of the vendored OpenSCAD wasm loader, injected by the OpenSCAD
    *  engine so its worker can dynamically import it under any deploy base.
-   *  Ignored by this (Quito) worker. */
+   *  Ignored by this (OpenRSCAD) worker. */
   openscadUrl?: string;
 }
 
 /** Progress signal a worker may post *before* a `RenderResponse` when it must
  *  download a large asset (the OpenSCAD wasm engine, ~10 MB) that shouldn't
  *  count against the render watchdog. `"loading"` = downloading the engine;
- *  `"rendering"` = download done, the render proper is starting. The Quito
+ *  `"rendering"` = download done, the render proper is starting. The OpenRSCAD
  *  worker never sends these. */
 export type EnginePhase = "loading" | "rendering";
 export interface EnginePhaseMessage {

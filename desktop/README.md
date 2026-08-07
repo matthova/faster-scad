@@ -1,6 +1,6 @@
-# Quito desktop (Tauri v2)
+# OpenRSCAD desktop (Tauri v2)
 
-A native desktop shell around the Quito engine. It reuses the [`web/`](../web)
+A native desktop shell around the OpenRSCAD engine. It reuses the [`web/`](../web)
 playground UI, but rendering runs **natively** over Tauri IPC — the C++ Manifold
 kernel instead of the browser's pure-Rust kernel — and `include`/`use` resolve
 straight from disk (`OPENSCADPATH`) as well as from the open in-editor files.
@@ -46,7 +46,7 @@ cd desktop && npm run build                    # bundle installers
 
 `npm run dev`/`build` build the `web/` frontend first (see `beforeBuildCommand`
 in `src-tauri/tauri.conf.json`). On macOS, `npm run build` produces
-`src-tauri/target/release/bundle/macos/Quito.app` and a
-`…/dmg/Quito_<ver>_aarch64.dmg` installer (ad-hoc signed — for distribution
+`src-tauri/target/release/bundle/macos/OpenRSCAD.app` and a
+`…/dmg/OpenRSCAD_<ver>_aarch64.dmg` installer (ad-hoc signed — for distribution
 you'd add an Apple Developer signing identity + notarization). Windows/Linux
 bundles come from running the same command on those platforms.

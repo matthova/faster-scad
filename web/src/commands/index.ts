@@ -24,7 +24,7 @@ export const COMMANDS: CommandMeta[] = [
   { id: "dims", group: "display", title: "Toggle dimensions" },
   { id: "section", group: "display", title: "Toggle section plane" },
   { id: "fast", title: "Toggle fast preview" },
-  { id: "engine", title: (c) => `Switch engine (${c.engineKind === "openscad" ? "→ Quito" : "→ OpenSCAD"})` },
+  { id: "engine", title: (c) => `Switch engine (${c.engineKind === "openscad" ? "→ OpenRSCAD" : "→ OpenSCAD"})` },
   { id: "q-draft", group: "quality", title: "Quality: Draft" },
   { id: "q-normal", group: "quality", title: "Quality: Normal" },
   { id: "q-fine", group: "quality", title: "Quality: Fine" },

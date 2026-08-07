@@ -8,16 +8,16 @@ fn workspace_root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap()
 }
 
-fn render_scad(rel: &str) -> quito_geom::Mesh {
+fn render_scad(rel: &str) -> openrscad_geom::Mesh {
     let src = std::fs::read_to_string(workspace_root().join(rel)).expect("read scad");
-    let prog = quito_syntax::parse(&src).expect("parse");
-    let out = quito_eval::eval_program(&prog).expect("eval");
-    quito_geom::render(&out.node).expect("render")
+    let prog = openrscad_syntax::parse(&src).expect("parse");
+    let out = openrscad_eval::eval_program(&prog).expect("eval");
+    openrscad_geom::render(&out.node).expect("render")
 }
 
 /// Every undirected edge of a closed 2-manifold is shared by exactly two
 /// triangles.
-fn is_manifold(mesh: &quito_geom::Mesh) -> bool {
+fn is_manifold(mesh: &openrscad_geom::Mesh) -> bool {
     let mut edges: HashMap<(u32, u32), i32> = HashMap::new();
     for t in &mesh.tris {
         for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
@@ -28,22 +28,22 @@ fn is_manifold(mesh: &quito_geom::Mesh) -> bool {
     edges.values().all(|&c| c == 2)
 }
 
-fn render_scad_src(src: &str, dir: &str) -> quito_geom::Mesh {
+fn render_scad_src(src: &str, dir: &str) -> openrscad_geom::Mesh {
     struct R(String);
-    impl quito_eval::FileResolver for R {
-        fn load(&self, path: &str, _from: &str) -> Option<quito_eval::LoadedFile> {
+    impl openrscad_eval::FileResolver for R {
+        fn load(&self, path: &str, _from: &str) -> Option<openrscad_eval::LoadedFile> {
             let p = std::path::Path::new(&self.0).join(path);
             let source = std::fs::read_to_string(&p).ok()?;
-            Some(quito_eval::LoadedFile {
+            Some(openrscad_eval::LoadedFile {
                 key: p.to_string_lossy().into(),
                 source,
                 dir: self.0.clone(),
             })
         }
     }
-    let prog = quito_syntax::parse(src).expect("parse");
-    let out = quito_eval::eval_program_with(&prog, &R(dir.to_string()), dir).expect("eval");
-    quito_geom::render(&out.node).expect("render")
+    let prog = openrscad_syntax::parse(src).expect("parse");
+    let out = openrscad_eval::eval_program_with(&prog, &R(dir.to_string()), dir).expect("eval");
+    openrscad_geom::render(&out.node).expect("render")
 }
 
 /// The full parametric lamp *assembly* — hull, rotate_extrude (torus),
@@ -75,15 +75,15 @@ fn renders_lamp_assembly() {
 /// `include` resolution all work together. Skipped if the submodule is absent.
 /// Render a snippet with BOSL2 available (from the corpus submodule), or `None`
 /// if the submodule isn't checked out.
-fn render_with_bosl2(body: &str) -> Option<quito_geom::Mesh> {
+fn render_with_bosl2(body: &str) -> Option<openrscad_geom::Mesh> {
     let corpus = workspace_root().join("corpus");
     if !corpus.join("BOSL2/std.scad").exists() {
         eprintln!("skipping: corpus/BOSL2 submodule not checked out");
         return None;
     }
     struct DR(std::path::PathBuf);
-    impl quito_eval::FileResolver for DR {
-        fn load(&self, path: &str, from: &str) -> Option<quito_eval::LoadedFile> {
+    impl openrscad_eval::FileResolver for DR {
+        fn load(&self, path: &str, from: &str) -> Option<openrscad_eval::LoadedFile> {
             for c in [std::path::Path::new(from).join(path), self.0.join(path)] {
                 if let Ok(source) = std::fs::read_to_string(&c) {
                     let key = std::fs::canonicalize(&c)
@@ -93,17 +93,18 @@ fn render_with_bosl2(body: &str) -> Option<quito_geom::Mesh> {
                         .parent()
                         .map(|d| d.to_string_lossy().into_owned())
                         .unwrap_or_default();
-                    return Some(quito_eval::LoadedFile { key, source, dir });
+                    return Some(openrscad_eval::LoadedFile { key, source, dir });
                 }
             }
             None
         }
     }
     let src = format!("include <BOSL2/std.scad>\n{body}");
-    let prog = quito_syntax::parse(&src).expect("parse");
-    let out = quito_eval::eval_program_with(&prog, &DR(corpus.clone()), corpus.to_str().unwrap())
-        .expect("eval");
-    Some(quito_geom::render(&out.node).expect("render"))
+    let prog = openrscad_syntax::parse(&src).expect("parse");
+    let out =
+        openrscad_eval::eval_program_with(&prog, &DR(corpus.clone()), corpus.to_str().unwrap())
+            .expect("eval");
+    Some(openrscad_geom::render(&out.node).expect("render"))
 }
 
 /// BOSL2 exercises a large slice of the language + its attachment system.
@@ -165,18 +166,18 @@ fn renders_bosl2_gear_and_rack() {
 #[test]
 fn renders_surface() {
     struct R;
-    impl quito_eval::FileResolver for R {
-        fn load(&self, path: &str, _from: &str) -> Option<quito_eval::LoadedFile> {
-            (path == "h.dat").then(|| quito_eval::LoadedFile {
+    impl openrscad_eval::FileResolver for R {
+        fn load(&self, path: &str, _from: &str) -> Option<openrscad_eval::LoadedFile> {
+            (path == "h.dat").then(|| openrscad_eval::LoadedFile {
                 key: path.into(),
                 source: "1 2 3 4\n2 3 4 5\n3 4 5 6\n".into(),
                 dir: ".".into(),
             })
         }
     }
-    let prog = quito_syntax::parse("surface(\"h.dat\");").expect("parse");
-    let out = quito_eval::eval_program_with(&prog, &R, ".").expect("eval");
-    let mesh = quito_geom::render(&out.node).expect("render");
+    let prog = openrscad_syntax::parse("surface(\"h.dat\");").expect("parse");
+    let out = openrscad_eval::eval_program_with(&prog, &R, ".").expect("eval");
+    let mesh = openrscad_geom::render(&out.node).expect("render");
     assert!(
         (mesh.volume() - 21.0).abs() < 1e-6,
         "surface volume {}",
@@ -191,8 +192,8 @@ fn renders_surface() {
 #[test]
 fn imports_openscad_3mf() {
     struct R(Vec<u8>);
-    impl quito_eval::FileResolver for R {
-        fn load(&self, _p: &str, _f: &str) -> Option<quito_eval::LoadedFile> {
+    impl openrscad_eval::FileResolver for R {
+        fn load(&self, _p: &str, _f: &str) -> Option<openrscad_eval::LoadedFile> {
             None
         }
         fn load_bytes(&self, path: &str, _f: &str) -> Option<Vec<u8>> {
@@ -200,9 +201,9 @@ fn imports_openscad_3mf() {
         }
     }
     let tmf = include_bytes!("fixtures/openscad.3mf").to_vec();
-    let prog = quito_syntax::parse("import(\"m.3mf\");").expect("parse");
-    let out = quito_eval::eval_program_with(&prog, &R(tmf), ".").expect("eval");
-    let mesh = quito_geom::render(&out.node).expect("render");
+    let prog = openrscad_syntax::parse("import(\"m.3mf\");").expect("parse");
+    let out = openrscad_eval::eval_program_with(&prog, &R(tmf), ".").expect("eval");
+    let mesh = openrscad_geom::render(&out.node).expect("render");
     assert!(
         mesh.tris.len() > 100,
         "too few triangles: {}",
@@ -221,8 +222,8 @@ fn imports_openscad_3mf() {
 #[test]
 fn surface_png_heightmap() {
     struct R(Vec<u8>);
-    impl quito_eval::FileResolver for R {
-        fn load(&self, _p: &str, _f: &str) -> Option<quito_eval::LoadedFile> {
+    impl openrscad_eval::FileResolver for R {
+        fn load(&self, _p: &str, _f: &str) -> Option<openrscad_eval::LoadedFile> {
             None
         }
         fn load_bytes(&self, path: &str, _f: &str) -> Option<Vec<u8>> {
@@ -230,9 +231,9 @@ fn surface_png_heightmap() {
         }
     }
     let png = include_bytes!("fixtures/heightmap.png").to_vec();
-    let prog = quito_syntax::parse("surface(\"h.png\");").expect("parse");
-    let out = quito_eval::eval_program_with(&prog, &R(png), ".").expect("eval");
-    let mesh = quito_geom::render(&out.node).expect("render");
+    let prog = openrscad_syntax::parse("surface(\"h.png\");").expect("parse");
+    let out = openrscad_eval::eval_program_with(&prog, &R(png), ".").expect("eval");
+    let mesh = openrscad_geom::render(&out.node).expect("render");
     assert!(
         (mesh.volume() - 121.0196).abs() < 1e-3,
         "png surface volume {}",
@@ -246,8 +247,8 @@ fn surface_png_heightmap() {
 #[test]
 fn imports_and_extrudes_dxf() {
     struct R(Vec<u8>);
-    impl quito_eval::FileResolver for R {
-        fn load(&self, _p: &str, _f: &str) -> Option<quito_eval::LoadedFile> {
+    impl openrscad_eval::FileResolver for R {
+        fn load(&self, _p: &str, _f: &str) -> Option<openrscad_eval::LoadedFile> {
             None
         }
         fn load_bytes(&self, path: &str, _f: &str) -> Option<Vec<u8>> {
@@ -256,10 +257,10 @@ fn imports_and_extrudes_dxf() {
     }
     let outer = vec![[0.0, 0.0], [10.0, 0.0], [10.0, 20.0], [0.0, 20.0]];
     let hole = vec![[4.0, 4.0], [4.0, 6.0], [6.0, 6.0], [6.0, 4.0]];
-    let dxf = quito_geom::export_dxf(&[outer, hole]).into_bytes();
-    let prog = quito_syntax::parse("linear_extrude(3) import(\"p.dxf\");").expect("parse");
-    let out = quito_eval::eval_program_with(&prog, &R(dxf), ".").expect("eval");
-    let mesh = quito_geom::render(&out.node).expect("render");
+    let dxf = openrscad_geom::export_dxf(&[outer, hole]).into_bytes();
+    let prog = openrscad_syntax::parse("linear_extrude(3) import(\"p.dxf\");").expect("parse");
+    let out = openrscad_eval::eval_program_with(&prog, &R(dxf), ".").expect("eval");
+    let mesh = openrscad_geom::render(&out.node).expect("render");
     assert!(
         (mesh.volume() - 588.0).abs() < 1e-3,
         "dxf extrude volume {}",
@@ -333,7 +334,7 @@ fn renders_lamp_shade() {
 #[test]
 fn transforms_named_and_axis_angle() {
     let dir = workspace_root().to_string_lossy().into_owned();
-    let bbox = |m: &quito_geom::Mesh| m.bbox().expect("non-empty mesh");
+    let bbox = |m: &openrscad_geom::Mesh| m.bbox().expect("non-empty mesh");
     let close = |a: [f64; 3], b: [f64; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-3);
 
     // Named translate: the child moves to x = 100..110.

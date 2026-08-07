@@ -2,7 +2,7 @@
 //   * the extension host (Node/CommonJS, `vscode` external)  -> dist/extension.js
 //   * the webview viewer (browser/ESM, bundles three.js)     -> media/webview.js
 //
-// The webview is a pure display surface: geometry is computed by the quito-lsp
+// The webview is a pure display surface: geometry is computed by the openrscad-lsp
 // server and pushed in via postMessage, so there's no wasm engine to bundle.
 
 import * as esbuild from "esbuild";

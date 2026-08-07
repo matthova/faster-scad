@@ -15,7 +15,7 @@ let client: LanguageClient | undefined;
 /** URI (as a string) of the document currently mirrored in the preview panel. */
 let previewUri: string | undefined;
 
-/** Provenance groups for the previewed document (from the latest `quito/preview`
+/** Provenance groups for the previewed document (from the latest `openrscad/preview`
  *  notification), used to resolve the editor cursor → source span (code→model). */
 let previewProvenance: ProvenanceGroup[] = [];
 
@@ -70,12 +70,12 @@ async function revealSpan(span: Span): Promise<void> {
 }
 
 /**
- * Locate a Quito binary: an explicit setting wins, otherwise probe the
+ * Locate a OpenRSCAD binary: an explicit setting wins, otherwise probe the
  * workspace's `target/{release,debug}` directories (a `cargo build` output),
  * finally fall back to the bare name (resolved via PATH).
  */
 function findBinary(configKey: string, baseName: string): string {
-  const configured = vscode.workspace.getConfiguration("quito").get<string>(configKey);
+  const configured = vscode.workspace.getConfiguration("openrscad").get<string>(configKey);
   if (configured && configured.trim()) {
     return configured.trim();
   }
@@ -92,20 +92,20 @@ function findBinary(configKey: string, baseName: string): string {
 }
 
 function startClient(context: vscode.ExtensionContext): LanguageClient {
-  const command = findBinary("lsp.path", "quito-lsp");
+  const command = findBinary("lsp.path", "openrscad-lsp");
   const serverOptions: ServerOptions = {
     run: { command, transport: TransportKind.stdio },
     debug: { command, transport: TransportKind.stdio },
   };
   const clientOptions: LanguageClientOptions = {
     documentSelector: [{ scheme: "file", language: "openscad" }],
-    outputChannelName: "Quito Language Server",
+    outputChannelName: "OpenRSCAD Language Server",
   };
-  const c = new LanguageClient("quito", "Quito OpenSCAD", serverOptions, clientOptions);
+  const c = new LanguageClient("openrscad", "OpenRSCAD OpenSCAD", serverOptions, clientOptions);
 
   // The server pushes rendered geometry for previewed documents; route it to the
   // panel when it's the document we're showing.
-  c.onNotification("quito/preview", (params: PreviewNotification) => {
+  c.onNotification("openrscad/preview", (params: PreviewNotification) => {
     if (params?.uri === previewUri) {
       previewProvenance = params.provenance ?? [];
       PreviewPanel.current?.push(params);
@@ -114,7 +114,7 @@ function startClient(context: vscode.ExtensionContext): LanguageClient {
 
   c.start().catch((err) => {
     vscode.window.showErrorMessage(
-      `Quito language server failed to start (${command}). Build it with \`cargo build --release -p quito-lsp\` or set quito.lsp.path. ${err}`
+      `OpenRSCAD language server failed to start (${command}). Build it with \`cargo build --release -p openrscad-lsp\` or set openrscad.lsp.path. ${err}`
     );
   });
   return c;
@@ -131,15 +131,15 @@ async function serverCommand(command: string, args: unknown[]): Promise<void> {
 
 /** Whether the preview should re-render as the user types (vs. on save only). */
 function previewIsLive(): boolean {
-  return vscode.workspace.getConfiguration("quito").get<boolean>("preview.autoRefresh", true);
+  return vscode.workspace.getConfiguration("openrscad").get<boolean>("preview.autoRefresh", true);
 }
 
 function startPreview(uri: string): void {
-  void serverCommand("quito.startPreview", [uri, { live: previewIsLive() }]);
+  void serverCommand("openrscad.startPreview", [uri, { live: previewIsLive() }]);
 }
 
 function stopPreview(uri: string): void {
-  void serverCommand("quito.stopPreview", [uri]);
+  void serverCommand("openrscad.stopPreview", [uri]);
 }
 
 /**
@@ -167,7 +167,7 @@ function switchPreviewTo(editor: vscode.TextEditor | undefined, force = false): 
   startPreview(uri);
 }
 
-/** Export the active document via the `quito` CLI, format chosen interactively. */
+/** Export the active document via the `openrscad` CLI, format chosen interactively. */
 async function exportModel(): Promise<void> {
   const editor = vscode.window.activeTextEditor;
   if (!editor || editor.document.languageId !== "openscad") {
@@ -193,10 +193,10 @@ async function exportModel(): Promise<void> {
   }
   const output = input.replace(/\.scad$/i, "") + "." + pick.ext;
   await editor.document.save();
-  const cli = findBinary("cli.path", "quito");
+  const cli = findBinary("cli.path", "openrscad");
 
   await vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title: `Quito: exporting ${path.basename(output)}…` },
+    { location: vscode.ProgressLocation.Notification, title: `OpenRSCAD: exporting ${path.basename(output)}…` },
     () =>
       new Promise<void>((resolve) => {
         const proc = spawn(cli, [input, "-o", output]);
@@ -204,15 +204,15 @@ async function exportModel(): Promise<void> {
         proc.stderr.on("data", (d) => (stderr += d.toString()));
         proc.on("error", (err) => {
           vscode.window.showErrorMessage(
-            `Quito CLI not found (${cli}). Build it with \`cargo build --release -p quito-cli\` or set quito.cli.path. ${err.message}`
+            `OpenRSCAD CLI not found (${cli}). Build it with \`cargo build --release -p openrscad-cli\` or set openrscad.cli.path. ${err.message}`
           );
           resolve();
         });
         proc.on("close", (code) => {
           if (code === 0) {
-            vscode.window.showInformationMessage(`Quito: wrote ${output}`);
+            vscode.window.showInformationMessage(`OpenRSCAD: wrote ${output}`);
           } else {
-            vscode.window.showErrorMessage(`Quito export failed: ${stderr.trim() || `exit ${code}`}`);
+            vscode.window.showErrorMessage(`OpenRSCAD export failed: ${stderr.trim() || `exit ${code}`}`);
           }
           resolve();
         });
@@ -224,7 +224,7 @@ export function activate(context: vscode.ExtensionContext): void {
   client = startClient(context);
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("quito.openPreview", () => {
+    vscode.commands.registerCommand("openrscad.openPreview", () => {
       PreviewPanel.createOrShow(context, {
         // The webview is up; render whatever's active now.
         onReady: () => switchPreviewTo(vscode.window.activeTextEditor, true),
@@ -246,8 +246,8 @@ export function activate(context: vscode.ExtensionContext): void {
         },
       });
     }),
-    vscode.commands.registerCommand("quito.export", () => exportModel()),
-    vscode.commands.registerCommand("quito.restartServer", async () => {
+    vscode.commands.registerCommand("openrscad.export", () => exportModel()),
+    vscode.commands.registerCommand("openrscad.restartServer", async () => {
       await client?.stop();
       client = startClient(context);
       // Re-register the live preview with the fresh server.
@@ -288,7 +288,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     // Live-vs-save-only toggled: re-register the current preview with the flag.
     vscode.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration("quito.preview.autoRefresh") && previewUri) {
+      if (e.affectsConfiguration("openrscad.preview.autoRefresh") && previewUri) {
         startPreview(previewUri);
       }
     })

@@ -1,36 +1,36 @@
-# Quito
+# OpenRSCAD
 
-<a href="https://matthova.github.io/faster-scad/playground" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/playground-live-2ea44f" alt="playground: live"></a>
+<a href="https://matthova.github.io/openrscad/playground" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/playground-live-2ea44f" alt="playground: live"></a>
 [![license: Apache-2.0 OR MIT](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue)](#license)
 
-**Code your models. Quito turns `.scad` scripts into solid 3D geometry —
+**Code your models. OpenRSCAD turns `.scad` scripts into solid 3D geometry —
 instantly, everywhere.**
 
-Quito is a fast, from-scratch reimplementation of the
+OpenRSCAD is a fast, from-scratch reimplementation of the
 <a href="https://openscad.org" target="_blank" rel="noopener noreferrer">OpenSCAD</a> language: the same script-it-yourself CAD
 workflow, a modern geometry kernel, and a single Rust core that runs in your
 browser, on your desktop, in your editor, and on the command line. Edits
 re-render in single-digit milliseconds, and output is verified bit-for-bit
 against stock OpenSCAD.
 
-**<a href="https://matthova.github.io/faster-scad/playground" target="_blank" rel="noopener noreferrer">▶ Try it live in your browser — no install</a>**
+**<a href="https://matthova.github.io/openrscad/playground" target="_blank" rel="noopener noreferrer">▶ Try it live in your browser — no install</a>**
 
 ## Download
 
 | Browser | Linux | Windows | Mac (native) | Mac (Intel) |
 |---|---|---|---|---|
-| <a href="https://matthova.github.io/faster-scad/playground" target="_blank" rel="noopener noreferrer">Open playground</a> | <a href="https://github.com/matthova/faster-scad/releases/latest/download/Quito-linux-x86_64.AppImage" target="_blank" rel="noopener noreferrer">AppImage</a> | <a href="https://github.com/matthova/faster-scad/releases/latest/download/Quito-windows-x64-setup.exe" target="_blank" rel="noopener noreferrer">Installer</a> | <a href="https://github.com/matthova/faster-scad/releases/latest/download/Quito-macos-aarch64.dmg" target="_blank" rel="noopener noreferrer">Apple Silicon</a> | <a href="https://github.com/matthova/faster-scad/releases/latest/download/Quito-macos-x64.dmg" target="_blank" rel="noopener noreferrer">Intel</a> |
+| <a href="https://matthova.github.io/openrscad/playground" target="_blank" rel="noopener noreferrer">Open playground</a> | <a href="https://github.com/matthova/openrscad/releases/latest/download/OpenRSCAD-linux-x86_64.AppImage" target="_blank" rel="noopener noreferrer">AppImage</a> | <a href="https://github.com/matthova/openrscad/releases/latest/download/OpenRSCAD-windows-x64-setup.exe" target="_blank" rel="noopener noreferrer">Installer</a> | <a href="https://github.com/matthova/openrscad/releases/latest/download/OpenRSCAD-macos-aarch64.dmg" target="_blank" rel="noopener noreferrer">Apple Silicon</a> | <a href="https://github.com/matthova/openrscad/releases/latest/download/OpenRSCAD-macos-x64.dmg" target="_blank" rel="noopener noreferrer">Intel</a> |
 
 Desktop links always fetch the latest release, and the app auto-updates in place.
-Need `.deb` / `.rpm` / `.msi` or an older version? <a href="https://github.com/matthova/faster-scad/releases/latest" target="_blank" rel="noopener noreferrer">Browse all downloads</a>.
+Need `.deb` / `.rpm` / `.msi` or an older version? <a href="https://github.com/matthova/openrscad/releases/latest" target="_blank" rel="noopener noreferrer">Browse all downloads</a>.
 
-> **macOS: "Quito is damaged and can't be opened"?** The app isn't damaged —
+> **macOS: "OpenRSCAD is damaged and can't be opened"?** The app isn't damaged —
 > it's <a href="https://support.apple.com/guide/security/gatekeeper-and-runtime-protection-sec5599b66df/web" target="_blank" rel="noopener noreferrer">not yet notarized</a>, so Gatekeeper blocks the quarantined
-> download. Drag Quito to your Applications folder, then run this once in
+> download. Drag OpenRSCAD to your Applications folder, then run this once in
 > Terminal to clear the quarantine flag:
 >
 > ```sh
-> xattr -cr /Applications/Quito.app
+> xattr -cr /Applications/OpenRSCAD.app
 > ```
 >
 > Then open it normally. (Right-click → Open won't clear the "damaged" state on
@@ -44,25 +44,25 @@ One engine, many ways to reach it. Pick the surface that fits and start modeling
 
 | Surface | For whom | Get started |
 |---|---|---|
-| **Web** | Anyone — zero install | <a href="https://matthova.github.io/faster-scad/playground" target="_blank" rel="noopener noreferrer">Open the playground</a> |
+| **Web** | Anyone — zero install | <a href="https://matthova.github.io/openrscad/playground" target="_blank" rel="noopener noreferrer">Open the playground</a> |
 | **Mobile / offline** | On the go | Same URL in any modern mobile browser; **install as a PWA** for offline use |
 | **Desktop** | Native, no browser | Tauri app for macOS / Linux / Windows, with in-app auto-update |
 | **VS Code** | Editor-native | Extension with a live 3D preview + export |
-| **Any LSP editor** | Neovim, Helix, Zed, Emacs… | `quito-lsp` — diagnostics, hover, completion |
-| **CLI** | Scripts & CI | `quito model.scad -o out.stl` |
-| **Embed (npm)** | Your own app | `npm i quito-engine` — the wasm engine, browser or Node ([docs](packages/npm/README.md)) |
+| **Any LSP editor** | Neovim, Helix, Zed, Emacs… | `openrscad-lsp` — diagnostics, hover, completion |
+| **CLI** | Scripts & CI | `openrscad model.scad -o out.stl` |
+| **Embed (npm)** | Your own app | `npm i openrscad-engine` — the wasm engine, browser or Node ([docs](packages/npm/README.md)) |
 
 All of them drive the exact same Rust core, so a model behaves identically no
 matter where you open it.
 
 ### Embed the engine in your own project
 
-The geometry engine ships to npm as [`quito-engine`](https://www.npmjs.com/package/quito-engine)
+The geometry engine ships to npm as [`openrscad-engine`](https://www.npmjs.com/package/openrscad-engine)
 — the same Rust core compiled to WebAssembly, for building your own viewer,
 running headless renders, or embedding the playground engine:
 
 ```js
-import { render } from "quito-engine";
+import { render } from "openrscad-engine";
 const r = await render("difference() { cube(20, center=true); sphere(12); }");
 // r.positions / r.normals: triangle soup ready for three.js / WebGL.
 ```
@@ -138,7 +138,7 @@ notes.
 
 ```sh
 cargo build --release
-./target/release/quito examples/demo.scad -o out.stl
+./target/release/openrscad examples/demo.scad -o out.stl
 cargo test
 ```
 
@@ -160,7 +160,7 @@ npm run build           # installers → src-tauri/target/release/bundle/…
 
 ### Editors
 
-The `quito-lsp` language server works in any LSP-capable editor, and
+The `openrscad-lsp` language server works in any LSP-capable editor, and
 `editors/vscode` bundles it with a live 3D preview. Setup for Neovim, Helix,
 Zed, Emacs, VS Code, and a CLI file-watch loop is in
 [`docs/ide-integration.md`](docs/ide-integration.md).
@@ -169,22 +169,22 @@ Zed, Emacs, VS Code, and a CLI file-watch loop is in
 
 | crate | responsibility |
 |---|---|
-| `quito-syntax` | lexer + parser → typed AST; customizer schema |
-| `quito-ir` | CSG tree/DAG node types |
-| `quito-eval` | tree-walk interpreter + bytecode VM: AST → CSG tree; `text()` |
-| `quito-geom` | fragments, tessellation, `Kernel` trait, Manifold backend, mesh/2D I/O |
-| `quito-cli` | the `quito` binary |
-| `quito-wasm` | wasm-bindgen engine surface (`render(source)` → mesh + diagnostics) |
-| `quito-lsp` | LSP language server: diagnostics, hover, completion, render command |
+| `openrscad-syntax` | lexer + parser → typed AST; customizer schema |
+| `openrscad-ir` | CSG tree/DAG node types |
+| `openrscad-eval` | tree-walk interpreter + bytecode VM: AST → CSG tree; `text()` |
+| `openrscad-geom` | fragments, tessellation, `Kernel` trait, Manifold backend, mesh/2D I/O |
+| `openrscad-cli` | the `openrscad` binary |
+| `openrscad-wasm` | wasm-bindgen engine surface (`render(source)` → mesh + diagnostics) |
+| `openrscad-lsp` | LSP language server: diagnostics, hover, completion, render command |
 
-`web/` (live at <a href="https://matthova.github.io/faster-scad/" target="_blank" rel="noopener noreferrer">https://matthova.github.io/faster-scad/</a>), `desktop/` (Tauri),
+`web/` (live at <a href="https://matthova.github.io/openrscad/" target="_blank" rel="noopener noreferrer">https://matthova.github.io/openrscad/</a>), `desktop/` (Tauri),
 and `editors/vscode/` are thin front-ends over the same core. `packages/npm/`
-publishes the wasm engine as [`quito-engine`](packages/npm/README.md) for use in
+publishes the wasm engine as [`openrscad-engine`](packages/npm/README.md) for use in
 other projects.
 
 ## Contributing
 
-Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). Quito is a
+Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). OpenRSCAD is a
 clean-room reimplementation: **no OpenSCAD (GPL) source is ever consulted.**
 
 ## License

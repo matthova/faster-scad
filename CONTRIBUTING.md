@@ -1,9 +1,9 @@
-# Contributing to Quito
+# Contributing to OpenRSCAD
 
 ## Clean-room policy (mandatory)
 
-Quito is a **clean-room** reimplementation of the OpenSCAD language. OpenSCAD is
-licensed under the GPL; Quito is Apache-2.0/MIT. To keep Quito's licensing
+OpenRSCAD is a **clean-room** reimplementation of the OpenSCAD language. OpenSCAD is
+licensed under the GPL; OpenRSCAD is Apache-2.0/MIT. To keep OpenRSCAD's licensing
 clean, everyone — human or agent — must follow these rules:
 
 1. **Never read, copy, or paraphrase OpenSCAD source code.** Do not open the
@@ -22,14 +22,14 @@ When in doubt, treat OpenSCAD as a black box you can run but not read.
 
 ## Divergences
 
-Quito targets OpenSCAD 2021.01 semantics "in spirit," and documents every
+OpenRSCAD targets OpenSCAD 2021.01 semantics "in spirit," and documents every
 intentional divergence in [COMPAT.md](COMPAT.md) with a repro. If you change
 behavior in a way that differs from upstream, add a COMPAT entry.
 
 ## Tests
 
 - Interpreter features land with tests derived from documented behavior. Two
-  oracle harnesses diff quito against a real OpenSCAD binary and run in CI against
+  oracle harnesses diff openrscad against a real OpenSCAD binary and run in CI against
   committed goldens: the **echo oracle** (`xtask echo`, language behavior) and the
   **geometry oracle** (`xtask geom`, mesh metrics — volume, bbox, centroid,
   component count, manifoldness, opt-in triangle count). Regenerate goldens on a
@@ -39,7 +39,7 @@ behavior in a way that differs from upstream, add a COMPAT entry.
 
 ## Changesets
 
-Quito versions and releases with
+OpenRSCAD versions and releases with
 [changesets](https://github.com/changesets/changesets). Add a changeset **in the
 same PR** as any user-facing change:
 
@@ -60,7 +60,7 @@ The repo shares **one** version, so the bump is repo-wide:
 | `minor` | 0.2.0 → 0.3.0 | genuinely new capability — **and** any breaking change |
 | `major` | → 1.0.0 | do not use until we deliberately cut 1.0 |
 
-`minor` crosses the caret boundary (`^0.2.0` consumers of `quito-engine` won't
+`minor` crosses the caret boundary (`^0.2.0` consumers of `openrscad-engine` won't
 pick it up automatically), so reach for `patch` by default. Breaking changes are
 still `minor` while we're 0.x — select `minor` and call the break out in the
 summary.

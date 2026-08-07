@@ -86,7 +86,7 @@ Everything else in this milestone is what we do with the space that buys.
   not move. M8's rejection (c) stands.
 
 **OpenSCAD is an engine option, not a fidelity story.** Per the product
-decision, M9 ships no Quito-vs-OpenSCAD comparison panel. "Trust" in this
+decision, M9 ships no OpenRSCAD-vs-OpenSCAD comparison panel. "Trust" in this
 milestone means *the render is honest about itself* — integrity state, and
 nothing failing silently (§8.4).
 
@@ -96,7 +96,7 @@ nothing failing silently (§8.4).
 
 | Zone | Holds | Why |
 | --- | --- | --- |
-| **Topbar** `.actions` (`App.tsx:2024-2318`) | `Examples ▾` · `Project ▾` · `Display ▾` · `Quality: Normal ▾` · `Quito⎪OpenSCAD` · `Fast` · `Export STL ▾` · `⌘K` · `? ▾` — **9 pinned defs, ≤12 hit targets, identical on web and desktop** | Admission rule, asserted in CI: a def is pinned only if it is a **comparison gesture flipped while looking at the model** (engine, Fast — M8's rule, unchanged), the **terminal action** (Export), or a group trigger. Triggers carry their live value (`Quality: Normal ▾`, `Export STL ▾`) so the row stays a readout. `Examples ▾` stays pinned: for a playground reached by share link, burying the word "Examples" is the worst available regression. |
+| **Topbar** `.actions` (`App.tsx:2024-2318`) | `Examples ▾` · `Project ▾` · `Display ▾` · `Quality: Normal ▾` · `OpenRSCAD⎪OpenSCAD` · `Fast` · `Export STL ▾` · `⌘K` · `? ▾` — **9 pinned defs, ≤12 hit targets, identical on web and desktop** | Admission rule, asserted in CI: a def is pinned only if it is a **comparison gesture flipped while looking at the model** (engine, Fast — M8's rule, unchanged), the **terminal action** (Export), or a group trigger. Triggers carry their live value (`Quality: Normal ▾`, `Export STL ▾`) so the row stays a readout. `Examples ▾` stays pinned: for a playground reached by share link, burying the word "Examples" is the worst available regression. |
 | **Group popovers** | `project` (New, Import…, Share, .scad ⎪ desktop Open, Save, Save As) · `display` (today's 6 toggles + section axis/position) · `quality` (Draft/Normal/Fine + `$fn`/`$fa`/`$fs`) · `output` (format list, PNG, Frames zip) · `app` (help, shortcuts, **theme**, GitHub, version) | One `GroupPopover` over the existing `Popover.tsx`, rendering `commands(group, ctx)`. Generation fixes a live bug for free: the Display trigger's `active` is hand-written (`App.tsx:2072`) and omits `showDims` and `sectionOn` — so turning on the section plane, which *hides geometry*, leaves the trigger dark. |
 | **Editor column** | Tab strip + CodeMirror. Gains keyboard-operable tabs and a `! # % *` modifier gutter. | Unchanged in role. |
 | **Viewport** | Canvas, nav cube, `⤢ Fit`, ISO callouts, section clipping. **No new chrome over the canvas.** | M8 rejections (a) floating rail and (b) strip *above* the canvas both stand. |
@@ -128,7 +128,7 @@ not a menu item. Declaring `Resources` now is what stops `Project ▾` becoming 
 
 ```
 ┌────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ QUITO  Examples▾  Project▾ │ Display▾  Quality: Normal▾  Quito⎪OpenSCAD  Fast │ Export STL▾ │ ⌘K ?▾ │
+│ OPENRSCAD  Examples▾  Project▾ │ Display▾  Quality: Normal▾  OpenRSCAD⎪OpenSCAD  Fast │ Export STL▾ │ ⌘K ?▾ │
 ├────────────────────────┬───────────────────────────────────────┬───────────────────────────────┤
 │ main.scad ● helpers  + │                              ┌────┐   │ ▾ PARAMETERS              ⟲   │
 │────────────────────────│         ╱▔▔▔▔▔▔▔╲     ⤢ Fit  │cube│   │    width   ━━●━━     40       │
@@ -143,7 +143,7 @@ not a menu item. Declaring `Resources` now is what stops `Project ▾` becoming 
 ├────────────────────────┴───────────────────────────────────────┴───────────────────────────────┤
 │ ▸ Console 2      All · Errors 0 · Warnings 2 · Echo 3                                    ⌃ ⌄   │
 ├────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ ▶ Render │ 12 480 triangles · 40×20×12 mm · vol 4 812.30 · 0.8 ms │ EXACT │ console 2 │ quito 0.7.1 │
+│ ▶ Render │ 12 480 triangles · 40×20×12 mm · vol 4 812.30 · 0.8 ms │ EXACT │ console 2 │ openrscad 0.7.1 │
 └────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -200,12 +200,12 @@ relying on it to hide overflow.
 
 ### Considered and cut
 
-- **A Quito-vs-OpenSCAD comparison panel.** Cut by product decision: OpenSCAD is
+- **A OpenRSCAD-vs-OpenSCAD comparison panel.** Cut by product decision: OpenSCAD is
   an extra engine option, not a fidelity claim. (It would also have needed Rust —
   `shells`/`2-manifold`/`centroid` exist only in `xtask/src/main.rs:737,768`, not
-  in `quito-geom`; `measure()` in `openscadGeometry.ts:285-320` returns volume and
+  in `openrscad-geom`; `measure()` in `openscadGeometry.ts:285-320` returns volume and
   area only.)
-- **Deleting the `Quito⎪OpenSCAD` toggle.** It stays pinned: with no comparison
+- **Deleting the `OpenRSCAD⎪OpenSCAD` toggle.** It stays pinned: with no comparison
   panel, the toggle *is* the feature.
 - **A store migration.** §7.
 
@@ -228,7 +228,7 @@ relying on it to hide overflow.
 | 11 | **Isolate + retargeted ISO callouts** (the signature, §6) | You can inspect a sub-assembly only by commenting out code. | M | viewport + dock |
 | — | ***below here is M10*** | | | |
 | 12 | Measure tool (point-to-point, same drafting callout) | | M | viewport |
-| 13 | Hover docs + go-to-definition | Needs nothing from `quito-lsp`: `builtins.ts`, `signature.ts`, `complete.ts` already have the data. | S | editor |
+| 13 | Hover docs + go-to-definition | Needs nothing from `openrscad-lsp`: `builtins.ts`, `signature.ts`, `complete.ts` already have the data. | S | editor |
 | 14 | `Resources` dock section (library sources, fonts) | The collection container declared in §3.1. | M | dock |
 | 15 | Examples browser with thumbnails | `examples.ts` is 1050 LOC of inline strings behind a `<select>`. | M | `Examples ▾` |
 
@@ -260,7 +260,7 @@ Why this and not a properties panel:
   dirty state, and share-link contents.
 - **It costs nothing new on the wire.** Every render already ships, per leaf, the
   outermost→innermost stack of source byte ranges
-  (`crates/quito-wasm/src/lib.rs:63-67`). `highlightSpan` already matches **any**
+  (`crates/openrscad-wasm/src/lib.rs:63-67`). `highlightSpan` already matches **any**
   span in the stack (`viewer.ts:751-753`); only picking takes `spans[last]` (`:726`).
 
 Three constraints that make it a feature rather than a strobe:
@@ -373,7 +373,7 @@ have no live `ctx`) and `actionsRef` (identity-stable `Api`).
 | `web/src/components/GroupPopover.tsx` | Wraps `Popover.tsx`; adds **close-on-action** (today it closes only on outside pointerdown or Escape — right for Display's toggles, wrong for `Project ▾`). |
 | `web/src/components/Transport.tsx` | The 5 controls, in the `.viewer` column. |
 | `web/src/viewer.ts` + `index.css` | **The transport is not a JSX move.** `.viewer` is `position:relative` with `canvas{width:100%;height:100%}` (`index.css:573-583`); the nav cube is appended to `canvas.parentElement` and the `ResizeObserver` observes it (`viewer.ts:208,215-216`). Wrap the canvas in `.viewer-canvas` (flex child, `min-height:0`), make `.viewer` `display:flex;flex-direction:column`, and move both the cube parent and the observer target to the wrapper — otherwise the canvas overlaps the strip, and expanding the strip resizes the canvas without firing the observer (stretched view, desynced `pickAt` math). |
-| `web/src/objectTree.ts` (pure) + `components/ObjectsSection.tsx` | **Parse `files[0]` with the existing Lezer parser for the shape, and join triangle counts on by span.** Not geometry-derived: `partition_provenance` (`crates/quito-geom/src/lib.rs:558-700`) emits one leaf per *surviving* region, so a `difference()`'s tool operands produce no leaf (`:626-660`), `hull`/`minkowski`/`linear_extrude` collapse their whole subtree (`:697-703`), and a `for` loop's N instances share one span stack. Rows with no matching span render "no geometry" instead of vanishing. Also: `stmt_span` returns `None` unless `in_main` (`crates/quito-eval/src/lib.rs:518-524`), so this is the user's own file — unattributable leaves group under one `(library geometry)` row. Memoize on the parsed array's identity and gate on the section being open; `onResult` fires ~15×/s during playback. |
+| `web/src/objectTree.ts` (pure) + `components/ObjectsSection.tsx` | **Parse `files[0]` with the existing Lezer parser for the shape, and join triangle counts on by span.** Not geometry-derived: `partition_provenance` (`crates/openrscad-geom/src/lib.rs:558-700`) emits one leaf per *surviving* region, so a `difference()`'s tool operands produce no leaf (`:626-660`), `hull`/`minkowski`/`linear_extrude` collapse their whole subtree (`:697-703`), and a `for` loop's N instances share one span stack. Rows with no matching span render "no geometry" instead of vanishing. Also: `stmt_span` returns `None` unless `in_main` (`crates/openrscad-eval/src/lib.rs:518-524`), so this is the user's own file — unattributable leaves group under one `(library geometry)` row. Memoize on the parsed array's identity and gate on the section being open; `onResult` fires ~15×/s during playback. |
 | `web/vitest.config.ts` | Second project: `environment:"jsdom"`, `include:["src/**/*.test.tsx"]`. `.tsx` cannot match the glob today. |
 
 **Net on `App.tsx`:** −150 (`onResult`) −88 (command array) −~300 (topbar/transport
@@ -441,7 +441,7 @@ to the viewport clear color, separated only by a 1.24:1 border.
   may be too complex. Reduce $fn."* Fetch outside the render clock with a visible
   downloading state.
 - **`#` is labelled `!`** in `Dock.tsx:139` and `tokens.ts:24`
-  (`crates/quito-syntax/src/ast.rs:172-178` is unambiguous).
+  (`crates/openrscad-syntax/src/ast.rs:172-178` is unambiguous).
 
 **8.4 Silent degradations that get a voice.** The OpenSCAD engine has no
 customizer, no provenance, and is 3D-only (`openscadWorker.ts:15-22`) — the
@@ -524,11 +524,11 @@ New/Open/Save/Export/Reset View after Phase 3; ⌘N/⌘O/⌘E fire **once**, not
 Web-only per the product decision. These stay queued and blocked:
 
 1. **Binary `Vec<u8>` asset channel.** `MapResolver::load_bytes`
-   (`crates/quito-wasm/src/lib.rs:324`) re-encodes stored *text* only. Blocks
+   (`crates/openrscad-wasm/src/lib.rs:324`) re-encodes stored *text* only. Blocks
    browser `import()` of binary STL/3MF and `surface(png)` heightmaps. Needs an
    IndexedDB asset store too — a 20MB STL cannot live in `localStorage`. Its own
    milestone; the Phase-0 `.stl` sniff is unrelated and does not wait for it.
-2. **Mesh integrity in `quito-geom`** — `is_manifold`, `components`, centroid,
+2. **Mesh integrity in `openrscad-geom`** — `is_manifold`, `components`, centroid,
    inward-facing. These exist only in `xtask/src/main.rs:737,768`. Would let the
    Model section report shells and manifoldness.
 3. **Generated native menu.** `build_menu` hardcodes 7 relayed items
@@ -536,7 +536,7 @@ Web-only per the product decision. These stay queued and blocked:
    Tauri v2 runtime `set_menu` plus a `predefined` variant in `KeySpec`, or macOS
    loses ⌘C/⌘V (`lib.rs:1013-1021`). Until then, `commands.test.ts` asserts the
    TS `menu` ids equal the Rust 7 so Phase 3 does not create a fifth source of truth.
-4. **`asserts_run`** (`crates/quito-eval/src/lib.rs:234`) → `RenderResult`, for an
+4. **`asserts_run`** (`crates/openrscad-eval/src/lib.rs:234`) → `RenderResult`, for an
    "N assertions passed" chip.
 5. **Engine-side welded exports** — the browser rebuilds OFF/OBJ/AMF from
    non-indexed triangle soup (`web/src/stl.ts`), ~3× larger than

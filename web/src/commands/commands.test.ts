@@ -9,7 +9,7 @@ import {
 } from "./index";
 import type { Ctx } from "./types";
 
-const CTX: Ctx = { rendering: false, engineKind: "quito", exportFmt: "stl" };
+const CTX: Ctx = { rendering: false, engineKind: "openrscad", exportFmt: "stl" };
 
 describe("command registry invariants", () => {
   it("has unique ids", () => {

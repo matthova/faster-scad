@@ -1,8 +1,8 @@
 # Track B — "Switcher Experience" (proposed M7)
 
-**Goal:** an OpenSCAD user can adopt Quito (desktop or CLI) for a real project
+**Goal:** an OpenSCAD user can adopt OpenRSCAD (desktop or CLI) for a real project
 without hitting a workflow wall. Every item below is a confirmed gap where
-Quito breaks a daily habit an OpenSCAD user already has.
+OpenRSCAD breaks a daily habit an OpenSCAD user already has.
 
 **Why after track A:** each of these polishes the adoption funnel. Funneling
 users into an engine that still silently mis-rotates `rotate(45,[1,1,0])`
@@ -22,7 +22,7 @@ second. Sequenced as M7, it inherits a geometry engine users can rely on.
 > three.js materials with a fused mesh kept for stats/export/oracle, and
 > per-object color 3MF export), and B4 (PNG export — a Save-PNG button that
 > captures the three.js viewer in the playground and desktop app, plus a headless
-> pure-Rust CLI rasterizer, `quito … -o out.png` with OpenSCAD-style
+> pure-Rust CLI rasterizer, `openrscad … -o out.png` with OpenSCAD-style
 > `--imgsize`/`--camera`/`--projection`/`--viewall`/`--autocenter`, colored via the
 > B3 groups), and B5 (parity bundle: a `text(font=)` warning; customizer
 > parameter sets — CLI `-p`/`-P` + web preset dropdown with save/load/import/export
@@ -34,7 +34,7 @@ second. Sequenced as M7, it inherits a geometry engine users can rely on.
 
 ## Exit criterion — met
 
-> A user opens a multi-file OpenSCAD project in Quito desktop — ⌘S save, inline
+> A user opens a multi-file OpenSCAD project in OpenRSCAD desktop — ⌘S save, inline
 > error squiggles, `color()`/`#`/`%` in the preview, STL + PNG export, customizer
 > presets, animation frame dumps, and `$vp*`-driven cameras all work — without
 > touching OpenSCAD. (COMPAT.md divergence #5 is closed.)

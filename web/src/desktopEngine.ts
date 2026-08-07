@@ -255,7 +255,7 @@ interface NativeOpenscadRun {
  * If no local binary is found (`available: false`), it transparently and
  * permanently falls back to the vendored wasm `OpenscadEngine` — still real
  * OpenSCAD, just slower — so the toggle works whether or not OpenSCAD is
- * installed. Set `QUITO_OPENSCAD=/path/to/openscad` to point at a specific build.
+ * installed. Set `OPENRSCAD_OPENSCAD=/path/to/openscad` to point at a specific build.
  */
 export class DesktopOpenscadEngine {
   private seq = 0;
@@ -471,7 +471,7 @@ export async function saveSourceAs(
 /** Save binary bytes (e.g. a captured PNG) via a native save dialog. */
 export async function saveImageNative(
   bytes: Uint8Array,
-  defaultName = "quito.png",
+  defaultName = "openrscad.png",
 ): Promise<void> {
   const { save } = await import("@tauri-apps/plugin-dialog");
   const { invoke } = await import("@tauri-apps/api/core");
@@ -517,7 +517,7 @@ export async function onFileChanged(
 
 /** Save already-built export bytes via a native save dialog. Used when a wasm
  *  engine (e.g. OpenSCAD) produced the geometry on desktop, so the native
- *  re-render path (`save_model`) — which would use the native Quito engine —
+ *  re-render path (`save_model`) — which would use the native OpenRSCAD engine —
  *  doesn't apply and we write the bytes we already have. */
 export async function saveBytesNative(
   bytes: Uint8Array,
@@ -526,7 +526,7 @@ export async function saveBytesNative(
   const { save } = await import("@tauri-apps/plugin-dialog");
   const { invoke } = await import("@tauri-apps/api/core");
   const path = await save({
-    defaultPath: `quito.${format}`,
+    defaultPath: `openrscad.${format}`,
     filters: [{ name: format.toUpperCase(), extensions: [format] }],
   });
   if (!path) return; // cancelled
@@ -545,7 +545,7 @@ export async function saveModelNative(
   const { save } = await import("@tauri-apps/plugin-dialog");
   const { invoke } = await import("@tauri-apps/api/core");
   const path = await save({
-    defaultPath: `quito.${format}`,
+    defaultPath: `openrscad.${format}`,
     filters: [{ name: format.toUpperCase(), extensions: [format] }],
   });
   if (!path) return; // cancelled

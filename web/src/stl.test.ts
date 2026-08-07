@@ -39,7 +39,7 @@ describe("buildOFF / buildOBJ (welded, exact golden)", () => {
 
   it("emits exact OBJ (1-based faces) for one triangle", () => {
     expect(text(buildOBJ(TRI))).toBe(
-      "# exported by Quito\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n",
+      "# exported by OpenRSCAD\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n",
     );
   });
 

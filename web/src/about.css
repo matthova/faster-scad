@@ -35,9 +35,9 @@
      light it darkens (below) so white ink clears AA (bare --accent is only
      3.18:1 under white). */
   --cta-bg: var(--accent);
-  /* Chart series (Quito / OpenSCAD CGAL / OpenSCAD Manifold). Amber + rose +
+  /* Chart series (OpenRSCAD / OpenSCAD CGAL / OpenSCAD Manifold). Amber + rose +
      blue — CVD-validated as a set on the panel surface (see dataviz check). */
-  --series-quito: var(--accent);
+  --series-openrscad: var(--accent);
   --series-cgal: #ef6f8e;
   --series-mfld: #5aa9e6;
   --focus: var(--accent-strong);
@@ -56,7 +56,7 @@
   --accent-strong: #a45a06;
   --on-accent: #ffffff;
   --cta-bg: #a45a06; /* white ink → 5.2:1 (bright --accent would be 3.18:1) */
-  --series-quito: var(--accent);
+  --series-openrscad: var(--accent);
   --series-cgal: #b0355a;
   --series-mfld: #2b6cb0;
   --focus: var(--accent-strong);
@@ -336,8 +336,8 @@ body.mk {
   border-radius: 3px;
   flex-shrink: 0;
 }
-.mk-swatch--quito {
-  background: var(--series-quito);
+.mk-swatch--openrscad {
+  background: var(--series-openrscad);
 }
 .mk-swatch--cgal {
   background: var(--series-cgal);
@@ -425,8 +425,8 @@ body.mk {
   align-items: center;
   justify-content: flex-end;
 }
-.mk-bar--quito {
-  background: var(--series-quito);
+.mk-bar--openrscad {
+  background: var(--series-openrscad);
 }
 .mk-bar--cgal {
   background: var(--series-cgal);

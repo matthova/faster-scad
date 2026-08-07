@@ -1,17 +1,17 @@
-# Releasing Quito
+# Releasing OpenRSCAD
 
 One tag ships everything: the desktop installers (`desktop/`, Tauri v2 — native
 builds for macOS, Windows, and Linux that update themselves in place) and the
-`quito-engine` npm package (the wasm build of `crates/quito-wasm`).
+`openrscad-engine` npm package (the wasm build of `crates/openrscad-wasm`).
 
 Releases are cut by **[changesets](https://github.com/changesets/changesets)**,
 not by tagging by hand.
 
 ## How auto-update works
 
-1. On launch (and from **Quito → Check for Updates…**) the app fetches the
+1. On launch (and from **OpenRSCAD → Check for Updates…**) the app fetches the
    release manifest:
-   `https://github.com/matthova/faster-scad/releases/latest/download/latest.json`
+   `https://github.com/matthova/openrscad/releases/latest/download/latest.json`
 2. If the manifest version is newer than the running app, it downloads that
    platform's update artifact, verifies its **minisign signature** against the
    public key baked into `tauri.conf.json`, installs it, and relaunches.
@@ -50,7 +50,7 @@ Update artifacts per platform:
    from `CHANGELOG.md`), then dispatches:
    - **Release desktop app** — 4-OS installers + `latest.json`, uploaded onto
      that Release.
-   - **Publish engine to npm** — `quito-engine`, via OIDC with provenance.
+   - **Publish engine to npm** — `openrscad-engine`, via OIDC with provenance.
 
    Assets appear a few minutes later. Existing desktop users are offered the
    update as soon as `latest.json` uploads.
@@ -106,7 +106,7 @@ These require secrets, paid accounts, or GitHub UI actions an agent can't do.
 
 - [ ] **Generate the updater signing keypair** (needs the Tauri CLI locally):
       ```sh
-      cd desktop && npx tauri signer generate -w ~/.quito-updater.key
+      cd desktop && npx tauri signer generate -w ~/.openrscad-updater.key
       ```
       This prints a **public key** and writes a password-protected **private
       key**. Keep the private key and password secret; they never enter the repo.
@@ -116,7 +116,7 @@ These require secrets, paid accounts, or GitHub UI actions an agent can't do.
       key.)
 - [ ] **Add repository secrets** (GitHub → Settings → Secrets and variables →
       Actions):
-  - [ ] `TAURI_SIGNING_PRIVATE_KEY` — contents of `~/.quito-updater.key`
+  - [ ] `TAURI_SIGNING_PRIVATE_KEY` — contents of `~/.openrscad-updater.key`
   - [ ] `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` — the password you chose
 - [ ] **Confirm GitHub Actions can create releases**: Settings → Actions →
       General → Workflow permissions → **Read and write permissions**. (The
@@ -124,10 +124,10 @@ These require secrets, paid accounts, or GitHub UI actions an agent can't do.
 - [ ] **Allow Actions to open PRs**: Settings → Actions → General → **Allow
       GitHub Actions to create and approve pull requests**. Without it the
       changesets action cannot open its Version Packages PR.
-- [ ] **Register the npm trusted publisher** (one-time; `quito-engine@0.0.0`
+- [ ] **Register the npm trusted publisher** (one-time; `openrscad-engine@0.0.0`
       already exists on the registry, so only the registration is left):
-      npmjs.com → `quito-engine` → Settings → Trusted Publisher → GitHub
-      Actions, with Organization or user `matthova`, Repository `faster-scad`,
+      npmjs.com → `openrscad-engine` → Settings → Trusted Publisher → GitHub
+      Actions, with Organization or user `matthova`, Repository `openrscad`,
       Workflow filename `publish-npm.yml`, Environment blank. Fields are
       case-sensitive and exact, and npm does not validate them at save time.
 
@@ -161,7 +161,7 @@ workflow (`.github/workflows/release.yml` has the macOS env block commented in).
       via the "Browse all downloads" release-page link.
 - [x] Add a download/landing page linking to the latest release assets — the
       README's **Download** table links each platform via stable, version-less
-      asset aliases (`Quito-<platform>...`) uploaded by the release workflow, so
+      asset aliases (`OpenRSCAD-<platform>...`) uploaded by the release workflow, so
       `releases/latest/download/<name>` always resolves to the newest build.
 - [ ] Add an in-app download/callout in the **web playground** (`web/src/App.tsx`,
       gated to the non-Tauri build) linking to the desktop downloads.

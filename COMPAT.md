@@ -1,6 +1,6 @@
 # Compatibility divergence register
 
-Quito targets OpenSCAD 2021.01 semantics "in spirit." Intentional divergences
+OpenRSCAD targets OpenSCAD 2021.01 semantics "in spirit." Intentional divergences
 and known gaps are recorded here with a repro. Bug-for-bug fidelity is a
 non-goal, but a *silently wrong answer* is a trust bug — every one we know about
 is listed below so a switcher hits a documented limitation, never an
@@ -54,7 +54,7 @@ the dangerous kind. Each has a minimal repro. Tracks A/B track the fixes.
   text("Ag", font = "Courier New");                  // warns, falls back to Liberation Sans
   ```
 
-- **`rands()` is not bit-compatible (documented).** Quito uses an xorshift PRNG;
+- **`rands()` is not bit-compatible (documented).** OpenRSCAD uses an xorshift PRNG;
   values are reproducible and the global/seeded advance semantics match
   OpenSCAD, but the numbers do not match OpenSCAD's generator bit-for-bit. This
   divergence is intentional and permanent.
@@ -66,7 +66,7 @@ the dangerous kind. Each has a minimal repro. Tracks A/B track the fixes.
 - **BOSL2 function-suite coverage is partial (recorded, gated).** `cargo run -p
   xtask -- bosl2` runs **every** `[[test]]` block of the 15 function-oriented
   files and currently passes **503/513**; the gate now also honors each block's
-  `expect_success` flag, so error-path tests pass when Quito correctly *rejects*
+  `expect_success` flag, so error-path tests pass when OpenRSCAD correctly *rejects*
   bad input. The ~10 remaining gaps are scattered edge cases (e.g. `rands`
   distribution — an intentional, documented divergence; inverse-trig exactness at
   nice angles; a few string/struct helpers). The passing set is pinned per file

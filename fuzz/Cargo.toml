@@ -2,7 +2,7 @@
 # libfuzzer/nightly-only build stays out of the main `cargo build --workspace`).
 # Run with nightly, e.g. `cargo +nightly fuzz run parse`.
 [package]
-name = "quito-fuzz"
+name = "openrscad-fuzz"
 version = "0.0.0"
 edition = "2021"
 publish = false
@@ -14,9 +14,9 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-quito-syntax = { path = "../crates/quito-syntax" }
-quito-eval = { path = "../crates/quito-eval" }
-quito-geom = { path = "../crates/quito-geom" }
+openrscad-syntax = { path = "../crates/openrscad-syntax" }
+openrscad-eval = { path = "../crates/openrscad-eval" }
+openrscad-geom = { path = "../crates/openrscad-geom" }
 
 # Fuzz binaries: no test/doc harness, and each is its own target.
 [[bin]]

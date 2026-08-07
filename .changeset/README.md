@@ -1,7 +1,7 @@
 # Changesets
 
 This folder is managed by [changesets](https://github.com/changesets/changesets),
-which drives Quito's versioning and releases (it replaced release-please).
+which drives OpenRSCAD's versioning and releases (it replaced release-please).
 
 ## What you do
 
@@ -27,7 +27,7 @@ The whole repo shares one version, so the bump is repo-wide.
 
 Under 0.x a breaking change is still a **minor** by our policy — select `minor`,
 and call the break out in the summary. `minor` crosses the caret boundary
-(`^0.2.0` consumers of `quito-engine` don't auto-receive it), so reach for
+(`^0.2.0` consumers of `openrscad-engine` don't auto-receive it), so reach for
 `patch` by default and `minor` only for genuinely new or breaking behavior.
 
 The `.changeset/*.md` summaries are what land in `CHANGELOG.md` and the GitHub

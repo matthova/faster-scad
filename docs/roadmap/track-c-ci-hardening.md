@@ -24,7 +24,7 @@ the deploy.
 **Landed (cherry-pick):** `ci.yml` now has a `web` job that runs
 `npm ci && npm run build:wasm && npm run build` (`= tsc -b && vite build`) on
 every PR, sharing the cargo cache key, so a PR can no longer merge TypeScript
-that breaks the live site — and it smoke-tests that `quito-wasm` builds with
+that breaks the live site — and it smoke-tests that `openrscad-wasm` builds with
 wasm-pack, not just `cargo check` for the target.
 
 ## C3. Desktop builds in CI
@@ -43,7 +43,7 @@ regression gate. *Small, plus one-time runner-deps fiddling.*
 `cargo clippy --workspace --all-targets -- -D warnings` and
 `cargo fmt --all --check`; the initial fallout (a workspace-wide `cargo fmt`
 plus a mechanical batch of clippy fixes) was applied. The stale `ci.yml` push
-branch filter (`matthova/quito-v1`) was reduced to `main`. Web-side eslint
+branch filter (`matthova/openrscad-v1`) was reduced to `main`. Web-side eslint
 remains optional; `tsc` on PRs is covered by C2.
 
 ## C5. Perf regression tracking in CI
@@ -70,12 +70,12 @@ no fuzzing anywhere (no `fuzz/` dir, no cargo-fuzz). A worker panic in the
 browser is survivable (worker restarts) but a reproducible hang/OOM is a
 denial-of-usability, and the same crates run natively in the CLI/desktop.
 
-- `cargo fuzz` targets: (1) `quito-syntax::parse` on arbitrary bytes —
+- `cargo fuzz` targets: (1) `openrscad-syntax::parse` on arbitrary bytes —
   must never panic, only return errors; (2) parse-then-eval with a low
   `MAX_CALL_DEPTH` and an instruction/fuel budget — must never panic or
   loop forever (the fuel mechanism may need to be added to the evaluator,
   which is independently useful for the playground's cancellation story);
-  (3) the mesh importers (`quito-geom/src/mesh.rs`, `vector2d.rs`) on
+  (3) the mesh importers (`openrscad-geom/src/mesh.rs`, `vector2d.rs`) on
   arbitrary bytes — STL/OFF/OBJ/3MF/AMF/DXF/SVG parsers are classic
   fuzz-finds-crashes territory, and `import()` in the playground can fetch
   user-supplied files.
@@ -88,7 +88,7 @@ denial-of-usability, and the same crates run natively in the CLI/desktop.
 
 ## C7. Wasm tests actually executed
 
-CI only *compile-checks* `quito-wasm` for `wasm32-unknown-unknown`; the 5
+CI only *compile-checks* `openrscad-wasm` for `wasm32-unknown-unknown`; the 5
 `#[test]`s in the crate run only on the host. Run them under
 `wasm-pack test --headless --chrome` (or `wasm-bindgen-test-runner`) so the
 boolmesh-kernel-on-wasm path — the one browsers actually execute, and the one

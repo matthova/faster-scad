@@ -1,4 +1,4 @@
-//! Quito desktop backend (Tauri v2).
+//! OpenRSCAD desktop backend (Tauri v2).
 //!
 //! The frontend is the same playground UI as the web build, but rendering runs
 //! here in the *native* engine (C++ Manifold kernel) over Tauri IPC — much
@@ -6,7 +6,7 @@
 //! straight from disk and a geometry cache kept across renders.
 
 use notify::{RecursiveMode, Watcher};
-use quito_eval::{FileResolver, LoadedFile};
+use openrscad_eval::{FileResolver, LoadedFile};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -20,7 +20,7 @@ const RENDER_STACK: usize = 256 << 20;
 
 #[derive(Default)]
 struct AppState {
-    cache: Arc<Mutex<quito_geom::GeomCache>>,
+    cache: Arc<Mutex<openrscad_geom::GeomCache>>,
     /// Keeps the active file watchers alive (dropping one stops watching that
     /// file). One entry per watched project file with a disk path.
     watchers: Mutex<Vec<notify::RecommendedWatcher>>,
@@ -100,12 +100,12 @@ struct RenderResult {
 #[derive(Debug)]
 struct EngineError {
     message: String,
-    diagnostic: quito_eval::Diagnostic,
+    diagnostic: openrscad_eval::Diagnostic,
 }
 
 #[tauri::command]
 fn parameters(source: String) -> String {
-    quito_syntax::customizer::extract(&source).to_json()
+    openrscad_syntax::customizer::extract(&source).to_json()
 }
 
 /// Resolves `include`/`use`/`import` from disk: relative to the including file,
@@ -202,13 +202,13 @@ impl FileResolver for CombinedResolver {
     }
 }
 
-fn overrides(names: &[String], values: &[String]) -> Vec<(String, quito_eval::Value)> {
+fn overrides(names: &[String], values: &[String]) -> Vec<(String, openrscad_eval::Value)> {
     names
         .iter()
         .zip(values)
         .filter_map(|(n, v)| {
-            quito_syntax::customizer::parse_value(v)
-                .map(|pv| (n.clone(), quito_eval::value_from_param(&pv)))
+            openrscad_syntax::customizer::parse_value(v)
+                .map(|pv| (n.clone(), openrscad_eval::value_from_param(&pv)))
         })
         .collect()
 }
@@ -217,7 +217,7 @@ fn overrides(names: &[String], values: &[String]) -> Vec<(String, quito_eval::Va
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
 fn eval_and_render(
-    cache: &Arc<Mutex<quito_geom::GeomCache>>,
+    cache: &Arc<Mutex<openrscad_geom::GeomCache>>,
     source: &str,
     dir: &str,
     names: &[String],
@@ -227,17 +227,17 @@ fn eval_and_render(
     preview: bool,
 ) -> Result<
     (
-        quito_geom::Mesh,
-        quito_eval::EvalOutput,
+        openrscad_geom::Mesh,
+        openrscad_eval::EvalOutput,
         bool,
-        quito_geom::RenderDiagnostics,
+        openrscad_geom::RenderDiagnostics,
     ),
     EngineError,
 > {
-    let program = quito_syntax::parse(source).map_err(|e| {
+    let program = openrscad_syntax::parse(source).map_err(|e| {
         let message = format!("parse error: {}", e.message);
         EngineError {
-            diagnostic: quito_eval::parse_error_diagnostic(message.clone(), e.span),
+            diagnostic: openrscad_eval::parse_error_diagnostic(message.clone(), e.span),
             message,
         }
     })?;
@@ -249,26 +249,30 @@ fn eval_and_render(
             .collect(),
         disk: DiskResolver::new(),
     };
-    let out =
-        quito_eval::eval_program_with_params(&program, &resolver, dir, &overrides(names, values))
-            .map_err(|e| EngineError {
-            message: format!("evaluation error: {}", e.message),
-            diagnostic: quito_eval::eval_error_diagnostic(&e),
-        })?;
-    let is_2d = quito_geom::is_2d(&out.node);
-    let kernel = quito_geom::ManifoldKernel::new();
+    let out = openrscad_eval::eval_program_with_params(
+        &program,
+        &resolver,
+        dir,
+        &overrides(names, values),
+    )
+    .map_err(|e| EngineError {
+        message: format!("evaluation error: {}", e.message),
+        diagnostic: openrscad_eval::eval_error_diagnostic(&e),
+    })?;
+    let is_2d = openrscad_geom::is_2d(&out.node);
+    let kernel = openrscad_geom::ManifoldKernel::new();
     let (mesh, diag) = {
         let mut cache = cache.lock().unwrap();
         let render = if preview {
             // Fast preview: unions are concatenated, not unioned (non-watertight).
-            quito_geom::render_preview_cached_diag
+            openrscad_geom::render_preview_cached_diag
         } else {
-            quito_geom::render_cached_diag
+            openrscad_geom::render_cached_diag
         };
         render(&out.node, &kernel, &mut cache).map_err(|e| {
             let message = format!("geometry error: {e}");
             EngineError {
-                diagnostic: quito_eval::eval_error_diagnostic(&quito_eval::EvalError::new(
+                diagnostic: openrscad_eval::eval_error_diagnostic(&openrscad_eval::EvalError::new(
                     message.clone(),
                 )),
                 message,
@@ -294,7 +298,7 @@ fn render(
     let dir = dir.unwrap_or_else(|| ".".to_string());
     let preview = preview.unwrap_or(false);
     let work = move || {
-        let params = quito_syntax::customizer::extract(&source).to_json();
+        let params = openrscad_syntax::customizer::extract(&source).to_json();
         match eval_and_render(
             &cache,
             &source,
@@ -307,14 +311,14 @@ fn render(
         ) {
             Ok((mesh, out, is_2d, diag)) => {
                 let (positions, normals) = mesh.to_triangle_soup_f32();
-                let diagnostics = quito_eval::diagnostics_json(None, &out.warnings);
+                let diagnostics = openrscad_eval::diagnostics_json(None, &out.warnings);
                 // Preview color channel — only when the model uses color/`#`/`%`.
                 let (preview_positions, preview_normals, groups) =
-                    if quito_geom::has_display_attrs(&out.node) {
-                        let kernel = quito_geom::ManifoldKernel::new();
+                    if openrscad_geom::has_display_attrs(&out.node) {
+                        let kernel = openrscad_geom::ManifoldKernel::new();
                         let mut cache = cache.lock().unwrap();
-                        match quito_geom::render_groups_cached(&out.node, &kernel, &mut cache) {
-                            Ok(g) => quito_geom::preview_channel(&g),
+                        match openrscad_geom::render_groups_cached(&out.node, &kernel, &mut cache) {
+                            Ok(g) => openrscad_geom::preview_channel(&g),
                             Err(_) => Default::default(),
                         }
                     } else {
@@ -324,19 +328,21 @@ fn render(
                 // geometry (2D flat meshes and 3D solids alike). Shares the cache
                 // with the fused render above, so opaque leaf meshes aren't
                 // recomputed just to tag them with a span.
-                let (provenance_positions, provenance_normals, provenance) =
-                    if !mesh.tris.is_empty() {
-                        let kernel = quito_geom::ManifoldKernel::new();
-                        let mut cache = cache.lock().unwrap();
-                        match quito_geom::render_provenance_cached(&out.node, &kernel, &mut cache) {
-                            Ok(g) => quito_geom::provenance_channel(&g),
-                            Err(_) => Default::default(),
-                        }
-                    } else {
-                        Default::default()
-                    };
+                let (provenance_positions, provenance_normals, provenance) = if !mesh
+                    .tris
+                    .is_empty()
+                {
+                    let kernel = openrscad_geom::ManifoldKernel::new();
+                    let mut cache = cache.lock().unwrap();
+                    match openrscad_geom::render_provenance_cached(&out.node, &kernel, &mut cache) {
+                        Ok(g) => openrscad_geom::provenance_channel(&g),
+                        Err(_) => Default::default(),
+                    }
+                } else {
+                    Default::default()
+                };
                 let viewport = if source.contains("$vp") {
-                    quito_eval::viewport_json(&out.viewport)
+                    openrscad_eval::viewport_json(&out.viewport)
                 } else {
                     String::new()
                 };
@@ -373,7 +379,7 @@ fn render(
             Err(e) => RenderResult {
                 ok: false,
                 error: e.message,
-                diagnostics: quito_eval::diagnostics_json(Some(&e.diagnostic), &[]),
+                diagnostics: openrscad_eval::diagnostics_json(Some(&e.diagnostic), &[]),
                 params,
                 ..Default::default()
             },
@@ -401,7 +407,7 @@ fn save_model(
     let work = move || -> Result<(), String> {
         // 2D vector formats need the exact contours, not the flat mesh.
         if format == "dxf" || format == "svg" {
-            let program = quito_syntax::parse(&source).map_err(|e| {
+            let program = openrscad_syntax::parse(&source).map_err(|e| {
                 format!(
                     "parse error: {} (at {}..{})",
                     e.message, e.span.start, e.span.end
@@ -415,19 +421,19 @@ fn save_model(
                     .collect(),
                 disk: DiskResolver::new(),
             };
-            let out = quito_eval::eval_program_with_params(
+            let out = openrscad_eval::eval_program_with_params(
                 &program,
                 &resolver,
                 &dir,
                 &overrides(&param_names, &param_values),
             )
             .map_err(|e| format!("evaluation error: {}", e.message))?;
-            let contours = quito_geom::render_contours(&out.node)
+            let contours = openrscad_geom::render_contours(&out.node)
                 .ok_or_else(|| "export requires a 2D model".to_string())?;
             let text = if format == "dxf" {
-                quito_geom::export_dxf(&contours)
+                openrscad_geom::export_dxf(&contours)
             } else {
-                quito_geom::export_svg(&contours)
+                openrscad_geom::export_svg(&contours)
             };
             return std::fs::write(&path, text).map_err(|e| format!("write {path}: {e}"));
         }
@@ -444,15 +450,15 @@ fn save_model(
         )
         .map_err(|e| e.message)?;
         // 3MF carries per-object color when the model uses color/`#`/`%`.
-        if format == "3mf" && quito_geom::has_display_attrs(&out.node) {
-            let groups =
-                quito_geom::render_groups(&out.node).map_err(|e| format!("color groups: {e}"))?;
-            let colored: Vec<(&quito_geom::Mesh, [f32; 4])> = groups
+        if format == "3mf" && openrscad_geom::has_display_attrs(&out.node) {
+            let groups = openrscad_geom::render_groups(&out.node)
+                .map_err(|e| format!("color groups: {e}"))?;
+            let colored: Vec<(&openrscad_geom::Mesh, [f32; 4])> = groups
                 .iter()
-                .filter(|g| g.mode != quito_geom::DisplayMode::Background)
+                .filter(|g| g.mode != openrscad_geom::DisplayMode::Background)
                 .map(|g| (&g.mesh, g.color))
                 .collect();
-            return std::fs::write(&path, quito_geom::Mesh::to_3mf_colored(&colored))
+            return std::fs::write(&path, openrscad_geom::Mesh::to_3mf_colored(&colored))
                 .map_err(|e| format!("write {path}: {e}"));
         }
         let bytes: Vec<u8> = match format.as_str() {
@@ -469,7 +475,7 @@ fn save_model(
 
 #[tauri::command]
 fn engine_version() -> String {
-    format!("quito-desktop {}", env!("CARGO_PKG_VERSION"))
+    format!("openrscad-desktop {}", env!("CARGO_PKG_VERSION"))
 }
 
 /// Watch `target`'s directory and call `on_change(content)` whenever the file is
@@ -652,7 +658,7 @@ fn take_pending_open(state: tauri::State<'_, AppState>) -> Option<String> {
 // Native OpenSCAD engine (uses a locally-installed OpenSCAD, if available)
 //
 // The desktop app can render with *actual* OpenSCAD (its fast Manifold backend)
-// instead of Quito. We shell out to a locally-installed OpenSCAD binary,
+// instead of OpenRSCAD. We shell out to a locally-installed OpenSCAD binary,
 // exporting a binary STL (exact) or colored OFF ($preview, F5-style), and hand
 // the bytes back to the frontend, which parses them with the same helpers the
 // in-browser wasm OpenSCAD engine uses. If no local binary is found,
@@ -711,12 +717,12 @@ fn find_on_path(name: &str) -> Option<PathBuf> {
 }
 
 /// Locate a locally-installed OpenSCAD executable, preferring, in order: an
-/// explicit `QUITO_OPENSCAD` override, `PATH`, then the standard per-platform
+/// explicit `OPENRSCAD_OPENSCAD` override, `PATH`, then the standard per-platform
 /// install locations (including the separate nightly builds). Returns `None`
 /// when nothing is found, which drives the wasm fallback.
 fn resolve_openscad() -> Option<PathBuf> {
     // 1. Explicit override (dev / power users pointing at a specific build).
-    if let Some(p) = std::env::var_os("QUITO_OPENSCAD") {
+    if let Some(p) = std::env::var_os("OPENRSCAD_OPENSCAD") {
         let p = PathBuf::from(p);
         if p.is_file() {
             return Some(p);
@@ -790,7 +796,7 @@ fn run_openscad(
     preview: bool,
 ) -> Result<OpenscadRun, String> {
     let base = std::env::temp_dir().join(format!(
-        "quito_openscad_{}_{}",
+        "openrscad_openscad_{}_{}",
         std::process::id(),
         OPENSCAD_RUN_SEQ.fetch_add(1, Ordering::Relaxed)
     ));
@@ -875,7 +881,7 @@ fn run_openscad(
         } else if stderr.contains("not a 3D object") {
             "OpenSCAD produced no 3D geometry. The OpenSCAD engine renders 3D \
              models only; 2D shapes (e.g. bare square/circle) aren't previewed — \
-             extrude them, or switch to the Quito engine."
+             extrude them, or switch to the OpenRSCAD engine."
                 .to_string()
         } else {
             format!(
@@ -971,7 +977,7 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::
 
     let check_updates =
         MenuItemBuilder::with_id("check-updates", "Check for Updates…").build(app)?;
-    let app_menu = SubmenuBuilder::new(app, "Quito")
+    let app_menu = SubmenuBuilder::new(app, "OpenRSCAD")
         .about(None)
         .separator()
         .item(&check_updates)
@@ -1069,7 +1075,7 @@ pub fn run() {
             engine_version
         ])
         .build(tauri::generate_context!())
-        .expect("error while building Quito desktop");
+        .expect("error while building OpenRSCAD desktop");
 
     app.run(|_app_handle, _event| {
         // macOS "open-with" / double-click delivers file URLs via Opened. Buffer
@@ -1099,7 +1105,7 @@ mod tests {
 
     #[test]
     fn engine_error_carries_span_for_parse_only() {
-        let cache = Arc::new(Mutex::new(quito_geom::GeomCache::new()));
+        let cache = Arc::new(Mutex::new(openrscad_geom::GeomCache::new()));
         // Parse error → the diagnostic carries a byte span.
         let e = eval_and_render(&cache, "cube(", ".", &[], &[], &[], &[], false).unwrap_err();
         assert!(e.message.starts_with("parse error"));
@@ -1116,7 +1122,7 @@ mod tests {
 
     #[test]
     fn native_render_command_logic() {
-        let cache = Arc::new(Mutex::new(quito_geom::GeomCache::new()));
+        let cache = Arc::new(Mutex::new(openrscad_geom::GeomCache::new()));
         let (mesh, _, _, _) =
             eval_and_render(&cache, "cube([2,3,4]);", ".", &[], &[], &[], &[], false).unwrap();
         assert!((mesh.volume() - 24.0).abs() < 1e-6);
@@ -1158,16 +1164,16 @@ mod tests {
         // `render` command uses (render_provenance_cached → provenance_channel)
         // for both a 3D solid and a 2D shape.
         for src in ["cube(2); translate([5,0,0]) sphere(2);", "square(4);"] {
-            let cache = Arc::new(Mutex::new(quito_geom::GeomCache::new()));
+            let cache = Arc::new(Mutex::new(openrscad_geom::GeomCache::new()));
             let (mesh, out, _, _) =
                 eval_and_render(&cache, src, ".", &[], &[], &[], &[], false).unwrap();
             assert!(!mesh.tris.is_empty(), "{src} produced no geometry");
-            let kernel = quito_geom::ManifoldKernel::new();
+            let kernel = openrscad_geom::ManifoldKernel::new();
             let groups = {
                 let mut c = cache.lock().unwrap();
-                quito_geom::render_provenance_cached(&out.node, &kernel, &mut c).unwrap()
+                openrscad_geom::render_provenance_cached(&out.node, &kernel, &mut c).unwrap()
             };
-            let (positions, _normals, json) = quito_geom::provenance_channel(&groups);
+            let (positions, _normals, json) = openrscad_geom::provenance_channel(&groups);
             assert!(!positions.is_empty(), "{src} produced no provenance soup");
             assert!(
                 json.contains("\"spans\":[["),
@@ -1276,7 +1282,7 @@ mod tests {
     fn file_watch_detects_external_change() {
         use std::sync::mpsc::channel;
         use std::time::Duration;
-        let dir = std::env::temp_dir().join(format!("quito_watch_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("openrscad_watch_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("w.scad");
         std::fs::write(&f, "cube(1);").unwrap();
@@ -1310,7 +1316,7 @@ mod tests {
     fn watcher_swallows_self_write_but_reports_external() {
         use std::sync::mpsc::channel;
         use std::time::Duration;
-        let dir = std::env::temp_dir().join(format!("quito_selfwrite_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("openrscad_selfwrite_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("s.scad");
         std::fs::write(&f, "cube(1);").unwrap();

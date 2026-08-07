@@ -6,6 +6,6 @@ license.workspace = true
 publish = false
 
 [dependencies]
-quito-syntax = { workspace = true }
-quito-eval = { workspace = true }
-quito-geom = { workspace = true }
+openrscad-syntax = { workspace = true }
+openrscad-eval = { workspace = true }
+openrscad-geom = { workspace = true }

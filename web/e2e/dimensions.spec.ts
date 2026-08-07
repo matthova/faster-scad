@@ -9,7 +9,7 @@ test("dimension callouts toggle from Display and persist", async ({ page }) => {
 
   // Off by default.
   let stored = await page.evaluate(() =>
-    JSON.parse(localStorage.getItem("quito.prefs.v1") || "{}"),
+    JSON.parse(localStorage.getItem("openrscad.prefs.v1") || "{}"),
   );
   expect(stored.showDims ?? false).toBe(false);
 
@@ -17,7 +17,7 @@ test("dimension callouts toggle from Display and persist", async ({ page }) => {
   await page.locator(".popover-panel").getByText("Dimensions").click();
 
   stored = await page.evaluate(() =>
-    JSON.parse(localStorage.getItem("quito.prefs.v1") || "{}"),
+    JSON.parse(localStorage.getItem("openrscad.prefs.v1") || "{}"),
   );
   expect(stored.showDims).toBe(true);
 

@@ -1,4 +1,4 @@
-// Customizer schema types (mirroring quito-wasm's JSON) plus the conversion
+// Customizer schema types (mirroring openrscad-wasm's JSON) plus the conversion
 // from a UI value to the literal string the engine expects as an override.
 
 export type ParamType = "number" | "bool" | "string" | "vector";

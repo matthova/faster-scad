@@ -20,8 +20,8 @@ export default defineConfig({
         maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
       },
       manifest: {
-        name: "Quito playground",
-        short_name: "Quito",
+        name: "OpenRSCAD playground",
+        short_name: "OpenRSCAD",
         description: "A fast OpenSCAD-compatible modeling playground.",
         theme_color: "#141414",
         background_color: "#141414",
@@ -44,10 +44,10 @@ export default defineConfig({
     rollupOptions: {
       // Multi-page: the standalone marketing page (index.html) plus the
       // playground app. playground.html emits to dist/playground.html, which
-      // GitHub Pages serves at /faster-scad/playground (extensionless). The
-      // marketing page is the root (index.html → /faster-scad/); both live at
+      // GitHub Pages serves at /openrscad/playground (extensionless). The
+      // marketing page is the root (index.html → /openrscad/); both live at
       // the root — not nested — so their relative asset URLs resolve against
-      // /faster-scad/ with no trailing-slash ambiguity.
+      // /openrscad/ with no trailing-slash ambiguity.
       input: {
         main: "index.html",
         playground: "playground.html",

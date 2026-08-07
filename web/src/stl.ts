@@ -86,7 +86,7 @@ export function buildOFF(positions: Float32Array): Uint8Array {
 /** Wavefront OBJ: welded vertices (`v`) and 1-based triangle faces (`f`). */
 export function buildOBJ(positions: Float32Array): Uint8Array {
   const { verts, faces } = weld(positions);
-  const out: string[] = ["# exported by Quito"];
+  const out: string[] = ["# exported by OpenRSCAD"];
   for (let i = 0; i < verts.length; i += 3)
     out.push(`v ${verts[i]} ${verts[i + 1]} ${verts[i + 2]}`);
   for (const f of faces) out.push(`f ${f[0] + 1} ${f[1] + 1} ${f[2] + 1}`);

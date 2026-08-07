@@ -1,7 +1,7 @@
 // Curated table of OpenSCAD built-in modules and functions, with one-line
 // signatures and docs for editor autocompletion.
 //
-// Mirror of crates/quito-lsp/src/builtins.rs — keep in sync. When you add,
+// Mirror of crates/openrscad-lsp/src/builtins.rs — keep in sync. When you add,
 // remove, or reword an entry there, make the matching change here (name,
 // isModule, signature, doc). builtins.test.ts asserts name parity against the
 // Rust file.

@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
 // The OpenSCAD engine worker: an alternate to `engineWorker.ts` that renders
-// with *actual* OpenSCAD (the official WebAssembly build) instead of Quito, so
+// with *actual* OpenSCAD (the official WebAssembly build) instead of OpenRSCAD, so
 // users can switch engines from the toolbar. It speaks the exact same
 // RenderRequest → RenderResponse contract, so `Engine` (see engine.ts) drives it
 // with the same latest-wins scheduling, watchdog, and terminate-on-cancel.
@@ -175,7 +175,7 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
       const detail = errorLines.length
         ? errorLines.join("\n")
         : /not a 3D object/.test(err.join("\n"))
-          ? "OpenSCAD produced no 3D geometry. The OpenSCAD engine renders 3D models only; 2D shapes (e.g. bare square/circle) aren't previewed — extrude them, or switch to the Quito engine."
+          ? "OpenSCAD produced no 3D geometry. The OpenSCAD engine renders 3D models only; 2D shapes (e.g. bare square/circle) aren't previewed — extrude them, or switch to the OpenRSCAD engine."
           : `OpenSCAD exited with code ${code}.`;
       (self as unknown as Worker).postMessage(
         blankResponse(seq, {

@@ -5,7 +5,7 @@
 //  object in the exported 3MF and the colors survive into a multi-material
 //  slicer (Bambu Studio, PrusaSlicer, OrcaSlicer, ...).
 //
-//    quito examples/rocket.scad -o rocket.3mf
+//    openrscad examples/rocket.scad -o rocket.3mf
 //
 //  The rocket stands on a flat base (z = 0), so it prints upright without
 //  supports.

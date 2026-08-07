@@ -1,6 +1,6 @@
-// The Quito preview webview: a three.js orbit viewer for geometry rendered by
+// The OpenRSCAD preview webview: a three.js orbit viewer for geometry rendered by
 // the language server. This surface is a *dumb display* — it does not evaluate
-// OpenSCAD. The quito-lsp server computes geometry on the native kernel and
+// OpenSCAD. The openrscad-lsp server computes geometry on the native kernel and
 // pushes it here; we just draw the vertex buffers.
 //
 // Message protocol with the extension host (see preview.ts):

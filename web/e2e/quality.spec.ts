@@ -35,7 +35,7 @@ test("quality preset changes triangle count and persists", async ({ page }) => {
   // Persisted to prefs (not the share link). Read storage directly — the test
   // harness clears localStorage on every navigation, so a reload can't check it.
   const stored = await page.evaluate(() =>
-    JSON.parse(localStorage.getItem("quito.prefs.v1") || "{}"),
+    JSON.parse(localStorage.getItem("openrscad.prefs.v1") || "{}"),
   );
   expect(stored.quality).toBe("fine");
 });

@@ -19,7 +19,7 @@ name: Release desktop app
 # so a hand-cut tag cannot silently ship a mismatched installer.
 #
 # The in-app updater reads
-#   https://github.com/matthova/faster-scad/releases/latest/download/latest.json
+#   https://github.com/matthova/openrscad/releases/latest/download/latest.json
 # which resolves to the latest published, non-prerelease release. Because assets
 # attach AFTER the Release exists, installers appear a few minutes later once
 # the matrix finishes.
@@ -57,7 +57,7 @@ jobs:
       matrix:
         include:
           # macOS is built per-arch on native runners rather than as one
-          # universal binary: quito-geom links the native Manifold C++ kernel,
+          # universal binary: openrscad-geom links the native Manifold C++ kernel,
           # whose CMake build only produces the runner's host arch, so a
           # cross-compiled `universal-apple-darwin` fails to link the x86_64
           # slice. macos-latest is Apple Silicon; macos-15-intel is Intel (the
@@ -71,24 +71,24 @@ jobs:
             # Stable, version-less alias uploaded alongside the versioned .dmg so
             # the README can link releases/latest/download/<name> permanently.
             bundle-glob: "desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg"
-            stable-name: "Quito-macos-aarch64.dmg"
+            stable-name: "OpenRSCAD-macos-aarch64.dmg"
           - platform: macos-15-intel
             args: "--target x86_64-apple-darwin"
             rust-targets: "x86_64-apple-darwin"
             bundle-glob: "desktop/src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg"
-            stable-name: "Quito-macos-x64.dmg"
+            stable-name: "OpenRSCAD-macos-x64.dmg"
           - platform: ubuntu-22.04
             args: ""
             rust-targets: ""
             # AppImage is the only self-updating Linux format, so that's what the
             # download table links; .deb/.rpm stay reachable via the release page.
             bundle-glob: "desktop/src-tauri/target/release/bundle/appimage/*.AppImage"
-            stable-name: "Quito-linux-x86_64.AppImage"
+            stable-name: "OpenRSCAD-linux-x86_64.AppImage"
           - platform: windows-latest
             args: ""
             rust-targets: ""
             bundle-glob: "desktop/src-tauri/target/release/bundle/nsis/*-setup.exe"
-            stable-name: "Quito-windows-x64-setup.exe"
+            stable-name: "OpenRSCAD-windows-x64-setup.exe"
 
     runs-on: ${{ matrix.platform }}
     # Serialize per-platform against the same tag so a hand-published Release and
@@ -104,7 +104,7 @@ jobs:
           # with `--ref <tag>` so this is already right, but a hand-dispatch from
           # the Actions UI defaults the ref to main — pin it explicitly.
           ref: ${{ github.event.release.tag_name || inputs.tag }}
-          # quito-geom builds the native Manifold C++ kernel; the BOSL2 corpus
+          # openrscad-geom builds the native Manifold C++ kernel; the BOSL2 corpus
           # submodule isn't needed to bundle, so a shallow checkout is fine.
           submodules: false
 
@@ -143,7 +143,7 @@ jobs:
             desktop/src-tauri/target
           key: cargo-release-${{ matrix.platform }}-${{ hashFiles('desktop/src-tauri/Cargo.lock') }}
 
-      # The native Manifold C++ kernel (quito-geom -> manifold-csg-sys) needs cmake.
+      # The native Manifold C++ kernel (openrscad-geom -> manifold-csg-sys) needs cmake.
       - name: Install cmake
         uses: lukka/get-cmake@latest
 
@@ -236,13 +236,13 @@ jobs:
           releaseId: ${{ steps.rel.outputs.id }}
           # Still used as the `notes` field of latest.json (the updater manifest),
           # which is what the in-app update banner shows.
-          releaseBody: "See the assets below to download and install Quito."
+          releaseBody: "See the assets below to download and install OpenRSCAD."
           # Emits latest.json (the updater manifest) alongside the installers.
           includeUpdaterJson: true
           args: ${{ matrix.args }}
 
       # tauri-action names installers with the version embedded
-      # (Quito_0.0.4_aarch64.dmg), so there's no stable URL to link from a static
+      # (OpenRSCAD_0.0.4_aarch64.dmg), so there's no stable URL to link from a static
       # README. Upload a version-less COPY of this platform's installer to the
       # same release so releases/latest/download/<stable-name> always resolves to
       # the newest build. --clobber keeps manual re-runs idempotent. Runs after

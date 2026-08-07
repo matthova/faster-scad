@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    quito_desktop_lib::run()
+    openrscad_desktop_lib::run()
 }

@@ -1,15 +1,15 @@
-//! Oracle harness for Quito.
+//! Oracle harness for OpenRSCAD.
 //!
 //! `cargo run -p xtask -- bless-echo`  — regenerate echo goldens from the
 //!                                       installed OpenSCAD binary.
-//! `cargo run -p xtask -- echo`        — run quito against the committed echo
+//! `cargo run -p xtask -- echo`        — run openrscad against the committed echo
 //!                                       goldens and report a pass rate.
 //!
 //! The echo oracle is the executable spec for the interpreter (language dark
 //! corners). Goldens are captured with
 //! `openscad --export-format=echo -o - <file>` (no geometry render).
 
-use quito_geom::Mesh;
+use openrscad_geom::Mesh;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -123,9 +123,9 @@ fn extract_tests(raw: &str) -> Vec<Bosl2Block> {
 /// `expect_success = false` block instead must parse but *fail* to evaluate —
 /// it exists to prove bad input is rejected.
 fn bosl2_block_passes(b: &Bosl2Block, dir_str: &str) -> bool {
-    match quito_syntax::parse(&b.script) {
+    match openrscad_syntax::parse(&b.script) {
         Ok(prog) => {
-            let result = quito_eval::eval_program_with(&prog, &DiskResolver, dir_str);
+            let result = openrscad_eval::eval_program_with(&prog, &DiskResolver, dir_str);
             if b.expect_success {
                 matches!(result, Ok(out) if out.asserts_run > 0)
             } else {
@@ -136,7 +136,7 @@ fn bosl2_block_passes(b: &Bosl2Block, dir_str: &str) -> bool {
     }
 }
 
-/// Run every `[[test]]` block of one file through quito; return the sorted names
+/// Run every `[[test]]` block of one file through openrscad; return the sorted names
 /// of the blocks that pass (parse + eval Ok + at least one assert executed) and
 /// the total block count. `Err` = the file is missing/unreadable/corrupt.
 fn bosl2_file_results(dir: &Path, name: &str) -> Result<(Vec<String>, usize), String> {
@@ -158,7 +158,7 @@ fn bosl2_file_results(dir: &Path, name: &str) -> Result<(Vec<String>, usize), St
 }
 
 /// Regenerate the BOSL2 baselines (the set of passing block names per file) from
-/// quito's current behavior. Dev-only; needs the submodule checked out.
+/// openrscad's current behavior. Dev-only; needs the submodule checked out.
 fn bless_bosl2(root: &Path) {
     let dir = root.join("corpus/BOSL2/tests");
     let goldens = root.join("corpus/golden/bosl2");
@@ -179,7 +179,7 @@ fn bless_bosl2(root: &Path) {
     eprintln!("blessed BOSL2 baselines into {}", goldens.display());
 }
 
-/// Run BOSL2's function suite through quito, block by block, gated against the
+/// Run BOSL2's function suite through openrscad, block by block, gated against the
 /// committed per-file baseline of passing block names. Returns `true` only if
 /// every file exists, has blocks, and its current passing set exactly matches
 /// its baseline — a **regression** (a baselined block now failing) and an
@@ -249,21 +249,21 @@ fn run_bosl2(root: &Path) -> bool {
     ok
 }
 
-/// Dual-baseline benchmark (M3 exit): time the release `quito` binary against
+/// Dual-baseline benchmark (M3 exit): time the release `openrscad` binary against
 /// OpenSCAD's two backends (CGAL default + Manifold) on a set of pinned models,
 /// full process wall-clock, best of N runs. Requires `cargo build --release`
 /// first and `openscad` on PATH.
 fn run_bench(root: &Path) {
     const RUNS: usize = 3;
-    let quito = root.join("target/release/quito");
-    if !quito.exists() {
+    let openrscad = root.join("target/release/openrscad");
+    if !openrscad.exists() {
         eprintln!(
             "release binary not found at {} — run `cargo build --release` first",
-            quito.display()
+            openrscad.display()
         );
         std::process::exit(2);
     }
-    let out = std::env::temp_dir().join("quito_bench.stl");
+    let out = std::env::temp_dir().join("openrscad_bench.stl");
     let models: [(&str, &str); 6] = [
         ("lamp-shade", "examples/lamp.scad"),
         ("booleans", "benches/models/booleans.scad"),
@@ -276,14 +276,14 @@ fn run_bench(root: &Path) {
     println!("Dual-baseline benchmark — best of {RUNS} runs, full-process wall-clock (ms).\n");
     println!(
         "{:<12} {:>10} {:>12} {:>8} {:>12} {:>8}",
-        "model", "quito", "oscad-CGAL", "×", "oscad-Mfld", "×"
+        "model", "openrscad", "oscad-CGAL", "×", "oscad-Mfld", "×"
     );
     println!("{}", "-".repeat(66));
 
     for (name, rel) in models {
         let path = root.join(rel);
         let q = bench_cmd(
-            quito.to_str().unwrap(),
+            openrscad.to_str().unwrap(),
             &[path.to_str().unwrap(), "-o", out.to_str().unwrap()],
             RUNS,
         );
@@ -320,13 +320,13 @@ fn run_bench(root: &Path) {
             speed(mfld),
         );
     }
-    println!("\n(× = OpenSCAD time / quito time; higher is quito being faster.)");
+    println!("\n(× = OpenSCAD time / openrscad time; higher is openrscad being faster.)");
 
     warm_edit_bench(root, &models);
 }
 
 /// Warm-edit performance gate (the M4 promise) — CI-safe: no OpenSCAD binary
-/// and no prebuilt release `quito` needed, unlike `bench`. Renders each
+/// and no prebuilt release `openrscad` needed, unlike `bench`. Renders each
 /// `benches/models/*.scad` cold (fresh cache) then warm (same cache, a fresh
 /// but structurally identical re-eval → all cache hits) in-process with the
 /// native kernel, and asserts the warm re-render stays under a generous
@@ -371,7 +371,7 @@ fn run_warm_gate(root: &Path) -> bool {
     println!("{:<14} {:>10} {:>10} {:>8}", "model", "cold", "warm", "");
     println!("{}", "-".repeat(44));
 
-    let kernel = quito_geom::ManifoldKernel::new();
+    let kernel = openrscad_geom::ManifoldKernel::new();
     let mut all_ok = true;
     for path in &models {
         let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("?");
@@ -388,7 +388,7 @@ fn run_warm_gate(root: &Path) -> bool {
                 continue;
             }
         };
-        let prog = match quito_syntax::parse(&src) {
+        let prog = match openrscad_syntax::parse(&src) {
             Ok(p) => p,
             Err(e) => {
                 eprintln!("warm-gate: {name}: parse failed: {e}");
@@ -396,7 +396,7 @@ fn run_warm_gate(root: &Path) -> bool {
                 continue;
             }
         };
-        let eval = || quito_eval::eval_program_with(&prog, &DiskResolver, &base_dir);
+        let eval = || openrscad_eval::eval_program_with(&prog, &DiskResolver, &base_dir);
         let out = match eval() {
             Ok(o) => o,
             Err(e) => {
@@ -406,9 +406,9 @@ fn run_warm_gate(root: &Path) -> bool {
             }
         };
 
-        let mut cache = quito_geom::GeomCache::new();
+        let mut cache = openrscad_geom::GeomCache::new();
         let t0 = Instant::now();
-        let _ = quito_geom::render_cached(&out.node, &kernel, &mut cache);
+        let _ = openrscad_geom::render_cached(&out.node, &kernel, &mut cache);
         let cold = t0.elapsed().as_secs_f64() * 1000.0;
 
         // Best-of-N warm: re-eval a fresh (structurally identical) tree each
@@ -426,7 +426,7 @@ fn run_warm_gate(root: &Path) -> bool {
                 }
             };
             let t1 = Instant::now();
-            let _ = quito_geom::render_cached(&out2.node, &kernel, &mut cache);
+            let _ = openrscad_geom::render_cached(&out2.node, &kernel, &mut cache);
             warm = warm.min(t1.elapsed().as_secs_f64() * 1000.0);
         }
         if render_failed {
@@ -467,29 +467,29 @@ fn warm_edit_bench(root: &Path, models: &[(&str, &str)]) {
         "model", "cold", "warm", "speed-up"
     );
     println!("{}", "-".repeat(46));
-    let kernel = quito_geom::ManifoldKernel::new();
+    let kernel = openrscad_geom::ManifoldKernel::new();
     for (name, rel) in models {
         let path = root.join(rel);
         let Ok(src) = fs::read_to_string(&path) else {
             continue;
         };
-        let Ok(prog) = quito_syntax::parse(&src) else {
+        let Ok(prog) = openrscad_syntax::parse(&src) else {
             continue;
         };
         let dir = path
             .parent()
             .map(|d| d.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let eval = |()| quito_eval::eval_program_with(&prog, &DiskResolver, &dir).ok();
+        let eval = |()| openrscad_eval::eval_program_with(&prog, &DiskResolver, &dir).ok();
         let Some(out) = eval(()) else { continue };
-        let mut cache = quito_geom::GeomCache::new();
+        let mut cache = openrscad_geom::GeomCache::new();
         let t0 = Instant::now();
-        let _ = quito_geom::render_cached(&out.node, &kernel, &mut cache);
+        let _ = openrscad_geom::render_cached(&out.node, &kernel, &mut cache);
         let cold = t0.elapsed().as_secs_f64() * 1000.0;
         // A fresh eval yields a structurally identical tree → all cache hits.
         let Some(out2) = eval(()) else { continue };
         let t1 = Instant::now();
-        let _ = quito_geom::render_cached(&out2.node, &kernel, &mut cache);
+        let _ = openrscad_geom::render_cached(&out2.node, &kernel, &mut cache);
         let warm = t1.elapsed().as_secs_f64() * 1000.0;
         let speedup = if warm > 0.0 {
             format!("{:.0}×", cold / warm)
@@ -544,8 +544,8 @@ fn echo_lines(s: &str) -> Vec<String> {
 }
 
 struct DiskResolver;
-impl quito_eval::FileResolver for DiskResolver {
-    fn load(&self, path: &str, from_dir: &str) -> Option<quito_eval::LoadedFile> {
+impl openrscad_eval::FileResolver for DiskResolver {
+    fn load(&self, path: &str, from_dir: &str) -> Option<openrscad_eval::LoadedFile> {
         let p = Path::new(from_dir).join(path);
         let source = fs::read_to_string(&p).ok()?;
         let key = fs::canonicalize(&p)
@@ -555,7 +555,7 @@ impl quito_eval::FileResolver for DiskResolver {
             .parent()
             .map(|d| d.to_string_lossy().into_owned())
             .unwrap_or_default();
-        Some(quito_eval::LoadedFile { key, source, dir })
+        Some(openrscad_eval::LoadedFile { key, source, dir })
     }
 
     /// Raw bytes for `import()` of meshes/2D files (STL/OFF/3MF/DXF/SVG).
@@ -564,7 +564,7 @@ impl quito_eval::FileResolver for DiskResolver {
     }
 }
 
-fn quito_echo(case: &Path) -> Vec<String> {
+fn openrscad_echo(case: &Path) -> Vec<String> {
     let src = match fs::read_to_string(case) {
         Ok(s) => s,
         Err(e) => return vec![format!("ERROR: read: {e}")],
@@ -573,8 +573,8 @@ fn quito_echo(case: &Path) -> Vec<String> {
         .parent()
         .map(|d| d.to_string_lossy().into_owned())
         .unwrap_or_else(|| ".".into());
-    match quito_syntax::parse(&src) {
-        Ok(prog) => match quito_eval::eval_program_with(&prog, &DiskResolver, &dir) {
+    match openrscad_syntax::parse(&src) {
+        Ok(prog) => match openrscad_eval::eval_program_with(&prog, &DiskResolver, &dir) {
             Ok(out) => out.echoes,
             Err(e) => vec![format!("ERROR: {}", e.message)],
         },
@@ -615,7 +615,7 @@ fn check_echo(cases: &Path, goldens: &Path) -> bool {
         };
         total += 1;
         let expected: Vec<String> = golden.lines().map(|s| s.to_string()).collect();
-        let actual = quito_echo(&case);
+        let actual = openrscad_echo(&case);
 
         if expected == actual {
             pass += 1;
@@ -632,7 +632,7 @@ fn check_echo(cases: &Path, goldens: &Path) -> bool {
             let a = actual.get(i).map(String::as_str).unwrap_or("<none>");
             if e != a {
                 println!("   - openscad: {e}");
-                println!("   + quito:    {a}");
+                println!("   + openrscad:    {a}");
             }
         }
     }
@@ -651,7 +651,7 @@ fn check_echo(cases: &Path, goldens: &Path) -> bool {
 // `bless-geom` renders each `corpus/geom/*.scad` with OpenSCAD 2024.12 (dev
 // machine, clean-room: binary mesh output only), computes tolerance-based
 // metrics, and writes `corpus/golden/geom/<case>.txt`. `geom` renders each case
-// with quito's native pipeline, computes the *same* metrics, and diffs them
+// with openrscad's native pipeline, computes the *same* metrics, and diffs them
 // against the committed golden — no OpenSCAD needed, so it runs in CI.
 
 /// Default volume tolerance (±0.1%) and its absolute floor for near-empty solids.
@@ -661,7 +661,7 @@ const VOL_ABS: f64 = 1e-6;
 const BBOX_ABS: f64 = 0.01;
 
 /// Tolerance-based mesh metrics, computed identically for OpenSCAD's exported
-/// STL and quito's native render so the two are directly comparable.
+/// STL and openrscad's native render so the two are directly comparable.
 struct GeomMetrics {
     volume: f64,
     bbox: Option<([f64; 3], [f64; 3])>,
@@ -729,7 +729,7 @@ fn metrics(mesh: &Mesh) -> GeomMetrics {
 
 /// Dedup vertices by rounded position (1e-6, mirroring `Mesh::from_stl`) and drop
 /// triangles that become degenerate, so manifold/component metrics are
-/// implementation-agnostic across OpenSCAD's triangle soup and quito's mesh.
+/// implementation-agnostic across OpenSCAD's triangle soup and openrscad's mesh.
 fn weld(mesh: &Mesh) -> (Vec<[f64; 3]>, Vec<[u32; 3]>) {
     use std::collections::HashMap;
     let key = |p: [f64; 3]| {
@@ -977,23 +977,23 @@ fn compare(g: &Golden, m: &GeomMetrics, d: &Directives) -> Vec<String> {
     f
 }
 
-/// Render a corpus case with quito's native pipeline (imports/`surface` resolve
+/// Render a corpus case with openrscad's native pipeline (imports/`surface` resolve
 /// relative to the case's directory, like OpenSCAD).
-fn quito_mesh(case: &Path) -> Result<Mesh, String> {
+fn openrscad_mesh(case: &Path) -> Result<Mesh, String> {
     let src = fs::read_to_string(case).map_err(|e| e.to_string())?;
     let dir = case
         .parent()
         .map(|d| d.to_string_lossy().into_owned())
         .unwrap_or_else(|| ".".into());
-    let prog = quito_syntax::parse(&src).map_err(|e| format!("parse: {}", e.message))?;
-    let out = quito_eval::eval_program_with(&prog, &DiskResolver, &dir)
+    let prog = openrscad_syntax::parse(&src).map_err(|e| format!("parse: {}", e.message))?;
+    let out = openrscad_eval::eval_program_with(&prog, &DiskResolver, &dir)
         .map_err(|e| format!("eval: {}", e.message))?;
-    quito_geom::render(&out.node).map_err(|e| format!("render: {e}"))
+    openrscad_geom::render(&out.node).map_err(|e| format!("render: {e}"))
 }
 
 fn bless_geom(cases: &Path, goldens: &Path) {
     fs::create_dir_all(goldens).unwrap();
-    let tmp = std::env::temp_dir().join("quito_geom_bless.stl");
+    let tmp = std::env::temp_dir().join("openrscad_geom_bless.stl");
     let mut n = 0;
     for case in scad_cases(cases) {
         let _ = fs::remove_file(&tmp);
@@ -1054,7 +1054,7 @@ fn check_geom(cases: &Path, goldens: &Path) -> bool {
         };
         let src = fs::read_to_string(&case).unwrap_or_default();
         let directives = parse_directives(&src);
-        match quito_mesh(&case) {
+        match openrscad_mesh(&case) {
             Ok(mesh) => {
                 let reasons = compare(&golden, &metrics(&mesh), &directives);
                 if reasons.is_empty() {

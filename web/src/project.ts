@@ -19,7 +19,7 @@ export interface Project {
   paramSets?: Record<string, Record<string, ParamValue>>;
 }
 
-const KEY = "quito.project.v1";
+const KEY = "openrscad.project.v1";
 
 /** Persist the project. Returns false when storage is full/unavailable so the
  *  caller can warn the user their work isn't being saved (a silent failure here
@@ -74,7 +74,7 @@ export function clearProject(): void {
 // render never completed — it froze or crashed the tab (the "too much geometry"
 // death spiral) — so the app skips auto-rendering the offending project and lets
 // the user recover instead of re-triggering the freeze on every reload.
-const RENDER_KEY = "quito.render.pending.v1";
+const RENDER_KEY = "openrscad.render.pending.v1";
 
 export function markRenderPending(): void {
   try {

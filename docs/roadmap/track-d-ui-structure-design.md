@@ -1,8 +1,8 @@
-# Quito web UI — feature structure & essential additions
+# OpenRSCAD web UI — feature structure & essential additions
 
 ## Context
 
-The Quito playground has grown feature-by-feature through M0–M7 and every new
+The OpenRSCAD playground has grown feature-by-feature through M0–M7 and every new
 control landed in the same place: one non-wrapping flex row. `.actions`
 (`web/src/App.tsx:1496-1689`) now holds **~20 controls spanning eight unrelated
 jobs** — project, file, camera, display, engine, render mode, animation, export.
@@ -41,7 +41,7 @@ Grouped by *job*, which is the grouping the current UI does not have.
 | **Editor** | CodeMirror 6, Lezer OpenSCAD grammar, autocomplete, signature help, lint squiggles, fold, search, VSCode Dark+/Light+ theme | `lang/*`, `App.tsx:542-593` |
 | **Parameters** | Customizer (checkbox/slider/number/text/dropdown/vector, grouped), named preset sets, import/export OpenSCAD `.json`, reset | `CustomizerPanel.tsx` |
 | **Camera / display** | I/F/T/R presets (4 of 7), Reset view, Persp/Ortho, nav view cube (all 7 + edges/corners, fly-to), Link (editor↔preview highlight), adaptive power-of-ten ruler grid + tick labels + axis triad | `App.tsx:1532-1569`, `viewer.ts` |
-| **Render** | Render, Stop, Fast preview toggle, Quito⇆OpenSCAD engine toggle, 150 ms debounce, 20 s watchdog, crash-recovery sentinel + banner | `App.tsx:1585-1598`, `engine.ts`, `project.ts:65-103` |
+| **Render** | Render, Stop, Fast preview toggle, OpenRSCAD⇆OpenSCAD engine toggle, 150 ms debounce, 20 s watchdog, crash-recovery sentinel + banner | `App.tsx:1585-1598`, `engine.ts`, `project.ts:65-103` |
 | **Animation** | Play/pause, `$t` slider, `$t` readout, FPS, Steps, Frames→zip, `$vp*` camera round-trip | `App.tsx:1603-1654`, `viewer.ts:1027-1080` |
 | **Output** | Export (STL/OFF/OBJ/3MF/AMF, or DXF/SVG when 2D) with auto-format, PNG capture, frames zip | `App.tsx:1383-1481`, `stl.ts` |
 | **Diagnose** | Editor squiggles, tab badges, console drawer (echo/warn/error/geom-error), status bar (triangles · dims · volume · ms), engine version | `App.tsx:1806-1863` |
@@ -61,7 +61,7 @@ Grouped by *job*, which is the grouping the current UI does not have.
 - **No drag-and-drop, no file open in the browser.** The only `<input type="file">`
   is the preset importer (`CustomizerPanel.tsx:96`).
 - **Binary payloads are unreachable in the browser** — `MapResolver::load_bytes`
-  serves tab text only (`crates/quito-wasm/src/lib.rs:324-327`), so binary STL,
+  serves tab text only (`crates/openrscad-wasm/src/lib.rs:324-327`), so binary STL,
   3MF, and PNG `surface()` heightmaps can't be imported. (ASCII STL, AMF, OFF,
   OBJ, DXF, SVG *do* work from a text tab.)
 - **Console lines are plain text**, not clickable, though structured spans exist
@@ -101,7 +101,7 @@ recording them so they aren't re-proposed:
 
 | Zone | Holds | Why |
 | --- | --- | --- |
-| **Topbar** | `New` · `Examples` · `Share` · `.scad` (or `Open…`/`Save`) ‖ `Display ▾` · `Quality ▾` · `Quito/OpenSCAD` · `Fast` ‖ `PNG` · `Export ▾fmt` ‖ `⌘K` · `?` · theme · GitHub | Source-out actions left, model-out actions right. `Fast` and the engine toggle stay **one-click and visible** — they're comparison gestures you flip while staring at the model, not settings. `Export` stays **one click with its auto-chosen format** — it's the terminal action of the product. |
+| **Topbar** | `New` · `Examples` · `Share` · `.scad` (or `Open…`/`Save`) ‖ `Display ▾` · `Quality ▾` · `OpenRSCAD/OpenSCAD` · `Fast` ‖ `PNG` · `Export ▾fmt` ‖ `⌘K` · `?` · theme · GitHub | Source-out actions left, model-out actions right. `Fast` and the engine toggle stay **one-click and visible** — they're comparison gestures you flip while staring at the model, not settings. `Export` stays **one click with its auto-chosen format** — it's the terminal action of the product. |
 | **`Display ▾` popover** | Persp/Ortho, Link (editor↔preview), grid, axes, edge overlay, **Dimensions**, `%`-background visibility | Set-and-forget display state. Safe to hide; hot-path controls are not. |
 | **`Quality ▾` popover** | Draft / Normal / Fine / Custom → `$fn`/`$fa`/`$fs` | New. See §4.1. |
 | **Editor column header** | File tabs (switch / add / rename / delete / dirty / diag badge) | Unchanged. |
@@ -114,7 +114,7 @@ recording them so they aren't re-proposed:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────────────┐
-│ QUITO  main.scad    New Examples Share .scad ‖ Display▾ Quality▾ Quito Fast ‖ PNG Export▾ ‖ ⌘K ? ◐ ⌸ │
+│ OPENRSCAD  main.scad    New Examples Share .scad ‖ Display▾ Quality▾ OpenRSCAD Fast ‖ PNG Export▾ ‖ ⌘K ? ◐ ⌸ │
 ├──────────────────────────┬───────────────────────────────────┬───────────────────────┤
 │ main.scad ● helpers.scad+│                            ┌────┐ │ ▾ PARAMETERS      ⟲   │
 │──────────────────────────│                            │cube│ │   Dimensions          │
@@ -130,7 +130,7 @@ recording them so they aren't re-proposed:
 ├──────────────────────────┴───────────────────────────────────┴───────────────────────┤
 │ ▸ CONSOLE   All · 2 warnings · 0 errors                                        ⌃ ⌄   │
 ├──────────────────────────────────────────────────────────────────────────────────────┤
-│ ▶ Render │ 12 480 triangles · 40×20×12 mm · vol 4 812.30 · 0.8 ms │ EXACT │ console 2 │ quito 0.6.0 │
+│ ▶ Render │ 12 480 triangles · 40×20×12 mm · vol 4 812.30 · 0.8 ms │ EXACT │ console 2 │ openrscad 0.6.0 │
 └──────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -175,7 +175,7 @@ Why this and not a status-bar flourish:
   computed (`viewer.ts:504-506`).
 - **It travels.** `capturePng` reads only the main renderer (`viewer.ts:1093`),
   so DOM chrome and the cube overlay are invisible to it. World-space geometry
-  *is* in the PNG — every screenshot a user posts becomes unmistakably Quito.
+  *is* in the PNG — every screenshot a user posts becomes unmistakably OpenRSCAD.
 - It says *millimetres*. This is an app about physical objects, and nothing in the
   current identity says so.
 - Turning it on becomes a **mode**: dimension callouts on, the grid's numeric

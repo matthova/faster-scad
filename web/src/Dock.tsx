@@ -100,7 +100,7 @@ function ObjectsPanel({ objects }: { objects: DockProps["objects"] }) {
     return (
       <div className="dock-empty">
         The OpenSCAD engine provides no provenance, so parts can’t be isolated.
-        Switch to the Quito engine to inspect and isolate objects.
+        Switch to the OpenRSCAD engine to inspect and isolate objects.
       </div>
     );
   }

@@ -1,8 +1,8 @@
 {
-  "name": "quito-desktop",
+  "name": "openrscad-desktop",
   "version": "0.8.0",
   "private": true,
-  "description": "Quito desktop app (Tauri v2) — native OpenSCAD-compatible renderer.",
+  "description": "OpenRSCAD desktop app (Tauri v2) — native OpenSCAD-compatible renderer.",
   "scripts": {
     "tauri": "tauri",
     "dev": "tauri dev --config src-tauri/tauri.conf.json",

@@ -1,9 +1,9 @@
-# quito-engine
+# openrscad-engine
 
-The [Quito](https://github.com/matthova/faster-scad) geometry engine, compiled
+The [OpenRSCAD](https://github.com/matthova/openrscad) geometry engine, compiled
 to WebAssembly. Parse OpenSCAD-compatible `.scad` source and render solid 3D
 meshes — the same Rust core that powers the
-[playground](https://matthova.github.io/faster-scad) — in your own browser app
+[playground](https://matthova.github.io/openrscad) — in your own browser app
 or Node tool.
 
 - **Accurate.** Output is verified bit-for-bit against stock OpenSCAD; the wasm
@@ -14,14 +14,14 @@ or Node tool.
   — so **no COOP/COEP headers are needed**, even from a CDN.
 
 > **Heads up — this is a 0.x release.**
-> - The JS API may change between minor versions. **Pin a version** (`"quito-engine": "~0.1.0"`, not `^0.1.0`) if you depend on it.
+> - The JS API may change between minor versions. **Pin a version** (`"openrscad-engine": "~0.1.0"`, not `^0.1.0`) if you depend on it.
 > - The `.wasm` binary is a few MB. Load it in a **Web Worker** (see below) so a
 >   render never blocks your UI, and let your CDN serve it gzip/brotli-compressed.
 
 ## Install
 
 ```sh
-npm install quito-engine
+npm install openrscad-engine
 ```
 
 ## Quickstart (browser / bundler)
@@ -30,9 +30,9 @@ The default export is a small, safe wrapper: pass plain objects, get a plain
 result back, and never manage wasm memory yourself.
 
 ```js
-import { render } from "quito-engine";
+import { render } from "openrscad-engine";
 
-// The first call fetches + instantiates the wasm (resolving quito_bg.wasm
+// The first call fetches + instantiates the wasm (resolving openrscad_bg.wasm
 // next to the module). Call ensureReady() yourself to preload it earlier.
 const r = await render("difference() { cube(20, center=true); sphere(12); }");
 
@@ -63,9 +63,9 @@ mangle wasm glue) and **pin the version**:
 
 ```js
 import init, { render_with_files } from
-  "https://cdn.jsdelivr.net/npm/quito-engine@0.1.0/pkg/web/quito.js";
+  "https://cdn.jsdelivr.net/npm/openrscad-engine@0.1.0/pkg/web/openrscad.js";
 
-await init();                       // resolves the sibling quito_bg.wasm
+await init();                       // resolves the sibling openrscad_bg.wasm
 const r = render_with_files("cube(10);", [], [], [], []);
 try {
   console.log(r.triangle_count);
@@ -84,7 +84,7 @@ In short:
 
 ```js
 // worker.js
-import { render } from "quito-engine";
+import { render } from "openrscad-engine";
 self.onmessage = async (e) => {
   const result = await render(e.data.source);
   self.postMessage({ result }, [result.positions.buffer, result.normals.buffer]);
@@ -101,7 +101,7 @@ worker.postMessage({ source: "cube(10);" });
 ## Node
 
 ```js
-import { render, version } from "quito-engine";   // ESM
+import { render, version } from "openrscad-engine";   // ESM
 console.log(await version());
 const r = await render("sphere(8);");
 ```
@@ -135,9 +135,9 @@ linking. Full types ship with the package.
 
 ### Subpath entry points (advanced)
 
-- `quito-engine/web` — the raw `--target web` wasm-bindgen module (call `init()`, then the exports; `.free()` results).
-- `quito-engine/node` — the raw `--target nodejs` module (auto-init).
-- `quito-engine/quito_bg.wasm` — the wasm binary URL, for `init({ module_or_path })` with a custom loader.
+- `openrscad-engine/web` — the raw `--target web` wasm-bindgen module (call `init()`, then the exports; `.free()` results).
+- `openrscad-engine/node` — the raw `--target nodejs` module (auto-init).
+- `openrscad-engine/openrscad_bg.wasm` — the wasm binary URL, for `init({ module_or_path })` with a custom loader.
 
 Prefer the default wrapper unless you specifically need the raw surface — it
 copies mesh data into values you own and frees the wasm object for you.

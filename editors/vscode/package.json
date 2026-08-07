@@ -1,11 +1,11 @@
 {
-  "name": "quito-openscad",
-  "displayName": "Quito OpenSCAD",
-  "description": "OpenSCAD language support and live 3D preview, powered by the Quito engine.",
+  "name": "openrscad-openscad",
+  "displayName": "OpenRSCAD OpenSCAD",
+  "description": "OpenSCAD language support and live 3D preview, powered by the OpenRSCAD engine.",
   "version": "0.0.1",
-  "publisher": "quito-cad",
+  "publisher": "openrscad-cad",
   "license": "Apache-2.0 OR MIT",
-  "repository": { "type": "git", "url": "https://github.com/quito-cad/quito" },
+  "repository": { "type": "git", "url": "https://github.com/openrscad-cad/openrscad" },
   "engines": { "vscode": "^1.85.0" },
   "categories": ["Programming Languages", "Visualization"],
   "main": "./dist/extension.js",
@@ -20,33 +20,33 @@
       }
     ],
     "commands": [
-      { "command": "quito.openPreview", "title": "Quito: Open 3D Preview", "category": "Quito" },
-      { "command": "quito.export", "title": "Quito: Export Model…", "category": "Quito" },
-      { "command": "quito.restartServer", "title": "Quito: Restart Language Server", "category": "Quito" }
+      { "command": "openrscad.openPreview", "title": "OpenRSCAD: Open 3D Preview", "category": "OpenRSCAD" },
+      { "command": "openrscad.export", "title": "OpenRSCAD: Export Model…", "category": "OpenRSCAD" },
+      { "command": "openrscad.restartServer", "title": "OpenRSCAD: Restart Language Server", "category": "OpenRSCAD" }
     ],
     "menus": {
       "editor/title": [
         {
-          "command": "quito.openPreview",
+          "command": "openrscad.openPreview",
           "when": "resourceLangId == openscad",
           "group": "navigation"
         }
       ]
     },
     "configuration": {
-      "title": "Quito OpenSCAD",
+      "title": "OpenRSCAD OpenSCAD",
       "properties": {
-        "quito.lsp.path": {
+        "openrscad.lsp.path": {
           "type": "string",
           "default": "",
-          "description": "Path to the quito-lsp binary. If empty, the extension looks in the workspace's target/{release,debug} directories, then PATH."
+          "description": "Path to the openrscad-lsp binary. If empty, the extension looks in the workspace's target/{release,debug} directories, then PATH."
         },
-        "quito.cli.path": {
+        "openrscad.cli.path": {
           "type": "string",
           "default": "",
-          "description": "Path to the quito CLI binary (used by Quito: Export Model). If empty, the extension looks in target/{release,debug}, then PATH."
+          "description": "Path to the openrscad CLI binary (used by OpenRSCAD: Export Model). If empty, the extension looks in target/{release,debug}, then PATH."
         },
-        "quito.preview.autoRefresh": {
+        "openrscad.preview.autoRefresh": {
           "type": "boolean",
           "default": true,
           "description": "Re-render the 3D preview as you type (debounced). When off, the preview refreshes on save only."
