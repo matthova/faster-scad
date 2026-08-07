@@ -54,6 +54,9 @@ export interface Prefs {
   /** Console drawer: open/closed and the active severity filter. */
   consoleOpen: boolean;
   consoleFilter: "all" | "error" | "warn" | "echo";
+  /** The "get the desktop app" callout (browser only) has been dismissed. Sticky
+   *  so it doesn't nag on every visit once the user has waved it off. */
+  desktopCalloutDismissed: boolean;
 }
 
 const DEFAULTS: Prefs = {
@@ -80,6 +83,7 @@ const DEFAULTS: Prefs = {
   theme: "auto",
   consoleOpen: false,
   consoleFilter: "all",
+  desktopCalloutDismissed: false,
 };
 
 const THEMES: Prefs["theme"][] = ["auto", "light", "dark"];
@@ -178,6 +182,10 @@ export function loadPrefs(): Prefs {
       )
         ? (p.consoleFilter as Prefs["consoleFilter"])
         : DEFAULTS.consoleFilter,
+      desktopCalloutDismissed:
+        typeof p.desktopCalloutDismissed === "boolean"
+          ? p.desktopCalloutDismissed
+          : DEFAULTS.desktopCalloutDismissed,
     };
   } catch {
     return { ...DEFAULTS };

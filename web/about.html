@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%23f5a623'/></svg>"
+    />
+    <title>Quito — a fast, OpenSCAD-compatible 3D modeler</title>
+    <meta
+      name="description"
+      content="Quito is a clean-room OpenSCAD reimplementation in Rust: the same language, a modern editor, instant preview, and a native engine that renders fast. Runs in your browser or as a desktop app."
+    />
+    <!-- Open Graph / social preview -->
+    <meta property="og:type" content="website" />
+    <meta
+      property="og:title"
+      content="Quito — a fast, OpenSCAD-compatible 3D modeler"
+    />
+    <meta
+      property="og:description"
+      content="The OpenSCAD language you know, with a modern editor, instant preview, and a native engine that renders fast."
+    />
+    <meta
+      property="og:url"
+      content="https://matthova.github.io/faster-scad/about"
+    />
+    <meta name="twitter:card" content="summary" />
+    <script>
+      // Set the theme attribute before first paint so a light-mode OS doesn't
+      // flash the dark default for a frame. about.ts keeps this in sync after.
+      document.documentElement.dataset.theme = window.matchMedia(
+        "(prefers-color-scheme: dark)",
+      ).matches
+        ? "dark"
+        : "light";
+    </script>
+  </head>
+  <body class="mk">
+    <header class="mk-nav">
+      <a class="mk-brand" href="./">
+        <span class="mk-logo" aria-hidden="true"></span>
+        Quito
+      </a>
+      <nav class="mk-nav-links">
+        <a href="./">Playground</a>
+        <a href="#download">Download</a>
+        <a
+          href="https://github.com/matthova/faster-scad"
+          target="_blank"
+          rel="noopener noreferrer"
+          >GitHub</a
+        >
+      </nav>
+    </header>
+
+    <main>
+      <!-- Hero -->
+      <section class="mk-hero">
+        <h1 class="mk-title">
+          OpenSCAD, <span class="mk-accent">reimagined for speed.</span>
+        </h1>
+        <p class="mk-sub">
+          Quito is a clean-room reimplementation of OpenSCAD in Rust — the same
+          language you already know, paired with a modern editor, live preview,
+          and a native geometry engine that renders fast.
+        </p>
+        <div class="mk-cta-row">
+          <!-- Auto-detected primary download. JS upgrades href + label to the
+               visitor's OS; without JS it falls back to the releases page. -->
+          <a
+            id="primary-download"
+            class="mk-btn mk-btn-primary"
+            href="https://github.com/matthova/faster-scad/releases/latest"
+          >
+            Download Quito
+          </a>
+          <a class="mk-btn mk-btn-ghost" href="./"
+            >Open the playground&nbsp;→</a
+          >
+        </div>
+        <p id="primary-note" class="mk-note">
+          Free and open source. No account required.
+        </p>
+      </section>
+
+      <!-- Features -->
+      <section class="mk-features" aria-label="Features">
+        <h2 class="sr-only">What you get</h2>
+        <article class="mk-card">
+          <h3>OpenSCAD-compatible</h3>
+          <p>
+            Bring your existing <code>.scad</code> files. Quito speaks the same
+            language — modules, <code>use</code>/<code>include</code>, the
+            customizer, and the built-ins you rely on.
+          </p>
+        </article>
+        <article class="mk-card">
+          <h3>Native-speed geometry</h3>
+          <p>
+            A Rust core over the Manifold CSG kernel means models resolve fast.
+            The desktop app renders with the native engine; the browser runs the
+            same engine compiled to WebAssembly.
+          </p>
+        </article>
+        <article class="mk-card">
+          <h3>Editor ↔ preview linking</h3>
+          <p>
+            Click a face to jump to the statement that made it, and watch the
+            geometry under your cursor light up. Isolate any part to inspect it
+            on its own.
+          </p>
+        </article>
+        <article class="mk-card">
+          <h3>Parametric customizer</h3>
+          <p>
+            Your script's parameters become sliders, toggles, and dropdowns.
+            Tweak values live, save parameter sets, and share a link that opens
+            on the exact same model.
+          </p>
+        </article>
+        <article class="mk-card">
+          <h3>Export anywhere</h3>
+          <p>
+            Watertight STL, 3MF (with color), OBJ, OFF, and AMF for 3D — plus
+            DXF and SVG for 2D. Capture PNGs or render animation frames straight
+            from the viewport.
+          </p>
+        </article>
+        <article class="mk-card">
+          <h3>Browser or desktop</h3>
+          <p>
+            Start instantly in the browser — it installs as an offline app — or
+            get the desktop build for the native engine, local file open/save,
+            and automatic updates.
+          </p>
+        </article>
+      </section>
+
+      <!-- Shootout: real render times vs OpenSCAD -->
+      <section class="mk-shootout" id="shootout">
+        <h2>How much faster? A render shootout.</h2>
+        <p class="mk-download-sub">
+          Same models, same machine — Quito's native engine against OpenSCAD's
+          two backends. These are real numbers, not estimates.
+        </p>
+
+        <!-- Headline figures (static; the chart + table below add per-model
+             detail once JS runs). -->
+        <div class="mk-stats">
+          <div class="mk-stat">
+            <span class="mk-stat-num">29×</span>
+            <span class="mk-stat-label"
+              >faster than OpenSCAD's default CGAL engine — five-model geometric
+              mean</span
+            >
+          </div>
+          <div class="mk-stat">
+            <span class="mk-stat-num">365×</span>
+            <span class="mk-stat-label"
+              >on the boolean-heavy model — 19&nbsp;s drops to 53&nbsp;ms</span
+            >
+          </div>
+          <div class="mk-stat">
+            <span class="mk-stat-num">3.9×</span>
+            <span class="mk-stat-label"
+              >still ahead of OpenSCAD's newest Manifold backend (geomean)</span
+            >
+          </div>
+        </div>
+
+        <!-- Per-model chart, rendered by src/about.ts from the committed
+             benchmark data. -->
+        <figure class="mk-figure">
+          <figcaption class="mk-fig-title">
+            Render time per model — lower is better
+            <span class="mk-fig-note">(log scale)</span>
+          </figcaption>
+          <div id="shootout-chart" class="mk-chart"></div>
+        </figure>
+
+        <!-- Exact numbers (also the accessible view of the chart). -->
+        <div id="shootout-table" class="mk-table-wrap"></div>
+
+        <p class="mk-note mk-method">
+          Best of 3 runs, full-process wall-clock, on an Apple M4 Max
+          (macOS&nbsp;26.5) vs OpenSCAD&nbsp;2024.12. Reproduce with
+          <code>cargo run -p xtask -- bench</code>.
+        </p>
+      </section>
+
+      <!-- Download -->
+      <section class="mk-download" id="download">
+        <h2>Download the desktop app</h2>
+        <p class="mk-download-sub">
+          The native engine renders fastest and reads and writes your local
+          files directly.
+        </p>
+
+        <div class="mk-os-grid">
+          <a
+            class="mk-os-card"
+            data-os="mac-arm"
+            href="https://github.com/matthova/faster-scad/releases/latest/download/Quito-macos-aarch64.dmg"
+          >
+            <span class="mk-os-name">macOS</span>
+            <span class="mk-os-detail">Apple Silicon · .dmg</span>
+          </a>
+          <a
+            class="mk-os-card"
+            data-os="mac-intel"
+            href="https://github.com/matthova/faster-scad/releases/latest/download/Quito-macos-x64.dmg"
+          >
+            <span class="mk-os-name">macOS</span>
+            <span class="mk-os-detail">Intel · .dmg</span>
+          </a>
+          <a
+            class="mk-os-card"
+            data-os="windows"
+            href="https://github.com/matthova/faster-scad/releases/latest/download/Quito-windows-x64-setup.exe"
+          >
+            <span class="mk-os-name">Windows</span>
+            <span class="mk-os-detail">x64 · installer</span>
+          </a>
+          <a
+            class="mk-os-card"
+            data-os="linux"
+            href="https://github.com/matthova/faster-scad/releases/latest/download/Quito-linux-x86_64.AppImage"
+          >
+            <span class="mk-os-name">Linux</span>
+            <span class="mk-os-detail">x86_64 · AppImage</span>
+          </a>
+        </div>
+
+        <p class="mk-more">
+          <a
+            href="https://github.com/matthova/faster-scad/releases/latest"
+            target="_blank"
+            rel="noopener noreferrer"
+            >…or check out other download options&nbsp;→</a
+          >
+          <span class="mk-more-note"
+            >(.deb, .rpm, .msi, and every architecture live on the GitHub
+            release page.)</span
+          >
+        </p>
+      </section>
+    </main>
+
+    <footer class="mk-footer">
+      <span>Quito — a fast OpenSCAD-compatible modeler.</span>
+      <span class="mk-footer-links">
+        <a href="./">Playground</a>
+        <a
+          href="https://github.com/matthova/faster-scad"
+          target="_blank"
+          rel="noopener noreferrer"
+          >GitHub</a
+        >
+      </span>
+    </footer>
+
+    <script type="module" src="/src/about.ts"></script>
+  </body>
+</html>
