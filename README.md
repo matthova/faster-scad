@@ -1,6 +1,6 @@
 # Quito
 
-<a href="https://matthova.github.io/faster-scad/" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/playground-live-2ea44f" alt="playground: live"></a>
+<a href="https://matthova.github.io/faster-scad/playground" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/playground-live-2ea44f" alt="playground: live"></a>
 [![license: Apache-2.0 OR MIT](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue)](#license)
 
 **Code your models. Quito turns `.scad` scripts into solid 3D geometry —
@@ -13,13 +13,13 @@ browser, on your desktop, in your editor, and on the command line. Edits
 re-render in single-digit milliseconds, and output is verified bit-for-bit
 against stock OpenSCAD.
 
-**<a href="https://matthova.github.io/faster-scad/" target="_blank" rel="noopener noreferrer">▶ Try it live in your browser — no install</a>**
+**<a href="https://matthova.github.io/faster-scad/playground" target="_blank" rel="noopener noreferrer">▶ Try it live in your browser — no install</a>**
 
 ## Download
 
 | Browser | Linux | Windows | Mac (native) | Mac (Intel) |
 |---|---|---|---|---|
-| <a href="https://matthova.github.io/faster-scad/" target="_blank" rel="noopener noreferrer">Open playground</a> | <a href="https://github.com/matthova/faster-scad/releases/latest/download/Quito-linux-x86_64.AppImage" target="_blank" rel="noopener noreferrer">AppImage</a> | <a href="https://github.com/matthova/faster-scad/releases/latest/download/Quito-windows-x64-setup.exe" target="_blank" rel="noopener noreferrer">Installer</a> | <a href="https://github.com/matthova/faster-scad/releases/latest/download/Quito-macos-aarch64.dmg" target="_blank" rel="noopener noreferrer">Apple Silicon</a> | <a href="https://github.com/matthova/faster-scad/releases/latest/download/Quito-macos-x64.dmg" target="_blank" rel="noopener noreferrer">Intel</a> |
+| <a href="https://matthova.github.io/faster-scad/playground" target="_blank" rel="noopener noreferrer">Open playground</a> | <a href="https://github.com/matthova/faster-scad/releases/latest/download/Quito-linux-x86_64.AppImage" target="_blank" rel="noopener noreferrer">AppImage</a> | <a href="https://github.com/matthova/faster-scad/releases/latest/download/Quito-windows-x64-setup.exe" target="_blank" rel="noopener noreferrer">Installer</a> | <a href="https://github.com/matthova/faster-scad/releases/latest/download/Quito-macos-aarch64.dmg" target="_blank" rel="noopener noreferrer">Apple Silicon</a> | <a href="https://github.com/matthova/faster-scad/releases/latest/download/Quito-macos-x64.dmg" target="_blank" rel="noopener noreferrer">Intel</a> |
 
 Desktop links always fetch the latest release, and the app auto-updates in place.
 Need `.deb` / `.rpm` / `.msi` or an older version? <a href="https://github.com/matthova/faster-scad/releases/latest" target="_blank" rel="noopener noreferrer">Browse all downloads</a>.
@@ -44,7 +44,7 @@ One engine, many ways to reach it. Pick the surface that fits and start modeling
 
 | Surface | For whom | Get started |
 |---|---|---|
-| **Web** | Anyone — zero install | <a href="https://matthova.github.io/faster-scad/" target="_blank" rel="noopener noreferrer">Open the playground</a> |
+| **Web** | Anyone — zero install | <a href="https://matthova.github.io/faster-scad/playground" target="_blank" rel="noopener noreferrer">Open the playground</a> |
 | **Mobile / offline** | On the go | Same URL in any modern mobile browser; **install as a PWA** for offline use |
 | **Desktop** | Native, no browser | Tauri app for macOS / Linux / Windows, with in-app auto-update |
 | **VS Code** | Editor-native | Extension with a live 3D preview + export |

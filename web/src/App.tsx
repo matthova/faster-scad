@@ -118,11 +118,12 @@ const TAURI = isTauri();
 
 const GITHUB_URL = "https://github.com/matthova/faster-scad";
 
-// The marketing/download page (about.html), served at /faster-scad/about. A
-// relative URL so it resolves under the deployed subpath. The browser callout
-// and the Help ▾ menu open it; it auto-detects the OS and offers a download for
-// every platform (see about.html / src/about.ts).
-const ABOUT_URL = "about";
+// The marketing/download page (index.html), served at the site root
+// /faster-scad/. A relative URL ("." → the parent of /faster-scad/playground)
+// so it resolves under the deployed subpath. The brand wordmark and the Help ▾
+// menu open it; it auto-detects the OS and offers a download for every platform
+// (see index.html / src/about.ts).
+const ABOUT_URL = ".";
 
 // Base URL for bundled libraries (public/lib/…), resolved against the page.
 const LIB_BASE = new URL("lib/", document.baseURI).href;

@@ -1,14 +1,14 @@
 import { test, expect } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 
-// The standalone marketing page (about.html → served at /faster-scad/about).
-// It must render without the app bundle, expose a download CTA per OS, and route
-// "other options" to the GitHub releases page.
+// The standalone marketing page (index.html → served at the site root
+// /faster-scad/). It must render without the app bundle, expose a download CTA
+// per OS, and route "other options" to the GitHub releases page.
 
 test("about page renders hero, features, and per-OS downloads", async ({
   page,
 }) => {
-  await page.goto("/about.html");
+  await page.goto("/");
 
   await expect(
     page.getByRole("heading", { level: 1, name: /OpenSCAD/i }),
@@ -43,7 +43,7 @@ test("about page renders hero, features, and per-OS downloads", async ({
 });
 
 test("shootout renders a per-model chart and data table", async ({ page }) => {
-  await page.goto("/about.html");
+  await page.goto("/");
 
   // Headline stat tiles (static).
   await expect(page.locator(".mk-stat-num").first()).toHaveText("29×");
@@ -66,7 +66,7 @@ test("shootout renders a per-model chart and data table", async ({ page }) => {
 for (const scheme of ["dark", "light"] as const) {
   test(`about page has no axe violations (${scheme})`, async ({ page }) => {
     await page.emulateMedia({ colorScheme: scheme });
-    await page.goto("/about.html");
+    await page.goto("/");
     const results = await new AxeBuilder({ page }).analyze();
     expect(results.violations).toEqual([]);
   });
@@ -75,7 +75,7 @@ for (const scheme of ["dark", "light"] as const) {
 test("primary CTA autodetects the OS and links a concrete installer", async ({
   page,
 }) => {
-  await page.goto("/about.html");
+  await page.goto("/");
   const primary = page.locator("#primary-download");
 
   // JS upgrades the button from the releases-page fallback to a concrete asset
@@ -87,7 +87,7 @@ test("primary CTA autodetects the OS and links a concrete installer", async ({
 
   const href = await primary.getAttribute("href");
   const ok =
-    href === "./" || // non-desktop → playground
+    href === "playground" || // non-desktop → playground
     /releases\/latest\/download\/Quito-/.test(href ?? ""); // desktop installer
   expect(ok).toBe(true);
 });

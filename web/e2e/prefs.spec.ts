@@ -21,7 +21,7 @@ test("Fast toggle actually switches the render to preview", async ({
 test("orthographic projection persists across reload", async ({ page }) => {
   // Not gotoApp: its addInitScript clears localStorage on every load (incl.
   // reload). A fresh Playwright context already starts with empty storage.
-  await page.goto("/");
+  await page.goto("/playground");
   await waitForRender(page);
 
   await page.getByRole("button", { name: /^Display/ }).click();

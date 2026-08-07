@@ -13,6 +13,7 @@
     "windows": [
       {
         "title": "Quito",
+        "url": "playground.html",
         "width": 1280,
         "height": 820,
         "minWidth": 800,

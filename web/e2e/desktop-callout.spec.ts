@@ -9,7 +9,7 @@ test("desktop-app callout shows, then stays dismissed across reload", async ({
   // Not gotoApp: its addInitScript clears localStorage on every load (incl.
   // reload), which would wipe the dismissal we're asserting persists. A fresh
   // Playwright context already starts with empty storage.
-  await page.goto("/");
+  await page.goto("/playground");
   await waitForRender(page);
 
   const callout = page.getByRole("status").filter({ hasText: "desktop app" });

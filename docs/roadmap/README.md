@@ -4,7 +4,7 @@ _Status snapshot: 2026-07-27. M0–M5 are complete: full language, full geometry
 surface, ~25× geomean vs OpenSCAD/CGAL (bytecode VM + geometry cache),
 customizer, multi-file projects, import/export of STL/OFF/OBJ/3MF/AMF/DXF/SVG,
 PWA, `$t` animation playback. CI is green and the playground is live at
-<a href="https://matthova.github.io/faster-scad/" target="_blank" rel="noopener noreferrer">https://matthova.github.io/faster-scad/</a>._
+<a href="https://matthova.github.io/faster-scad/playground" target="_blank" rel="noopener noreferrer">https://matthova.github.io/faster-scad/playground</a>._
 
 This directory breaks the candidate next milestones into three tracks, each
 with a detailed writeup. Every claim below was verified against the code at
