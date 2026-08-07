@@ -894,6 +894,85 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 
 [[package]]
+name = "openrscad-cli"
+version = "0.8.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "openrscad-eval",
+ "openrscad-geom",
+ "openrscad-ir",
+ "openrscad-syntax",
+ "png",
+]
+
+[[package]]
+name = "openrscad-eval"
+version = "0.8.0"
+dependencies = [
+ "openrscad-ir",
+ "openrscad-syntax",
+ "png",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "ttf-parser",
+]
+
+[[package]]
+name = "openrscad-geom"
+version = "0.8.0"
+dependencies = [
+ "earcutr",
+ "geo",
+ "manifold-csg",
+ "manifold-rust",
+ "miniz_oxide",
+ "openrscad-ir",
+ "thiserror",
+]
+
+[[package]]
+name = "openrscad-ir"
+version = "0.8.0"
+
+[[package]]
+name = "openrscad-lsp"
+version = "0.8.0"
+dependencies = [
+ "openrscad-eval",
+ "openrscad-geom",
+ "openrscad-syntax",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower-lsp",
+]
+
+[[package]]
+name = "openrscad-syntax"
+version = "0.8.0"
+dependencies = [
+ "logos",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "openrscad-wasm"
+version = "0.8.0"
+dependencies = [
+ "console_error_panic_hook",
+ "openrscad-eval",
+ "openrscad-geom",
+ "openrscad-ir",
+ "openrscad-syntax",
+ "wasm-bindgen",
+ "wasm-bindgen-test",
+]
+
+[[package]]
 name = "parking_lot_core"
 version = "0.9.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -967,85 +1046,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
-]
-
-[[package]]
-name = "quito-cli"
-version = "0.8.0"
-dependencies = [
- "anyhow",
- "clap",
- "png",
- "quito-eval",
- "quito-geom",
- "quito-ir",
- "quito-syntax",
-]
-
-[[package]]
-name = "quito-eval"
-version = "0.8.0"
-dependencies = [
- "png",
- "quito-ir",
- "quito-syntax",
- "rustc-hash",
- "serde",
- "serde_json",
- "thiserror",
- "ttf-parser",
-]
-
-[[package]]
-name = "quito-geom"
-version = "0.8.0"
-dependencies = [
- "earcutr",
- "geo",
- "manifold-csg",
- "manifold-rust",
- "miniz_oxide",
- "quito-ir",
- "thiserror",
-]
-
-[[package]]
-name = "quito-ir"
-version = "0.8.0"
-
-[[package]]
-name = "quito-lsp"
-version = "0.8.0"
-dependencies = [
- "quito-eval",
- "quito-geom",
- "quito-syntax",
- "serde",
- "serde_json",
- "tokio",
- "tower-lsp",
-]
-
-[[package]]
-name = "quito-syntax"
-version = "0.8.0"
-dependencies = [
- "logos",
- "serde_json",
- "thiserror",
-]
-
-[[package]]
-name = "quito-wasm"
-version = "0.8.0"
-dependencies = [
- "console_error_panic_hook",
- "quito-eval",
- "quito-geom",
- "quito-ir",
- "quito-syntax",
- "wasm-bindgen",
- "wasm-bindgen-test",
 ]
 
 [[package]]
@@ -1617,9 +1617,9 @@ checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
 name = "xtask"
 version = "0.8.0"
 dependencies = [
- "quito-eval",
- "quito-geom",
- "quito-syntax",
+ "openrscad-eval",
+ "openrscad-geom",
+ "openrscad-syntax",
 ]
 
 [[package]]

@@ -1,6 +1,6 @@
 # Notes for coding agents
 
-Quito is a clean-room OpenSCAD reimplementation in Rust. Before writing any
+OpenRSCAD is a clean-room OpenSCAD reimplementation in Rust. Before writing any
 code, read [CONTRIBUTING.md](CONTRIBUTING.md) — the **clean-room policy is
 mandatory** (never read or paraphrase OpenSCAD's GPL source).
 
@@ -39,7 +39,7 @@ The whole repo shares **one** version, so the bump is repo-wide, not per-crate.
 Two consequences worth internalizing:
 
 - **`minor` costs the caret boundary.** At 0.x, `0.2.0 → 0.3.0` is the caret
-  boundary for both Cargo and npm, so `^0.2.0` consumers of `quito-engine` do not
+  boundary for both Cargo and npm, so `^0.2.0` consumers of `openrscad-engine` do not
   receive it automatically. Reach for `patch` by default and `minor` only for
   genuinely new or breaking behavior.
 - **Breaking changes are still `minor` pre-1.0.** Select `minor` and call the
@@ -79,7 +79,7 @@ roughly by frequency: `web`, `geom`, `desktop`, `eval`, `lsp`, `npm`, `ci`,
 
 ```
 ---
-"quito-release-root": minor
+"openrscad-release-root": minor
 ---
 
 support minkowski on non-convex 2D profiles

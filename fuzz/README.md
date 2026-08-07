@@ -1,4 +1,4 @@
-# quito-fuzz
+# openrscad-fuzz
 
 libFuzzer targets for the parts of the engine that ingest **untrusted public
 input**: the parser and the mesh/vector importers. The playground runs these
@@ -20,15 +20,15 @@ cargo install cargo-fuzz
 
 | target        | entry point                            | input   |
 | ------------- | -------------------------------------- | ------- |
-| `parse`       | `quito_syntax::parse`                  | UTF-8   |
-| `eval`        | `quito_eval::eval_program_with_budget` | UTF-8   |
-| `import_stl`  | `quito_geom::Mesh::from_stl`           | bytes   |
-| `import_3mf`  | `quito_geom::Mesh::from_3mf`           | bytes   |
-| `import_amf`  | `quito_geom::Mesh::from_amf`           | bytes   |
-| `import_off`  | `quito_geom::Mesh::from_off`           | UTF-8   |
-| `import_obj`  | `quito_geom::Mesh::from_obj`           | UTF-8   |
-| `import_dxf`  | `quito_geom::import_dxf`               | bytes   |
-| `import_svg`  | `quito_geom::import_svg`               | bytes   |
+| `parse`       | `openrscad_syntax::parse`                  | UTF-8   |
+| `eval`        | `openrscad_eval::eval_program_with_budget` | UTF-8   |
+| `import_stl`  | `openrscad_geom::Mesh::from_stl`           | bytes   |
+| `import_3mf`  | `openrscad_geom::Mesh::from_3mf`           | bytes   |
+| `import_amf`  | `openrscad_geom::Mesh::from_amf`           | bytes   |
+| `import_off`  | `openrscad_geom::Mesh::from_off`           | UTF-8   |
+| `import_obj`  | `openrscad_geom::Mesh::from_obj`           | UTF-8   |
+| `import_dxf`  | `openrscad_geom::import_dxf`               | bytes   |
+| `import_svg`  | `openrscad_geom::import_svg`               | bytes   |
 
 The `eval` target runs parse-then-eval under a **fuel budget**
 (`eval_program_with_budget`) so adversarial programs always terminate — nested

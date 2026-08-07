@@ -16,7 +16,7 @@ different shape.
   lowers to `MultMatrix` via Rodrigues; covered by eval- and geometry-level
   regression tests.
 - **A2** (geometry oracle harness) is **done** — `xtask bless-geom` / `xtask geom`
-  diff quito's native render against a 60-case corpus blessed from OpenSCAD 2024.12
+  diff openrscad's native render against a 60-case corpus blessed from OpenSCAD 2024.12
   (volume, bbox, signed centroid, connected-component count, watertight+2-manifold,
   and opt-in triangle count), enforced in CI. A4/A5 add their cases to this
   corpus as they land.

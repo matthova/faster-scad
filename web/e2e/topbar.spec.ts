@@ -33,7 +33,7 @@ test("Display ▾ groups rendering controls and reveals custom quality", async (
   await gotoApp(page);
   await page.getByRole("button", { name: "Display" }).click();
   await expect(
-    page.getByRole("button", { name: "Engine: Quito" }),
+    page.getByRole("button", { name: "Engine: OpenRSCAD" }),
   ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Fast preview" }),

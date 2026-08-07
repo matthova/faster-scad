@@ -70,7 +70,7 @@ export function HelpSheet({ onClose, shortcuts }: Props) {
         onPointerDown={(e) => e.stopPropagation()}
       >
         <div className="help-head">
-          <span>Quito playground — help</span>
+          <span>OpenRSCAD playground — help</span>
           <button className="help-close" onClick={onClose} aria-label="Close">
             ✕
           </button>

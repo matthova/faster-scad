@@ -3,14 +3,14 @@
 // The nodejs-target glue instantiates the wasm synchronously on import, so there
 // is no async init step: `ensureReady()` resolves immediately and exists only
 // for API parity with the browser entry. (CommonJS `require()` consumers resolve
-// to the raw `pkg/node/quito.js` glue directly — see the package `exports` map.)
+// to the raw `pkg/node/openrscad.js` glue directly — see the package `exports` map.)
 import {
   render_with_files as rawRenderWithFiles,
   export_2d as rawExport2d,
   parameters as rawParameters,
   version as rawVersion,
   clear_cache as rawClearCache,
-} from "../pkg/node/quito.js";
+} from "../pkg/node/openrscad.js";
 import { makeApi, type RawEngine } from "./core.js";
 
 /** Resolves immediately — the wasm is already instantiated on import in Node. */

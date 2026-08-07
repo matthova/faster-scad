@@ -1,0 +1,17 @@
+[package]
+name = "openrscad-eval"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+openrscad-syntax = { workspace = true }
+openrscad-ir = { workspace = true }
+thiserror = { workspace = true }
+rustc-hash = { workspace = true }
+ttf-parser = { workspace = true }
+png = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

@@ -59,7 +59,7 @@ test("console height is resizable and persisted", async ({ page }) => {
   expect(after).toBeGreaterThan(before + 50);
 
   const stored = await page.evaluate(() =>
-    JSON.parse(localStorage.getItem("quito.prefs.v1") || "{}"),
+    JSON.parse(localStorage.getItem("openrscad.prefs.v1") || "{}"),
   );
   expect(stored.consoleHeight).toBeGreaterThan(before + 50);
 });

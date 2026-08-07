@@ -41,13 +41,13 @@ function bumpTomlPackageVersion(rel) {
   changed.push(rel);
 }
 
-// Cargo.lock: bump the entries for our own crates (quito-* and xtask). Dependency
+// Cargo.lock: bump the entries for our own crates (openrscad-* and xtask). Dependency
 // references live under `dependencies = [...]` as quoted strings, so anchoring
 // `name = "..."` to the start of a line only matches [[package]] definitions.
 function bumpCargoLock(rel) {
   const src = read(rel);
-  const re = /(^name = "(?:quito-[a-z]+|xtask)"\nversion = ")[^"]*(")/gm;
-  if (!re.test(src)) throw new Error(`no quito-*/xtask entries found in ${rel}`);
+  const re = /(^name = "(?:openrscad-[a-z]+|xtask)"\nversion = ")[^"]*(")/gm;
+  if (!re.test(src)) throw new Error(`no openrscad-*/xtask entries found in ${rel}`);
   write(rel, src.replace(re, `$1${version}$2`));
   changed.push(rel);
 }
@@ -75,7 +75,7 @@ bumpJson("desktop/package-lock.json", (o, v) => {
   if (o.packages && o.packages[""]) o.packages[""].version = v;
 });
 
-// --- Published npm package (quito-engine) ---
+// --- Published npm package (openrscad-engine) ---
 bumpJson("packages/npm/package.json", (o, v) => (o.version = v));
 bumpJson("packages/npm/package-lock.json", (o, v) => {
   o.version = v;

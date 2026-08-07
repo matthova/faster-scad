@@ -116,10 +116,10 @@ import { pickDownloadUrl } from "./downloads";
 
 const TAURI = isTauri();
 
-const GITHUB_URL = "https://github.com/matthova/faster-scad";
+const GITHUB_URL = "https://github.com/matthova/openrscad";
 
 // The marketing/download page (index.html), served at the site root
-// /faster-scad/. A relative URL ("." → the parent of /faster-scad/playground)
+// /openrscad/. A relative URL ("." → the parent of /openrscad/playground)
 // so it resolves under the deployed subpath. The brand wordmark and the Help ▾
 // menu open it; it auto-detects the OS and offers a download for every platform
 // (see index.html / src/about.ts).
@@ -154,7 +154,7 @@ function themeExts(mode: ThemeMode) {
 const DEFAULT_FILES: File[] = [
   {
     name: "main.scad",
-    content: `// Quito playground — edits re-render live.
+    content: `// OpenRSCAD playground — edits re-render live.
 // main.scad uses helpers.scad (see the tab); tweak the parameters at right.
 use <helpers.scad>
 $fn = 48;
@@ -318,7 +318,7 @@ export function App() {
     customFa: loadPrefs().customFa,
     customFs: loadPrefs().customFs,
   });
-  // Active render engine. "quito" is our engine (native C++ kernel on desktop,
+  // Active render engine. "openrscad" is our engine (native C++ kernel on desktop,
   // wasm in the browser); "openscad" is the vendored OpenSCAD wasm build, which
   // runs in-webview on both. usePref mirrors it to a ref the once-wired render
   // closures read. `swapEngineRef` is set inside the mount effect (it needs the
@@ -639,7 +639,7 @@ export function App() {
     };
     // Build an engine for the given kind. "openscad" runs OpenSCAD — a locally-
     // installed binary on desktop (falling back to wasm if none is installed), or
-    // the vendored wasm build in the browser. "quito" uses the native C++ engine
+    // the vendored wasm build in the browser. "openrscad" uses the native C++ engine
     // on desktop and the wasm engine in the browser.
     const onDownloadChange = (downloading: boolean) =>
       setEngineDownloading(downloading);
@@ -717,7 +717,7 @@ export function App() {
           fastPreviewRef.current,
         );
       } else {
-        // Wasm engine (Quito or OpenSCAD, in browser or desktop): resolve the
+        // Wasm engine (OpenRSCAD or OpenSCAD, in browser or desktop): resolve the
         // include/use closure (fetching libraries), then render with the full
         // file set. Read `engineRef.current` (not a captured local) so a live
         // engine swap takes effect on the next render.
@@ -1134,7 +1134,7 @@ export function App() {
         if (!path) return; // cancelled
         recordSaved(idx, path, content);
         // Main file's directory drives include/use resolution on either native
-        // engine (Quito's disk resolver / OpenSCAD's OPENSCADPATH).
+        // engine (OpenRSCAD's disk resolver / OpenSCAD's OPENSCADPATH).
         if (idx === 0) {
           const d = path.slice(0, path.length - basename(path).length) || ".";
           engineDirRef.current = d;
@@ -1320,12 +1320,12 @@ export function App() {
     setOrthoPref(next);
   }
 
-  /** Swap the render engine between Quito and the vendored OpenSCAD wasm, then
-   *  re-render on the new engine. Remembered across sessions. On desktop, "quito"
+  /** Swap the render engine between OpenRSCAD and the vendored OpenSCAD wasm, then
+   *  re-render on the new engine. Remembered across sessions. On desktop, "openrscad"
    *  is the native engine and "openscad" runs the OpenSCAD wasm in-webview. */
   function toggleEngine() {
     const next: EngineKind =
-      engineKindRef.current === "openscad" ? "quito" : "openscad";
+      engineKindRef.current === "openscad" ? "openrscad" : "openscad";
     setEngineKindPref(next);
     swapEngineRef.current(next);
   }
@@ -1839,7 +1839,7 @@ export function App() {
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
-        a.download = "quito.png";
+        a.download = "openrscad.png";
         a.click();
         URL.revokeObjectURL(url);
       }
@@ -1904,7 +1904,7 @@ export function App() {
     const saveExport = (data: Uint8Array, ext: string) =>
       TAURI
         ? void saveBytesNative(data, ext)
-        : downloadBlob(data, `quito.${ext}`);
+        : downloadBlob(data, `openrscad.${ext}`);
 
     // The native re-render export applies only when the native engine produced
     // what's on screen. With the OpenSCAD wasm engine active (even on desktop),
@@ -2064,9 +2064,9 @@ export function App() {
       }}
     >
       <header className="topbar">
-        <h1 className="sr-only">Quito playground</h1>
+        <h1 className="sr-only">OpenRSCAD playground</h1>
         <a className="brand" href={ABOUT_URL}>
-          Quito <span className="tag">playground</span>
+          OpenRSCAD <span className="tag">playground</span>
         </a>
         <div className="actions">
           <select
@@ -2129,7 +2129,7 @@ export function App() {
               !linkHighlight ||
               showDims ||
               sectionOn ||
-              engineKind !== "quito" ||
+              engineKind !== "openrscad" ||
               fastPreview ||
               quality !== "normal"
             }
@@ -2193,14 +2193,14 @@ export function App() {
               title={
                 engineKind === "openscad"
                   ? TAURI
-                    ? "Rendering with OpenSCAD (Manifold) — your locally-installed OpenSCAD if available, otherwise the bundled wasm build. Click to switch back to Quito."
-                    : "Rendering with OpenSCAD 2025.03.25 (Manifold) — the vendored OpenSCAD wasm engine. Click to switch back to Quito."
+                    ? "Rendering with OpenSCAD (Manifold) — your locally-installed OpenSCAD if available, otherwise the bundled wasm build. Click to switch back to OpenRSCAD."
+                    : "Rendering with OpenSCAD 2025.03.25 (Manifold) — the vendored OpenSCAD wasm engine. Click to switch back to OpenRSCAD."
                   : TAURI
-                    ? "Rendering with Quito — our native engine. Click to switch to OpenSCAD (uses your local install if available, else the bundled wasm build)."
-                    : "Rendering with Quito — our engine. Click to switch to the OpenSCAD wasm engine (first use downloads ~10 MB)."
+                    ? "Rendering with OpenRSCAD — our native engine. Click to switch to OpenSCAD (uses your local install if available, else the bundled wasm build)."
+                    : "Rendering with OpenRSCAD — our engine. Click to switch to the OpenSCAD wasm engine (first use downloads ~10 MB)."
               }
             >
-              Engine: {engineKind === "openscad" ? "OpenSCAD" : "Quito"}
+              Engine: {engineKind === "openscad" ? "OpenSCAD" : "OpenRSCAD"}
             </button>
             <button
               className={`popover-row popover-choice ${fastPreview ? "active" : ""}`}
@@ -2378,7 +2378,7 @@ export function App() {
             <PopoverAction onClick={() => openExternal(GITHUB_URL)}>
               View source on GitHub ↗
             </PopoverAction>
-            <div className="popover-version">{version || "quito"}</div>
+            <div className="popover-version">{version || "openrscad"}</div>
           </Popover>
         </div>
       </header>
@@ -2478,7 +2478,7 @@ export function App() {
         <div className="update-banner" role="status">
           <div className="update-banner-row">
             <span className="update-banner-msg">
-              Get the Quito desktop app for native-speed rendering and local
+              Get the OpenRSCAD desktop app for native-speed rendering and local
               file access.
             </span>
             <div className="update-banner-actions">

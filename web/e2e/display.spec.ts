@@ -18,7 +18,7 @@ test("Display popover toggles persist and it closes on outside click", async ({
   await panel.getByText("Orthographic projection").click();
 
   const stored = await page.evaluate(() =>
-    JSON.parse(localStorage.getItem("quito.prefs.v1") || "{}"),
+    JSON.parse(localStorage.getItem("openrscad.prefs.v1") || "{}"),
   );
   expect(stored.showGrid).toBe(false);
   expect(stored.showEdges).toBe(false);

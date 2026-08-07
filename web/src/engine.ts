@@ -118,7 +118,7 @@ export class Engine {
   }
 
   /** Construct the backing worker. Overridden by `OpenscadEngine` to spawn the
-   *  OpenSCAD worker instead of the Quito one. Kept as a literal `new Worker(new
+   *  OpenSCAD worker instead of the OpenRSCAD one. Kept as a literal `new Worker(new
    *  URL(...))` per call site so Vite can bundle each worker. */
   protected createWorker(): Worker {
     return new Worker(new URL("./engineWorker.ts", import.meta.url), {
@@ -247,7 +247,7 @@ export class Engine {
   }
 }
 
-/** Renders with the vendored OpenSCAD wasm instead of Quito. Inherits all of
+/** Renders with the vendored OpenSCAD wasm instead of OpenRSCAD. Inherits all of
  *  `Engine`'s scheduling/watchdog/cancellation — only the worker and the
  *  injected loader URL differ. See openscadWorker.ts for the contract and its
  *  documented limitations. */

@@ -27,14 +27,19 @@ fuzz_target!(|data: &[u8]| {
     let Ok(src) = std::str::from_utf8(data) else {
         return;
     };
-    let Ok(prog) = quito_syntax::parse(src) else {
+    let Ok(prog) = openrscad_syntax::parse(src) else {
         return;
     };
     std::thread::Builder::new()
         .stack_size(STACK)
         .spawn(move || {
             // No file access: `include`/`use` degrade to warnings.
-            let _ = quito_eval::eval_program_with_budget(&prog, &quito_eval::NullResolver, ".", BUDGET);
+            let _ = openrscad_eval::eval_program_with_budget(
+                &prog,
+                &openrscad_eval::NullResolver,
+                ".",
+                BUDGET,
+            );
         })
         .unwrap()
         .join()

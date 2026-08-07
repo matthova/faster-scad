@@ -1,21 +1,21 @@
 # Standalone workspace: keeps the heavy Tauri dependency tree out of the main
-# Rust workspace (and CI), while still depending on the quito crates by path.
+# Rust workspace (and CI), while still depending on the openrscad crates by path.
 [workspace]
 
 [package]
-name = "quito-desktop"
+name = "openrscad-desktop"
 version = "0.8.0"
 edition = "2021"
 license = "Apache-2.0 OR MIT"
-description = "Quito desktop app (Tauri) — native OpenSCAD-compatible renderer"
+description = "OpenRSCAD desktop app (Tauri) — native OpenSCAD-compatible renderer"
 rust-version = "1.85"
 
 [lib]
-name = "quito_desktop_lib"
+name = "openrscad_desktop_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [[bin]]
-name = "quito-desktop"
+name = "openrscad-desktop"
 path = "src/main.rs"
 
 [build-dependencies]
@@ -36,9 +36,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 notify = "6"
 
-quito-syntax = { path = "../../crates/quito-syntax" }
-quito-eval = { path = "../../crates/quito-eval" }
-quito-geom = { path = "../../crates/quito-geom" }
+openrscad-syntax = { path = "../../crates/openrscad-syntax" }
+openrscad-eval = { path = "../../crates/openrscad-eval" }
+openrscad-geom = { path = "../../crates/openrscad-geom" }
 
 [profile.release]
 opt-level = 3

@@ -1,18 +1,18 @@
 {
-  "name": "quito-engine",
+  "name": "openrscad-engine",
   "version": "0.8.0",
-  "description": "Fast OpenSCAD-compatible geometry engine (Quito) compiled to WebAssembly — parse .scad source and render solid 3D meshes in the browser or Node.",
+  "description": "Fast OpenSCAD-compatible geometry engine (OpenRSCAD) compiled to WebAssembly — parse .scad source and render solid 3D meshes in the browser or Node.",
   "type": "module",
   "license": "Apache-2.0 OR MIT",
   "author": "Matt Hova",
-  "homepage": "https://matthova.github.io/faster-scad",
+  "homepage": "https://matthova.github.io/openrscad",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/matthova/faster-scad.git",
+    "url": "git+https://github.com/matthova/openrscad.git",
     "directory": "packages/npm"
   },
   "bugs": {
-    "url": "https://github.com/matthova/faster-scad/issues"
+    "url": "https://github.com/matthova/openrscad/issues"
   },
   "keywords": [
     "openscad",
@@ -24,7 +24,7 @@
     "csg",
     "3d",
     "mesh",
-    "quito"
+    "openrscad"
   ],
   "types": "./dist/browser.d.ts",
   "exports": {
@@ -36,7 +36,7 @@
       "node": {
         "types": "./dist/node.d.ts",
         "import": "./dist/node.js",
-        "require": "./pkg/node/quito.js"
+        "require": "./pkg/node/openrscad.js"
       },
       "default": {
         "types": "./dist/browser.d.ts",
@@ -44,18 +44,18 @@
       }
     },
     "./web": {
-      "types": "./pkg/web/quito.d.ts",
-      "default": "./pkg/web/quito.js"
+      "types": "./pkg/web/openrscad.d.ts",
+      "default": "./pkg/web/openrscad.js"
     },
     "./node": {
-      "types": "./pkg/node/quito.d.ts",
-      "default": "./pkg/node/quito.js"
+      "types": "./pkg/node/openrscad.d.ts",
+      "default": "./pkg/node/openrscad.js"
     },
-    "./quito_bg.wasm": "./pkg/web/quito_bg.wasm",
+    "./openrscad_bg.wasm": "./pkg/web/openrscad_bg.wasm",
     "./package.json": "./package.json"
   },
   "sideEffects": [
-    "./pkg/*/quito.js",
+    "./pkg/*/openrscad.js",
     "./dist/*.js"
   ],
   "files": [
@@ -73,7 +73,7 @@
   },
   "scripts": {
     "build": "npm run build:wasm && npm run build:facade",
-    "build:wasm": "wasm-pack build ../../crates/quito-wasm --release --target web --out-dir \"$PWD/pkg/web\" --out-name quito && wasm-pack build ../../crates/quito-wasm --release --target nodejs --out-dir \"$PWD/pkg/node\" --out-name quito && rm -f pkg/web/.gitignore pkg/node/.gitignore",
+    "build:wasm": "wasm-pack build ../../crates/openrscad-wasm --release --target web --out-dir \"$PWD/pkg/web\" --out-name openrscad && wasm-pack build ../../crates/openrscad-wasm --release --target nodejs --out-dir \"$PWD/pkg/node\" --out-name openrscad && rm -f pkg/web/.gitignore pkg/node/.gitignore",
     "build:facade": "tsc -p tsconfig.json"
   },
   "devDependencies": {

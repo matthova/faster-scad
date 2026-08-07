@@ -2730,6 +2730,65 @@ dependencies = [
 ]
 
 [[package]]
+name = "openrscad-desktop"
+version = "0.8.0"
+dependencies = [
+ "notify",
+ "openrscad-eval",
+ "openrscad-geom",
+ "openrscad-syntax",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-fs",
+ "tauri-plugin-opener",
+ "tauri-plugin-process",
+ "tauri-plugin-updater",
+]
+
+[[package]]
+name = "openrscad-eval"
+version = "0.8.0"
+dependencies = [
+ "openrscad-ir",
+ "openrscad-syntax",
+ "png 0.17.16",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "ttf-parser",
+]
+
+[[package]]
+name = "openrscad-geom"
+version = "0.8.0"
+dependencies = [
+ "earcutr",
+ "geo",
+ "manifold-csg",
+ "manifold-rust",
+ "miniz_oxide",
+ "openrscad-ir",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "openrscad-ir"
+version = "0.8.0"
+
+[[package]]
+name = "openrscad-syntax"
+version = "0.8.0"
+dependencies = [
+ "logos",
+ "serde_json",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "openssl-probe"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3044,65 +3103,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e660451e55124f798a69a5af3f49ccfbefbd41910eefd25caf2393e1f3473ec1"
 dependencies = [
  "memchr",
-]
-
-[[package]]
-name = "quito-desktop"
-version = "0.8.0"
-dependencies = [
- "notify",
- "quito-eval",
- "quito-geom",
- "quito-syntax",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-fs",
- "tauri-plugin-opener",
- "tauri-plugin-process",
- "tauri-plugin-updater",
-]
-
-[[package]]
-name = "quito-eval"
-version = "0.8.0"
-dependencies = [
- "png 0.17.16",
- "quito-ir",
- "quito-syntax",
- "rustc-hash",
- "serde",
- "serde_json",
- "thiserror 2.0.19",
- "ttf-parser",
-]
-
-[[package]]
-name = "quito-geom"
-version = "0.8.0"
-dependencies = [
- "earcutr",
- "geo",
- "manifold-csg",
- "manifold-rust",
- "miniz_oxide",
- "quito-ir",
- "thiserror 2.0.19",
-]
-
-[[package]]
-name = "quito-ir"
-version = "0.8.0"
-
-[[package]]
-name = "quito-syntax"
-version = "0.8.0"
-dependencies = [
- "logos",
- "serde_json",
- "thiserror 2.0.19",
 ]
 
 [[package]]

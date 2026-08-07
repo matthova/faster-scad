@@ -2,11 +2,11 @@
 // they never enter share links or the autosaved project. Stored under their own
 // localStorage key, separate from project.ts.
 
-const KEY = "quito.prefs.v1";
+const KEY = "openrscad.prefs.v1";
 
-/** Which render engine the playground drives (browser only). "quito" is our own
+/** Which render engine the playground drives (browser only). "openrscad" is our own
  *  wasm engine; "openscad" is the vendored OpenSCAD wasm build. */
-export type EngineKind = "quito" | "openscad";
+export type EngineKind = "openrscad" | "openscad";
 
 /** Render resolution. Presets force `$fn` (so they visibly change a model even
  *  when its script sets its own `$fn`); "normal" injects nothing, so the script
@@ -62,7 +62,7 @@ export interface Prefs {
 const DEFAULTS: Prefs = {
   linkHighlight: true,
   fastPreview: false,
-  engine: "quito",
+  engine: "openrscad",
   quality: "normal",
   customFn: null,
   customFa: null,

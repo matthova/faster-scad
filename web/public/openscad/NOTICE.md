@@ -9,7 +9,7 @@ verbatim from the upstream nightly artifacts:
 - Files: `openscad.js` (Emscripten loader, ES module) and `openscad.wasm`.
 
 They are shipped so the playground can offer OpenSCAD itself as an alternate
-render engine alongside Quito (toggled in the toolbar). They are loaded lazily —
+render engine alongside OpenRSCAD (toggled in the toolbar). They are loaded lazily —
 only when a user selects the OpenSCAD engine — so the ~9.6 MB `openscad.wasm` is
 never downloaded by default, and it is excluded from the PWA precache.
 
@@ -22,9 +22,9 @@ The corresponding source is available at:
 - https://github.com/openscad/openscad
 - https://github.com/openscad/openscad-wasm
 
-This is clean-room-safe for Quito: we treat OpenSCAD strictly as an opaque
+This is clean-room-safe for OpenRSCAD: we treat OpenSCAD strictly as an opaque
 external binary (same as the native `openscad` oracle the Rust tests shell out
-to). No OpenSCAD source is read or paraphrased into Quito's own code.
+to). No OpenSCAD source is read or paraphrased into OpenRSCAD's own code.
 
 ## Updating
 

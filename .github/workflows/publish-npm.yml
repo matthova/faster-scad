@@ -1,6 +1,6 @@
 name: Publish engine to npm
 
-# Publishes the `quito-engine` npm package (the wasm build of crates/quito-wasm)
+# Publishes the `openrscad-engine` npm package (the wasm build of crates/openrscad-wasm)
 # for an ALREADY-CREATED GitHub Release. Two entry points:
 #
 #   1. changesets (the normal path). changesets.yml dispatches this workflow with
@@ -23,10 +23,10 @@ name: Publish engine to npm
 # version() truthful, since it compiles in CARGO_PKG_VERSION). The step below
 # only ASSERTS tag and tree agree.
 #
-# ONE-TIME BOOTSTRAP: quito-engine@0.0.0 is already on the registry, so only the
-# registration remains — npmjs.com > quito-engine > Settings > Trusted Publisher
+# ONE-TIME BOOTSTRAP: openrscad-engine@0.0.0 is already on the registry, so only the
+# registration remains — npmjs.com > openrscad-engine > Settings > Trusted Publisher
 # > GitHub Actions, with Organization or user = matthova, Repository =
-# faster-scad, Workflow filename = publish-npm.yml, Environment blank, Allowed
+# openrscad, Workflow filename = publish-npm.yml, Environment blank, Allowed
 # actions = npm publish. Fields are case-sensitive and exact.
 
 on:
@@ -141,10 +141,10 @@ jobs:
         working-directory: packages/npm
         shell: bash
         run: |
-          wasm-pack build ../../crates/quito-wasm --release --target web \
-            --out-dir "$PWD/pkg/web" --out-name quito
-          wasm-pack build ../../crates/quito-wasm --release --target nodejs \
-            --out-dir "$PWD/pkg/node" --out-name quito
+          wasm-pack build ../../crates/openrscad-wasm --release --target web \
+            --out-dir "$PWD/pkg/web" --out-name openrscad
+          wasm-pack build ../../crates/openrscad-wasm --release --target nodejs \
+            --out-dir "$PWD/pkg/node" --out-name openrscad
           # wasm-pack writes a `.gitignore` containing `*` into each out-dir;
           # npm honors it and would silently drop the wasm from the tarball.
           rm -f pkg/web/.gitignore pkg/node/.gitignore
@@ -159,18 +159,18 @@ jobs:
         shell: bash
         run: |
           V="${{ steps.ver.outputs.version }}"
-          if npm view "quito-engine@$V" version >/dev/null 2>&1; then
-            echo "quito-engine@$V already on the registry — skipping publish."
+          if npm view "openrscad-engine@$V" version >/dev/null 2>&1; then
+            echo "openrscad-engine@$V already on the registry — skipping publish."
             exit 0
           fi
           # The check above is inherently racy (two runs can both pass it), so
           # treat "someone else published it first" as success rather than a
           # spurious red E403.
           npm publish --tag "${{ steps.ver.outputs.npmtag }}" || {
-            if npm view "quito-engine@$V" version >/dev/null 2>&1; then
-              echo "Lost a publish race; quito-engine@$V is present. Treating as success."
+            if npm view "openrscad-engine@$V" version >/dev/null 2>&1; then
+              echo "Lost a publish race; openrscad-engine@$V is present. Treating as success."
             else
-              echo "::error::npm publish failed and quito-engine@$V is not on the registry."
+              echo "::error::npm publish failed and openrscad-engine@$V is not on the registry."
               exit 1
             fi
           }
@@ -189,6 +189,6 @@ jobs:
           TGZ=$(npm pack 2>/dev/null | tail -n1)
           # Stable-named alias so a static link (releases/latest/download/...) always
           # resolves to the newest engine tarball, matching the desktop convention.
-          cp "$TGZ" quito-engine.tgz
+          cp "$TGZ" openrscad-engine.tgz
           gh release upload "${{ github.event.release.tag_name || inputs.tag }}" \
-            "$TGZ" quito-engine.tgz --clobber --repo "$GITHUB_REPOSITORY"
+            "$TGZ" openrscad-engine.tgz --clobber --repo "$GITHUB_REPOSITORY"

@@ -71,7 +71,7 @@ linear_extrude(height = height, twist = twist, scale = taper)
 $fn = 32;
 
 /* [Text] */
-label = "Quito";
+label = "OpenRSCAD";
 size = 12;      // [6:40]
 thickness = 3;  // [1:10]
 

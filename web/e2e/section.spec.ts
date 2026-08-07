@@ -3,7 +3,7 @@ import { gotoApp } from "./helpers";
 
 const stored = (page: import("@playwright/test").Page) =>
   page.evaluate(() =>
-    JSON.parse(localStorage.getItem("quito.prefs.v1") || "{}"),
+    JSON.parse(localStorage.getItem("openrscad.prefs.v1") || "{}"),
   );
 
 test("section plane toggles, exposes axis controls, and persists", async ({

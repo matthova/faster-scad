@@ -2,7 +2,7 @@
 // A one-shot worker that renders a 2D model and serializes it to DXF or SVG.
 // Kept separate from the render worker (which terminates/respawns for
 // cancellation) so a user-initiated export never races the live render loop.
-import init, { export_2d } from "../engine/quito.js";
+import init, { export_2d } from "../engine/openrscad.js";
 
 export interface Export2DRequest {
   source: string;

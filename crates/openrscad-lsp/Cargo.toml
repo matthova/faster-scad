@@ -1,0 +1,21 @@
+[package]
+name = "openrscad-lsp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Language Server Protocol server for the OpenRSCAD OpenSCAD reimplementation"
+
+[[bin]]
+name = "openrscad-lsp"
+path = "src/main.rs"
+
+[dependencies]
+openrscad-syntax = { workspace = true }
+openrscad-eval = { workspace = true }
+openrscad-geom = { workspace = true }
+tower-lsp = "0.20"
+tokio = { version = "1", features = ["rt-multi-thread", "io-std", "macros", "time"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

@@ -7,7 +7,7 @@ import { BUILTINS } from "./builtins";
 // name/kind that drifts in one and not the other should fail here. Parses the
 // `b!("name", module|function, ...)` macro invocations out of the Rust source.
 const RUST = fileURLToPath(
-  new URL("../../../crates/quito-lsp/src/builtins.rs", import.meta.url),
+  new URL("../../../crates/openrscad-lsp/src/builtins.rs", import.meta.url),
 );
 
 function rustBuiltins(): { name: string; isModule: boolean }[] {

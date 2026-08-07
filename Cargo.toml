@@ -1,13 +1,13 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/quito-syntax",
-    "crates/quito-ir",
-    "crates/quito-eval",
-    "crates/quito-geom",
-    "crates/quito-cli",
-    "crates/quito-wasm",
-    "crates/quito-lsp",
+    "crates/openrscad-syntax",
+    "crates/openrscad-ir",
+    "crates/openrscad-eval",
+    "crates/openrscad-geom",
+    "crates/openrscad-cli",
+    "crates/openrscad-wasm",
+    "crates/openrscad-lsp",
     "xtask",
 ]
 
@@ -15,14 +15,14 @@ members = [
 version = "0.8.0"
 edition = "2021"
 license = "Apache-2.0 OR MIT"
-repository = "https://github.com/matthova/faster-scad"
+repository = "https://github.com/matthova/openrscad"
 rust-version = "1.85"
 
 [workspace.dependencies]
-quito-syntax = { path = "crates/quito-syntax" }
-quito-ir = { path = "crates/quito-ir" }
-quito-eval = { path = "crates/quito-eval" }
-quito-geom = { path = "crates/quito-geom" }
+openrscad-syntax = { path = "crates/openrscad-syntax" }
+openrscad-ir = { path = "crates/openrscad-ir" }
+openrscad-eval = { path = "crates/openrscad-eval" }
+openrscad-geom = { path = "crates/openrscad-geom" }
 
 logos = "0.15"
 thiserror = "2"

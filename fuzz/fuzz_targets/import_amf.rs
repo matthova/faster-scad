@@ -3,5 +3,5 @@
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
-    let _ = quito_geom::Mesh::from_amf(data);
+    let _ = openrscad_geom::Mesh::from_amf(data);
 });

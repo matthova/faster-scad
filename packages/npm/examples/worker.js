@@ -1,4 +1,4 @@
-// A module Web Worker that runs the Quito engine off the main thread — the
+// A module Web Worker that runs the OpenRSCAD engine off the main thread — the
 // recommended way to use it in a browser app (rendering a large model can take
 // tens of milliseconds and shouldn't block the UI).
 //
@@ -8,7 +8,7 @@
 //   worker.onmessage = (e) => { /* e.data.result is a RenderOutput */ };
 //   worker.postMessage({ seq: 1, source: "cube(10);" });
 //
-import { render } from "quito-engine";
+import { render } from "openrscad-engine";
 
 self.onmessage = async (e) => {
   const { seq, source, params, files } = e.data;

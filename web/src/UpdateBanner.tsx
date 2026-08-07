@@ -40,12 +40,12 @@ export function UpdateBanner({ state, onInstall, onDismiss }: Props) {
         <span className="update-banner-msg">
           {state.kind === "checking" && "Checking for updates…"}
           {state.kind === "available" &&
-            `Quito ${state.version} is available (you have ${state.currentVersion}).`}
+            `OpenRSCAD ${state.version} is available (you have ${state.currentVersion}).`}
           {state.kind === "downloading" && "Downloading update…"}
           {state.kind === "installing" &&
             "Installing update… the app will restart."}
           {state.kind === "uptodate" &&
-            "You're running the latest version of Quito."}
+            "You're running the latest version of OpenRSCAD."}
           {state.kind === "error" &&
             `Couldn't check for updates: ${state.message}`}
         </span>

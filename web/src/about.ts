@@ -73,7 +73,7 @@ async function wirePrimaryDownload() {
     btn.href = `${DL}/${target.asset}`;
   } else {
     // No desktop build for this device — the button opens the playground. Use a
-    // relative link so it resolves to /faster-scad/playground under the subpath.
+    // relative link so it resolves to /openrscad/playground under the subpath.
     btn.href = "playground";
   }
   if (note) note.textContent = target.note;
@@ -115,7 +115,7 @@ function syncTheme() {
 type Row = {
   model: string;
   note: string;
-  quito: number;
+  openrscad: number;
   cgal: number;
   mfld: number;
 };
@@ -123,35 +123,35 @@ const SHOOTOUT: Row[] = [
   {
     model: "Boolean grid",
     note: "spheres + cylinders diffed from a slab",
-    quito: 53,
+    openrscad: 53,
     cgal: 19338,
     mfld: 165,
   },
   {
     model: "Gears",
     note: "linear + rotate extrude",
-    quito: 12,
+    openrscad: 12,
     cgal: 1877,
     mfld: 59,
   },
   {
     model: "Rounded",
     note: "minkowski + hull",
-    quito: 21,
+    openrscad: 21,
     cgal: 334,
     mfld: 54,
   },
   {
     model: "Eval-bound",
     note: "heavy Collatz computation",
-    quito: 102,
+    openrscad: 102,
     cgal: 510,
     mfld: 501,
   },
   {
     model: "Lamp shade",
     note: "extrudes + booleans",
-    quito: 37,
+    openrscad: 37,
     cgal: 176,
     mfld: 173,
   },
@@ -189,14 +189,14 @@ const el = (tag: string, cls?: string, text?: string) => {
   return n;
 };
 
-// The three series, in legend / stacking order (Quito on top). Each row draws a
+// The three series, in legend / stacking order (OpenRSCAD on top). Each row draws a
 // bar per engine; colour identity is backed up by the direct time label.
 const SERIES = [
   {
-    key: "quito",
-    cls: "mk-bar--quito",
-    swatch: "mk-swatch--quito",
-    label: "Quito (native)",
+    key: "openrscad",
+    cls: "mk-bar--openrscad",
+    swatch: "mk-swatch--openrscad",
+    label: "OpenRSCAD (native)",
   },
   {
     key: "mfld",
@@ -277,7 +277,7 @@ function renderTable(host: HTMLElement) {
   const htr = el("tr");
   for (const [h, cls] of [
     ["Model", ""],
-    ["Quito", "num"],
+    ["OpenRSCAD", "num"],
     ["OpenSCAD CGAL", "num"],
     ["OpenSCAD Manifold", "num"],
     ["vs CGAL", "num"],
@@ -296,11 +296,11 @@ function renderTable(host: HTMLElement) {
     tr.append(el("th", undefined, r.model));
     (tr.lastChild as HTMLElement).setAttribute("scope", "row");
     tr.append(
-      el("td", "num", fmtTime(r.quito)),
+      el("td", "num", fmtTime(r.openrscad)),
       el("td", "num", fmtTime(r.cgal)),
       el("td", "num", fmtTime(r.mfld)),
-      el("td", "num strong", fmtX(r.cgal / r.quito)),
-      el("td", "num strong", fmtX(r.mfld / r.quito)),
+      el("td", "num strong", fmtX(r.cgal / r.openrscad)),
+      el("td", "num strong", fmtX(r.mfld / r.openrscad)),
     );
     tbody.append(tr);
   }

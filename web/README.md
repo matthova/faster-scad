@@ -1,4 +1,4 @@
-# Quito Playground (web)
+# OpenRSCAD Playground (web)
 
 Browser playground: CodeMirror 6 editor + live 3D preview. The engine (parser,
 evaluator, geometry kernel) is the Rust core compiled to wasm and run in a

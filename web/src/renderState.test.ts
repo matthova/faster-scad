@@ -26,7 +26,7 @@ function ok(patch: Partial<RenderResponse> = {}): RenderResponse {
     vertexCount: 8,
     volume: 1,
     area: 6,
-    version: "quito 0.7.1",
+    version: "openrscad 0.7.1",
     ...patch,
   });
 }
@@ -38,7 +38,7 @@ describe("renderState.reduce", () => {
     expect(next.status.message).toBe("12 triangles");
     expect(next.status.triangleCount).toBe(12);
     expect(next.status.volume).toBe(1);
-    expect(next.version).toBe("quito 0.7.1");
+    expect(next.version).toBe("openrscad 0.7.1");
     expect(next.renderRev).toBe(INITIAL_RENDER_STATE.renderRev + 1);
     expect(next.renderedSource).toBe("cube(1);");
     expect(next.status.preview).toBe(false);

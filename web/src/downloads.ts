@@ -7,15 +7,15 @@
  *  to the latest release. Keep asset names in sync with index.html's per-OS
  *  cards. */
 export const RELEASES_LATEST =
-  "https://github.com/matthova/faster-scad/releases/latest";
+  "https://github.com/matthova/openrscad/releases/latest";
 export const DL = `${RELEASES_LATEST}/download`;
 
 /** Stable release-asset filenames, per platform. */
 export const ASSETS = {
-  macArm: "Quito-macos-aarch64.dmg",
-  macIntel: "Quito-macos-x64.dmg",
-  windows: "Quito-windows-x64-setup.exe",
-  linux: "Quito-linux-x86_64.AppImage",
+  macArm: "OpenRSCAD-macos-aarch64.dmg",
+  macIntel: "OpenRSCAD-macos-x64.dmg",
+  windows: "OpenRSCAD-windows-x64-setup.exe",
+  linux: "OpenRSCAD-linux-x86_64.AppImage",
 } as const;
 
 export type Os = "mac" | "windows" | "linux" | "other";

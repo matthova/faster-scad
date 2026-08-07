@@ -1,0 +1,758 @@
+//! wasm-bindgen engine surface for the browser playground.
+//!
+//! Exposes a single `render(source)` entry point that runs the full pipeline
+//! (parse → eval → geometry) and returns mesh data as typed arrays plus
+//! console output and diagnostics. Geometry uses the pure-Rust Manifold kernel
+//! (the default on wasm).
+
+use std::cell::RefCell;
+use wasm_bindgen::prelude::*;
+
+thread_local! {
+    /// Persistent geometry cache across renders — makes warm edits incremental
+    /// (only subtrees whose structure changed are re-rendered). The worker is
+    /// single-threaded, so a thread-local is the whole story.
+    static CACHE: RefCell<openrscad_geom::GeomCache> = RefCell::new(openrscad_geom::GeomCache::new());
+}
+
+/// Bound on cached subtrees; past this the cache is reset to cap memory.
+const CACHE_CAP: usize = 8192;
+
+/// Initialize panic hook for readable errors in the browser console.
+#[wasm_bindgen(start)]
+pub fn start() {
+    console_error_panic_hook::set_once();
+}
+
+/// Drop the persistent geometry cache (e.g. when loading a new document).
+#[wasm_bindgen]
+pub fn clear_cache() {
+    CACHE.with(|c| c.borrow_mut().clear());
+}
+
+/// Engine version string.
+#[wasm_bindgen]
+pub fn version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+/// The result of rendering a `.scad` source string.
+///
+/// Mesh data is a non-indexed triangle soup with flat (per-face) normals:
+/// `positions` and `normals` both hold 9 floats per triangle.
+#[wasm_bindgen]
+pub struct RenderResult {
+    positions: Vec<f32>,
+    normals: Vec<f32>,
+    echo: String,
+    warnings: String,
+    error: Option<String>,
+    /// Recoverable geometry errors: newline-joined messages for CSG ops that
+    /// failed and were replaced by a fallback mesh (e.g. non-manifold operands).
+    /// Non-empty means the preview is degraded — a mesh is present but wrong
+    /// somewhere — and the UI should alert the user. Distinct from `error`
+    /// (a hard failure that yields no mesh).
+    geom_errors: String,
+    /// Structured diagnostics (JSON array) for inline editor squiggles.
+    diagnostics: String,
+    /// Preview color channel (only populated when the model uses `color`/`#`/`%`):
+    /// a concatenated triangle soup plus a JSON array of per-group ranges/colors.
+    preview_positions: Vec<f32>,
+    preview_normals: Vec<f32>,
+    groups: String,
+    /// Provenance channel for editor↔preview linking (2D and 3D alike): a
+    /// concatenated per-leaf triangle soup plus a JSON array of per-group
+    /// `{start,count,spans}` ranges. `spans` is the outermost→innermost stack of
+    /// `[start,end]` byte offsets into the source (an empty array when
+    /// unattributable). Empty only for models with no geometry.
+    provenance_positions: Vec<f32>,
+    provenance_normals: Vec<f32>,
+    provenance: String,
+    /// `$vp*` viewport variables as JSON (only when the source references `$vp`).
+    viewport: String,
+    triangle_count: u32,
+    vertex_count: u32,
+    volume: f64,
+    area: f64,
+    is_2d: bool,
+}
+
+#[wasm_bindgen]
+impl RenderResult {
+    /// Triangle-soup vertex positions (9 f32 per triangle) as a `Float32Array`.
+    #[wasm_bindgen(getter)]
+    pub fn positions(&self) -> Vec<f32> {
+        self.positions.clone()
+    }
+
+    /// Per-face normals (9 f32 per triangle) as a `Float32Array`.
+    #[wasm_bindgen(getter)]
+    pub fn normals(&self) -> Vec<f32> {
+        self.normals.clone()
+    }
+
+    /// Newline-joined `ECHO:` output.
+    #[wasm_bindgen(getter)]
+    pub fn echo(&self) -> String {
+        self.echo.clone()
+    }
+
+    /// Newline-joined warnings.
+    #[wasm_bindgen(getter)]
+    pub fn warnings(&self) -> String {
+        self.warnings.clone()
+    }
+
+    /// Error message, or empty string if the render succeeded.
+    #[wasm_bindgen(getter)]
+    pub fn error(&self) -> String {
+        self.error.clone().unwrap_or_default()
+    }
+
+    /// Whether the render succeeded (no error).
+    #[wasm_bindgen(getter)]
+    pub fn ok(&self) -> bool {
+        self.error.is_none()
+    }
+
+    /// Newline-joined recoverable geometry errors (degraded render), or empty
+    /// when the geometry is exact. See the field docs on `geom_errors`.
+    #[wasm_bindgen(getter)]
+    pub fn geom_errors(&self) -> String {
+        self.geom_errors.clone()
+    }
+
+    /// Structured diagnostics as a JSON array (`[{severity,message,start,end}]`),
+    /// where start/end are byte offsets into the source, or -1 when unknown.
+    #[wasm_bindgen(getter)]
+    pub fn diagnostics(&self) -> String {
+        self.diagnostics.clone()
+    }
+
+    /// Preview triangle soup (concatenated colored groups); empty when the model
+    /// uses no color/`#`/`%` (the viewer then uses `positions`).
+    #[wasm_bindgen(getter)]
+    pub fn preview_positions(&self) -> Vec<f32> {
+        self.preview_positions.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn preview_normals(&self) -> Vec<f32> {
+        self.preview_normals.clone()
+    }
+
+    /// Per-group ranges/colors as JSON (`[{start,count,color,mode}]`); empty `[]`
+    /// when the model uses no display attributes.
+    #[wasm_bindgen(getter)]
+    pub fn groups(&self) -> String {
+        self.groups.clone()
+    }
+
+    /// Provenance triangle soup (concatenated per-statement groups); empty only
+    /// for models with no geometry.
+    #[wasm_bindgen(getter)]
+    pub fn provenance_positions(&self) -> Vec<f32> {
+        self.provenance_positions.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn provenance_normals(&self) -> Vec<f32> {
+        self.provenance_normals.clone()
+    }
+
+    /// Per-group provenance ranges/span-stacks as JSON (`[{start,count,spans}]`);
+    /// empty when the model has no pickable geometry.
+    #[wasm_bindgen(getter)]
+    pub fn provenance(&self) -> String {
+        self.provenance.clone()
+    }
+
+    /// `$vp*` viewport variables as JSON, or empty when the source has no `$vp`.
+    #[wasm_bindgen(getter)]
+    pub fn viewport(&self) -> String {
+        self.viewport.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn triangle_count(&self) -> u32 {
+        self.triangle_count
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn vertex_count(&self) -> u32 {
+        self.vertex_count
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn volume(&self) -> f64 {
+        self.volume
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn area(&self) -> f64 {
+        self.area
+    }
+
+    /// Whether the model is a 2D object (exportable to DXF/SVG) vs a 3D solid.
+    #[wasm_bindgen(getter)]
+    pub fn is_2d(&self) -> bool {
+        self.is_2d
+    }
+}
+
+impl RenderResult {
+    fn from_error(msg: String, echo: String, warnings: String, diagnostics: String) -> Self {
+        RenderResult {
+            positions: Vec::new(),
+            normals: Vec::new(),
+            echo,
+            warnings,
+            error: Some(msg),
+            geom_errors: String::new(),
+            diagnostics,
+            preview_positions: Vec::new(),
+            preview_normals: Vec::new(),
+            groups: String::new(),
+            provenance_positions: Vec::new(),
+            provenance_normals: Vec::new(),
+            provenance: String::new(),
+            viewport: String::new(),
+            triangle_count: 0,
+            vertex_count: 0,
+            volume: 0.0,
+            area: 0.0,
+            is_2d: false,
+        }
+    }
+}
+
+/// Render a 2D model and serialize it to DXF or SVG text. Returns an empty
+/// string if the model isn't 2D or fails to evaluate (the caller checks
+/// `RenderResult.is_2d` first). `format` is "dxf" or "svg".
+#[wasm_bindgen]
+pub fn export_2d(
+    source: &str,
+    names: Vec<String>,
+    values: Vec<String>,
+    file_names: Vec<String>,
+    file_contents: Vec<String>,
+    format: &str,
+) -> String {
+    let Ok(program) = openrscad_syntax::parse(source) else {
+        return String::new();
+    };
+    let mut overrides = Vec::new();
+    for (name, val) in names.iter().zip(values.iter()) {
+        if let Some(pv) = openrscad_syntax::customizer::parse_value(val) {
+            overrides.push((name.clone(), openrscad_eval::value_from_param(&pv)));
+        }
+    }
+    let resolver = MapResolver {
+        files: file_names.into_iter().zip(file_contents).collect(),
+    };
+    let Ok(eval) = openrscad_eval::eval_program_with_params(&program, &resolver, ".", &overrides)
+    else {
+        return String::new();
+    };
+    match openrscad_geom::render_contours(&eval.node) {
+        Some(contours) if format == "dxf" => openrscad_geom::export_dxf(&contours),
+        Some(contours) if format == "svg" => openrscad_geom::export_svg(&contours),
+        _ => String::new(),
+    }
+}
+
+/// The customizer parameter schema for a source string, as a JSON string
+/// (`{"params":[…]}`). The playground renders a control panel from this.
+#[wasm_bindgen]
+pub fn parameters(source: &str) -> String {
+    openrscad_syntax::customizer::extract(source).to_json()
+}
+
+/// Run the full pipeline on a source string.
+#[wasm_bindgen]
+pub fn render(source: &str) -> RenderResult {
+    render_with_params(source, Vec::new(), Vec::new())
+}
+
+/// Like [`render`], but with customizer overrides supplied as parallel arrays:
+/// `names[i]` is a top-level parameter and `values[i]` its new value as a
+/// literal string (`"30"`, `"true"`, `"\"hi\""`, `"[1,2,3]"`).
+#[wasm_bindgen]
+pub fn render_with_params(source: &str, names: Vec<String>, values: Vec<String>) -> RenderResult {
+    render_with_files(source, names, values, Vec::new(), Vec::new())
+}
+
+/// A `FileResolver` over an in-memory map of `path -> source`, for resolving
+/// `include`/`use` in the browser (extra playground files or a bundled library).
+struct MapResolver {
+    files: std::collections::HashMap<String, String>,
+}
+
+impl MapResolver {
+    /// Resolve a path to a stored key: as written, then normalized against the
+    /// including dir.
+    fn resolve_key(&self, path: &str, from_dir: &str) -> Option<String> {
+        if self.files.contains_key(path) {
+            return Some(path.to_string());
+        }
+        let joined = if from_dir.is_empty() || from_dir == "." {
+            path.to_string()
+        } else {
+            format!("{from_dir}/{path}")
+        };
+        self.files.contains_key(&joined).then_some(joined)
+    }
+}
+
+impl openrscad_eval::FileResolver for MapResolver {
+    fn load(&self, path: &str, from_dir: &str) -> Option<openrscad_eval::LoadedFile> {
+        let key = self.resolve_key(path, from_dir)?;
+        let source = self.files.get(&key)?.clone();
+        let dir = key
+            .rsplit_once('/')
+            .map(|(d, _)| d.to_string())
+            .unwrap_or_default();
+        Some(openrscad_eval::LoadedFile {
+            key: key.clone(),
+            source,
+            dir,
+        })
+    }
+
+    /// Bytes for `import()` of a text-based profile (DXF/SVG) held in a tab.
+    /// Binary meshes can't be carried as text tabs, so only text files resolve.
+    fn load_bytes(&self, path: &str, from_dir: &str) -> Option<Vec<u8>> {
+        let key = self.resolve_key(path, from_dir)?;
+        self.files.get(&key).map(|s| s.clone().into_bytes())
+    }
+}
+
+/// Like [`render_with_params`], but `include`/`use` resolve against an in-memory
+/// set of files (`file_names[i]` → `file_contents[i]`) — the playground's other
+/// files and/or a bundled library.
+#[wasm_bindgen]
+pub fn render_with_files(
+    source: &str,
+    names: Vec<String>,
+    values: Vec<String>,
+    file_names: Vec<String>,
+    file_contents: Vec<String>,
+) -> RenderResult {
+    render_impl(source, names, values, file_names, file_contents, false)
+}
+
+/// Like [`render_with_files`], but renders the fast, **non-watertight** preview
+/// (see `openrscad_geom::render_preview_cached_diag`): unions are concatenated rather
+/// than run through the CSG kernel. Suitable for opaque on-screen display only —
+/// stats and export still use the exact path. Differences/intersections/hulls
+/// still resolve exactly, so holes and clips look correct.
+#[wasm_bindgen]
+pub fn render_preview_with_files(
+    source: &str,
+    names: Vec<String>,
+    values: Vec<String>,
+    file_names: Vec<String>,
+    file_contents: Vec<String>,
+) -> RenderResult {
+    render_impl(source, names, values, file_names, file_contents, true)
+}
+
+fn render_impl(
+    source: &str,
+    names: Vec<String>,
+    values: Vec<String>,
+    file_names: Vec<String>,
+    file_contents: Vec<String>,
+    preview: bool,
+) -> RenderResult {
+    // Parse.
+    let program = match openrscad_syntax::parse(source) {
+        Ok(p) => p,
+        Err(e) => {
+            let msg = format!("parse error: {}", e.message);
+            let diag = openrscad_eval::parse_error_diagnostic(msg.clone(), e.span);
+            return RenderResult::from_error(
+                msg,
+                String::new(),
+                String::new(),
+                openrscad_eval::diagnostics_json(Some(&diag), &[]),
+            );
+        }
+    };
+
+    // Build overrides from the parallel arrays.
+    let mut overrides = Vec::new();
+    for (name, val) in names.iter().zip(values.iter()) {
+        if let Some(pv) = openrscad_syntax::customizer::parse_value(val) {
+            overrides.push((name.clone(), openrscad_eval::value_from_param(&pv)));
+        }
+    }
+
+    // Build the in-memory file resolver from the parallel arrays.
+    let resolver = MapResolver {
+        files: file_names.into_iter().zip(file_contents).collect(),
+    };
+
+    // Evaluate.
+    let eval = match openrscad_eval::eval_program_with_params(&program, &resolver, ".", &overrides)
+    {
+        Ok(o) => o,
+        Err(e) => {
+            let diag = openrscad_eval::eval_error_diagnostic(&e);
+            return RenderResult::from_error(
+                format!("evaluation error: {}", e.message),
+                String::new(),
+                String::new(),
+                openrscad_eval::diagnostics_json(Some(&diag), &[]),
+            );
+        }
+    };
+    let echo = eval.echoes.join("\n");
+    let mut warnings = eval
+        .warnings
+        .iter()
+        .map(|w| w.message.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let diagnostics = openrscad_eval::diagnostics_json(None, &eval.warnings);
+
+    // Render geometry (pure-Rust Manifold on wasm), reusing the persistent cache
+    // so unchanged subtrees survive across edits.
+    let kernel = openrscad_geom::RustManifoldKernel::new();
+    let mesh = CACHE.with(|c| {
+        let mut cache = c.borrow_mut();
+        if cache.len() > CACHE_CAP {
+            cache.clear();
+        }
+        if preview {
+            // Fast path: skip the union kernel; result is not watertight.
+            openrscad_geom::render_preview_cached_diag(&eval.node, &kernel, &mut cache)
+        } else {
+            openrscad_geom::render_cached_diag(&eval.node, &kernel, &mut cache)
+        }
+    });
+    let (mesh, diag) = match mesh {
+        Ok(v) => v,
+        Err(e) => {
+            let ge = openrscad_eval::EvalError::new(format!("geometry error: {e}"));
+            let diag = openrscad_eval::eval_error_diagnostic(&ge);
+            return RenderResult::from_error(
+                format!("geometry error: {e}"),
+                echo,
+                warnings,
+                openrscad_eval::diagnostics_json(Some(&diag), &eval.warnings),
+            );
+        }
+    };
+    // Fold non-fatal geometry warnings (e.g. non-convex minkowski) into the
+    // console warnings stream.
+    for w in diag.warnings {
+        if !warnings.is_empty() {
+            warnings.push('\n');
+        }
+        warnings.push_str(&w);
+    }
+    // Recoverable geometry errors (a CSG op failed and the mesh is a fallback)
+    // go on their own channel so the UI can raise a distinct, non-blocking alert
+    // while still showing the degraded model.
+    let geom_errors = diag.errors.join("\n");
+
+    let (positions, normals) = mesh.to_triangle_soup_f32();
+
+    // Preview color channel — only for models that actually use color/`#`/`%`, so
+    // plain models keep the fast single-mesh path (and the warm-edit budget).
+    let (preview_positions, preview_normals, groups) =
+        if openrscad_geom::has_display_attrs(&eval.node) {
+            let r = CACHE.with(|c| {
+                let mut cache = c.borrow_mut();
+                openrscad_geom::render_groups_cached(&eval.node, &kernel, &mut cache)
+            });
+            match r {
+                Ok(groups) => openrscad_geom::preview_channel(&groups),
+                Err(_) => (Vec::new(), Vec::new(), String::new()),
+            }
+        } else {
+            (Vec::new(), Vec::new(), String::new())
+        };
+
+    // Provenance channel for editor↔preview linking — any model with geometry
+    // (2D flat meshes and 3D solids alike). Shares the cache with the fused
+    // render above, so opaque leaf meshes aren't recomputed just to tag them
+    // with a span.
+    let (provenance_positions, provenance_normals, provenance) = if !mesh.tris.is_empty() {
+        let r = CACHE.with(|c| {
+            let mut cache = c.borrow_mut();
+            openrscad_geom::render_provenance_cached(&eval.node, &kernel, &mut cache)
+        });
+        match r {
+            Ok(groups) => openrscad_geom::provenance_channel(&groups),
+            Err(_) => (Vec::new(), Vec::new(), String::new()),
+        }
+    } else {
+        (Vec::new(), Vec::new(), String::new())
+    };
+
+    // Viewport channel only for models that reference `$vp` (drives the camera).
+    let viewport = if source.contains("$vp") {
+        openrscad_eval::viewport_json(&eval.viewport)
+    } else {
+        String::new()
+    };
+
+    RenderResult {
+        triangle_count: mesh.tris.len() as u32,
+        vertex_count: mesh.verts.len() as u32,
+        volume: mesh.volume(),
+        area: mesh.surface_area(),
+        is_2d: openrscad_geom::is_2d(&eval.node),
+        positions,
+        normals,
+        echo,
+        warnings,
+        error: None,
+        geom_errors,
+        diagnostics,
+        preview_positions,
+        preview_normals,
+        groups,
+        provenance_positions,
+        provenance_normals,
+        provenance,
+        viewport,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Each test runs on the host under `cargo test` (native Manifold kernel) and,
+    // via `wasm-pack test`, in a real browser (the pure-Rust boolmesh kernel the
+    // playground actually executes). The paired `cfg_attr`s below pick `#[test]`
+    // on the host and `#[wasm_bindgen_test]` on wasm, so one source covers both.
+    #[cfg(target_arch = "wasm32")]
+    use wasm_bindgen_test::wasm_bindgen_test;
+    #[cfg(target_arch = "wasm32")]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+    fn color_populates_preview_channel() {
+        // A plain model: no preview channel (viewer uses `positions`).
+        let plain = render_with_files("cube(2);", vec![], vec![], vec![], vec![]);
+        assert!(plain.ok());
+        assert_eq!(plain.groups(), "");
+        assert!(plain.preview_positions().is_empty());
+
+        // A colored model: preview soup + groups JSON populated.
+        let colored = render_with_files(
+            "color(\"red\") cube(2); color([0,0,1]) translate([5,0,0]) sphere(2);",
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        );
+        assert!(colored.ok());
+        assert!(!colored.preview_positions().is_empty());
+        let g = colored.groups();
+        assert!(g.contains("\"mode\":\"solid\""), "{g}");
+        assert!(g.contains("\"color\":[1,0,0,1]"), "{g}");
+    }
+
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+    fn preview_render_skips_the_union() {
+        // Two overlapping cubes. The exact render unions them (re-meshing the
+        // seam); the preview render concatenates (12 + 12 triangles, no boolean).
+        let src = "cube(2); translate([1,0,0]) cube(2);";
+        let exact = render_with_files(src, vec![], vec![], vec![], vec![]);
+        let preview = render_preview_with_files(src, vec![], vec![], vec![], vec![]);
+        assert!(exact.ok() && preview.ok());
+        assert_eq!(
+            preview.triangle_count(),
+            24,
+            "preview should not run the union"
+        );
+        assert_ne!(
+            preview.triangle_count(),
+            exact.triangle_count(),
+            "the exact union re-meshes the overlap; preview does not"
+        );
+    }
+
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+    fn provenance_channel_populated_for_3d() {
+        // A 3D model gets a provenance channel with per-statement spans.
+        let r = render_with_files(
+            "cube(2); translate([5,0,0]) sphere(2);",
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        );
+        assert!(r.ok());
+        assert!(!r.provenance_positions().is_empty());
+        let p = r.provenance();
+        assert!(p.contains("\"spans\":[["), "{p}");
+    }
+
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+    fn provenance_channel_populated_for_2d() {
+        // A 2D model is pickable/highlightable just like 3D: the flat mesh gets a
+        // provenance channel with per-statement spans.
+        let r = render_with_files("square(4);", vec![], vec![], vec![], vec![]);
+        assert!(r.ok());
+        assert!(r.is_2d());
+        assert!(!r.provenance_positions().is_empty());
+        let p = r.provenance();
+        assert!(p.contains("\"spans\":[["), "{p}");
+    }
+
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+    fn non_manifold_boolean_degrades_and_surfaces_geom_errors() {
+        // Unioning a cube with a lone open triangle (non-manifold) can't be done
+        // by the kernel. The render must not fail outright: a (degraded) mesh is
+        // still returned and the failure is reported on the geom_errors channel.
+        let src = "union() { cube(10); \
+                   polyhedron(points=[[0,0,0],[1,0,0],[0,1,0]], faces=[[0,1,2]]); }";
+        let r = render_with_files(src, vec![], vec![], vec![], vec![]);
+        assert!(
+            r.ok(),
+            "degraded render should still succeed: {}",
+            r.error()
+        );
+        assert!(r.triangle_count() > 0, "expected a fallback mesh");
+        assert!(
+            r.geom_errors().contains("union"),
+            "geom_errors: {:?}",
+            r.geom_errors()
+        );
+    }
+
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+    fn diagnostics_surface_parse_eval_and_warnings() {
+        // Parse error → an error diagnostic with a byte span.
+        let r = render_with_files("cube(", vec![], vec![], vec![], vec![]);
+        assert!(!r.ok());
+        assert!(
+            r.diagnostics().contains("\"severity\":\"error\""),
+            "{}",
+            r.diagnostics()
+        );
+
+        // Eval error (assert) → an error diagnostic.
+        let r = render_with_files("assert(false);", vec![], vec![], vec![], vec![]);
+        assert!(!r.ok());
+        assert!(
+            r.diagnostics().contains("\"severity\":\"error\""),
+            "{}",
+            r.diagnostics()
+        );
+
+        // Unknown module → a warning diagnostic; the render still succeeds.
+        let r = render_with_files("nope();", vec![], vec![], vec![], vec![]);
+        assert!(r.ok());
+        let d = r.diagnostics();
+        assert!(d.contains("\"severity\":\"warning\""), "{d}");
+        assert!(d.contains("nope"), "{d}");
+    }
+
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+    fn schema_json_shapes() {
+        let src = "\
+/* [Box] */
+// the width
+width = 10; // [1:100]
+mode = 1;   // [0:Off, 1:On]
+flag = true;
+name = \"hi\"; // 8
+v = [1, 2, 3];
+";
+        let json = openrscad_syntax::customizer::extract(src).to_json();
+        // Spot-check the salient pieces (order preserved).
+        assert!(json.contains(r#""name":"width""#));
+        assert!(json.contains(r#""group":"Box""#));
+        assert!(json.contains(r#""description":"the width""#));
+        assert!(json.contains(r#""kind":"slider","min":1,"max":100,"step":null"#));
+        assert!(json.contains(r#""kind":"dropdown","options":[{"value":0,"label":"Off"}"#));
+        assert!(json.contains(
+            r#""name":"flag","group":"Box","description":null,"type":"bool","value":true"#
+        ));
+        assert!(json.contains(r#""kind":"text","maxLength":8"#));
+        assert!(json
+            .contains(r#""type":"vector","value":[1,2,3],"control":{"kind":"vector","length":3}"#));
+    }
+
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+    fn render_applies_overrides() {
+        // width=10 default → 10*10*10; override width=4 → 4*10*10 = 400.
+        let src = "width = 10;\ncube([width, 10, 10]);";
+        let base = render_with_params(src, vec![], vec![]);
+        assert!(base.ok());
+        assert!(
+            (base.volume() - 1000.0).abs() < 1e-6,
+            "vol {}",
+            base.volume()
+        );
+
+        let overridden = render_with_params(src, vec!["width".to_string()], vec!["4".to_string()]);
+        assert!(overridden.ok());
+        assert!(
+            (overridden.volume() - 400.0).abs() < 1e-6,
+            "vol {}",
+            overridden.volume()
+        );
+    }
+
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+    fn render_resolves_files() {
+        // `use` a helper file from the in-memory resolver.
+        let main = "use <lib.scad>\ncube([side(), side(), side()]);";
+        let lib = "function side() = 3;";
+        let r = render_with_files(
+            main,
+            vec![],
+            vec![],
+            vec!["lib.scad".to_string()],
+            vec![lib.to_string()],
+        );
+        assert!(r.ok(), "err: {}", r.error());
+        assert!((r.volume() - 27.0).abs() < 1e-6, "vol {}", r.volume());
+    }
+
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+    fn imports_dxf_from_a_tab() {
+        // A DXF profile held in a tab is imported via load_bytes and extruded.
+        let outer = vec![[0.0, 0.0], [10.0, 0.0], [10.0, 20.0], [0.0, 20.0]];
+        let dxf = openrscad_geom::export_dxf(&[outer]);
+        let r = render_with_files(
+            "linear_extrude(3) import(\"p.dxf\");",
+            vec![],
+            vec![],
+            vec!["p.dxf".to_string()],
+            vec![dxf],
+        );
+        assert!(r.ok(), "err: {}", r.error());
+        assert!((r.volume() - 600.0).abs() < 1e-3, "vol {}", r.volume()); // 10*20*3
+    }
+
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+    fn export_2d_produces_dxf_and_svg() {
+        let src = "square([10, 20]);";
+        let dxf = export_2d(src, vec![], vec![], vec![], vec![], "dxf");
+        assert!(dxf.contains("LWPOLYLINE"), "dxf: {dxf}");
+        let svg = export_2d(src, vec![], vec![], vec![], vec![], "svg");
+        assert!(svg.contains("<svg") && svg.contains("<path"), "svg: {svg}");
+        // A 3D model yields no 2D export.
+        assert!(export_2d("cube(1);", vec![], vec![], vec![], vec![], "dxf").is_empty());
+    }
+}

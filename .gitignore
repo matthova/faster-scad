@@ -11,7 +11,7 @@ node_modules/
 dist/
 # wasm-pack build output (regenerate with `npm run build:wasm`)
 web/engine/
-# quito-engine npm package build output (regenerate with `npm run build` in packages/npm)
+# openrscad-engine npm package build output (regenerate with `npm run build` in packages/npm)
 packages/npm/pkg/
 packages/npm/*.tgz
 
