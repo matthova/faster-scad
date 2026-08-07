@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.1
+
+### Patch Changes
+
+- [#84](https://github.com/matthova/openrscad/pull/84) [`1c0b6bb`](https://github.com/matthova/openrscad/commit/1c0b6bb4818b19cafaf51a80d6712b655640bdde) Thanks [@matthova](https://github.com/matthova)! - label the nav-cube gnomon axes with X/Y/Z at each stub's tip (widget slightly enlarged so the labels aren't clipped)
+
+- [#84](https://github.com/matthova/openrscad/pull/84) [`1c0b6bb`](https://github.com/matthova/openrscad/commit/1c0b6bb4818b19cafaf51a80d6712b655640bdde) Thanks [@matthova](https://github.com/matthova)! - shift the accent from amber to a pure yellow (chrome, viewer mesh, favicons) — no orange tone
+
 ## 0.9.0
 
 ### Minor Changes

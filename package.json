@@ -1,6 +1,6 @@
 {
   "name": "openrscad-release-root",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "private": true,
   "description": "Private root that drives changesets-based versioning for the whole repo. Never published; carries the canonical version that scripts/sync-versions.mjs propagates to Cargo, Tauri, and the npm package.",
   "scripts": {
