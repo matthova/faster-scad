@@ -1,6 +1,6 @@
 {
   "name": "openrscad-desktop",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "private": true,
   "description": "OpenRSCAD desktop app (Tauri v2) — native OpenSCAD-compatible renderer.",
   "scripts": {
