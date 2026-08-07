@@ -7,13 +7,7 @@
 // pointing at the releases page, so a JS failure just means a slightly less
 // tailored (but still functional) download.
 import "./about.css";
-
-/** GitHub release assets get a stable, version-less alias (see
- *  .github/workflows/release.yml → `stable-name`), so these URLs always resolve
- *  to the latest release. Keep in sync with about.html's per-OS cards. */
-const RELEASES_LATEST =
-  "https://github.com/matthova/faster-scad/releases/latest";
-const DL = `${RELEASES_LATEST}/download`;
+import { ASSETS, DL, detectOs, isAppleSilicon } from "./downloads";
 
 type Target = {
   /** Filename of the stable release alias, or null for "no desktop build". */
@@ -25,22 +19,22 @@ type Target = {
 };
 
 const MAC_ARM: Target = {
-  asset: "Quito-macos-aarch64.dmg",
+  asset: ASSETS.macArm,
   label: "Download for macOS",
   note: "Apple Silicon · .dmg — Intel & other options below",
 };
 const MAC_INTEL: Target = {
-  asset: "Quito-macos-x64.dmg",
+  asset: ASSETS.macIntel,
   label: "Download for macOS",
   note: "Intel · .dmg — Apple Silicon & other options below",
 };
 const WINDOWS: Target = {
-  asset: "Quito-windows-x64-setup.exe",
+  asset: ASSETS.windows,
   label: "Download for Windows",
   note: "x64 installer — other options below",
 };
 const LINUX: Target = {
-  asset: "Quito-linux-x86_64.AppImage",
+  asset: ASSETS.linux,
   label: "Download for Linux",
   note: "x86_64 · AppImage — .deb / .rpm below",
 };
@@ -51,46 +45,6 @@ const OTHER: Target = {
   label: "Open the playground",
   note: "The desktop app is available for macOS, Windows, and Linux.",
 };
-
-/** Best-effort OS classification from the UA string. Arch (Apple Silicon vs
- *  Intel) is resolved separately, asynchronously, since it isn't in the UA. */
-function detectOs(): "mac" | "windows" | "linux" | "other" {
-  const ua = navigator.userAgent;
-  // iPadOS reports as "Macintosh"; treat any touch-primary device as mobile so
-  // we don't offer a desktop .dmg to a tablet.
-  const touch = navigator.maxTouchPoints > 1;
-  if (/Android/i.test(ua)) return "other";
-  if (/iPhone|iPad|iPod/i.test(ua)) return "other";
-  if (/Mac/i.test(ua)) return touch ? "other" : "mac";
-  if (/Win/i.test(ua)) return "windows";
-  if (/Linux|X11/i.test(ua)) return "linux";
-  return "other";
-}
-
-/** True on Apple Silicon when the browser exposes it (Chromium's UA-CH). Safari
- *  and Firefox don't report arch on macOS, so we default to Apple Silicon —
- *  it's the common case now, and Intel stays one click away in the OS grid. */
-async function isAppleSilicon(): Promise<boolean> {
-  const uaData = (
-    navigator as Navigator & {
-      userAgentData?: {
-        getHighEntropyValues: (
-          hints: string[],
-        ) => Promise<{ architecture?: string }>;
-      };
-    }
-  ).userAgentData;
-  if (!uaData?.getHighEntropyValues) return true; // unknown → assume ARM
-  try {
-    const { architecture } = await uaData.getHighEntropyValues([
-      "architecture",
-    ]);
-    // Chromium reports "arm" for Apple Silicon, "x86" for Intel.
-    return architecture ? architecture !== "x86" : true;
-  } catch {
-    return true;
-  }
-}
 
 async function pickTarget(): Promise<Target> {
   switch (detectOs()) {
