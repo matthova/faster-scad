@@ -1282,15 +1282,16 @@ impl Interp<'_> {
         let m = self.bind_named(&["text", "size", "font"], args)?;
         let text = m.get("text").map(Value::to_str).unwrap_or_default();
         let size = m.get("size").and_then(Value::as_number).unwrap_or(10.0);
-        // Only the bundled Liberation Sans Regular is available; warn (don't
-        // silently substitute) when a different `font=` is requested.
-        if let Some(Value::Str(font)) = m.get("font") {
-            let family = font.split(':').next().unwrap_or("").trim();
-            if !family.is_empty() && !family.eq_ignore_ascii_case("liberation sans") {
-                self.warn(format!(
-                    "text(): font {font:?} not available; using the bundled Liberation Sans"
-                ));
-            }
+        // Resolve `font` against the bundled Liberation family (Sans/Serif/Mono ×
+        // Regular/Bold/Italic/BoldItalic — the exact files OpenSCAD ships). An
+        // unknown *family* falls back to Liberation Sans with a warning; known
+        // families and their styles render byte-for-byte like OpenSCAD.
+        let font = m.get("font").map(Value::to_str).unwrap_or_default();
+        let (face, family_known) = text::resolve_font(&font);
+        if !font.is_empty() && !family_known {
+            self.warn(format!(
+                "text(): font {font:?} not available; using the bundled Liberation Sans"
+            ));
         }
         let sopt = |k: &str, d: &str| m.get(k).map(Value::to_str).unwrap_or_else(|| d.to_string());
         let halign = sopt("halign", "left");
@@ -1307,6 +1308,7 @@ impl Interp<'_> {
 
         let (points, paths) = text::text_contours(&text::TextOpts {
             text: &text,
+            face,
             size,
             halign: &halign,
             valign: &valign,
@@ -3774,11 +3776,18 @@ mod tests {
             .expect("font warning");
         let span = w.span.clone().expect("warning should carry a span");
         assert_eq!(&src[span], src);
-        // The bundled family (any case / with a style suffix) does not warn.
-        let out =
-            eval_program(&parse("text(\"A\", font=\"Liberation Sans:style=Regular\");").unwrap())
-                .unwrap();
-        assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+        // Any bundled family/style (Sans/Serif/Mono × the four styles) renders
+        // without warning.
+        for font in [
+            "Liberation Sans:style=Regular",
+            "Liberation Sans:style=Bold",
+            "Liberation Serif",
+            "Liberation Mono:style=Bold Italic",
+        ] {
+            let src = format!("text(\"A\", font=\"{font}\");");
+            let out = eval_program(&parse(&src).unwrap()).unwrap();
+            assert!(out.warnings.is_empty(), "{font}: {:?}", out.warnings);
+        }
     }
 
     #[test]
