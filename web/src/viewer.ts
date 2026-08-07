@@ -1238,7 +1238,7 @@ export class Viewer {
    *  that view. No-op if there's no parent element to anchor the overlay to. */
   private setupViewCube(parent: HTMLElement | null) {
     if (!parent) return;
-    const SIZE = 92;
+    const SIZE = 112;
     const canvas = document.createElement("canvas");
     Object.assign(canvas.style, {
       position: "absolute",
@@ -1314,6 +1314,22 @@ export class Viewer {
     gnomon([1, 0, 0], viewerConst.axisX);
     gnomon([0, 1, 0], viewerConst.axisY);
     gnomon([0, 0, 1], viewerConst.axisZ);
+
+    // X/Y/Z labels at each stub's tip, in the matching axis color. Sprites face
+    // the camera and are depth-tested against the cube, so a label on an axis
+    // pointing away is occluded along with its stub.
+    const gnomonLabel = (
+      text: string,
+      dir: [number, number, number],
+      color: number,
+    ) => {
+      const s = this.makeTickLabel(text, hex(color), 0.28);
+      s.position.set(dir[0] * 1.1, dir[1] * 1.1, dir[2] * 1.1);
+      scene.add(s);
+    };
+    gnomonLabel("X", [1, 0, 0], viewerConst.axisX);
+    gnomonLabel("Y", [0, 1, 0], viewerConst.axisY);
+    gnomonLabel("Z", [0, 0, 1], viewerConst.axisZ);
 
     this.cubeRenderer = renderer;
     this.cubeScene = scene;
@@ -1555,7 +1571,7 @@ export class Viewer {
     if (!this.cubeRenderer || !this.cubeCamera || !this.cubeScene) return;
     const dir = this.camera.position.clone().sub(this.controls.target);
     if (dir.lengthSq() === 0) return;
-    this.cubeCamera.position.copy(dir.normalize().multiplyScalar(3.4));
+    this.cubeCamera.position.copy(dir.normalize().multiplyScalar(4.4));
     this.cubeCamera.up.copy(this.camera.up);
     this.cubeCamera.lookAt(0, 0, 0);
     this.cubeRenderer.render(this.cubeScene, this.cubeCamera);
