@@ -117,6 +117,12 @@ const TAURI = isTauri();
 
 const GITHUB_URL = "https://github.com/matthova/faster-scad";
 
+// The marketing/download page (about.html), served at /faster-scad/about. A
+// relative URL so it resolves under the deployed subpath. The browser callout
+// and the Help ▾ menu open it; it auto-detects the OS and offers a download for
+// every platform (see about.html / src/about.ts).
+const ABOUT_URL = "about";
+
 // Base URL for bundled libraries (public/lib/…), resolved against the page.
 const LIB_BASE = new URL("lib/", document.baseURI).href;
 
@@ -451,6 +457,12 @@ export function App() {
   const [consoleFilter, , setConsoleFilter] = usePref(
     "consoleFilter",
     loadPrefs().consoleFilter,
+  );
+  // "Get the desktop app" callout (browser only), dismissible and sticky via
+  // prefs so it doesn't reappear once waved off.
+  const [desktopCalloutDismissed, , setDesktopCalloutDismissed] = usePref(
+    "desktopCalloutDismissed",
+    loadPrefs().desktopCalloutDismissed,
   );
   // Narrow-screen pane selection (≤1023px): the editor and viewer become a
   // Code⎪Model segmented switch instead of side-by-side. "model" first — the
@@ -2340,6 +2352,11 @@ export function App() {
                 {t === "auto" ? " (follow OS)" : ""}
               </button>
             ))}
+            {!TAURI && (
+              <PopoverAction onClick={() => openExternal(ABOUT_URL)}>
+                About &amp; downloads ↗
+              </PopoverAction>
+            )}
             <PopoverAction onClick={() => openExternal(GITHUB_URL)}>
               View source on GitHub ↗
             </PopoverAction>
@@ -2430,6 +2447,32 @@ export function App() {
               <button
                 className="update-dismiss"
                 onClick={() => setRecovering(false)}
+                aria-label="Dismiss"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!TAURI && !desktopCalloutDismissed && (
+        <div className="update-banner" role="status">
+          <div className="update-banner-row">
+            <span className="update-banner-msg">
+              Get the Quito desktop app for native-speed rendering and local
+              file access.
+            </span>
+            <div className="update-banner-actions">
+              <button
+                className="update-primary"
+                onClick={() => void openExternal(ABOUT_URL)}
+              >
+                Download
+              </button>
+              <button
+                className="update-dismiss"
+                onClick={() => setDesktopCalloutDismissed(true)}
                 aria-label="Dismiss"
               >
                 ✕

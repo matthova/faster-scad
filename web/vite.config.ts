@@ -40,6 +40,19 @@ export default defineConfig({
     }),
   ],
   base: "./",
+  build: {
+    rollupOptions: {
+      // Multi-page: the playground (index.html) plus the standalone marketing
+      // page. about.html emits to dist/about.html, which GitHub Pages serves at
+      // /faster-scad/about (extensionless). Kept at the root — not nested — so
+      // its relative asset URLs resolve against /faster-scad/ with no trailing-
+      // slash ambiguity.
+      input: {
+        main: "index.html",
+        about: "about.html",
+      },
+    },
+  },
   worker: {
     format: "es",
   },

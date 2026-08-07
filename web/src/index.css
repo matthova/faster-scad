@@ -1399,7 +1399,9 @@ button.console-line.clickable:hover {
 }
 .update-banner-actions .update-primary {
   border-color: var(--accent);
-  color: var(--accent);
+  /* accent-strong is the text/border role of the brand amber, darkened to clear
+     AA (4.5:1) on the light raised surface where bare --accent is illegible. */
+  color: var(--accent-strong);
 }
 .update-banner-actions .update-link {
   background: none;

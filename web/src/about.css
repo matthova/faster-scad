@@ -1,0 +1,602 @@
+/* Marketing page (about.html) styles. Standalone — it does NOT import the app's
+   index.css, so the ~35 KB of playground chrome never loads here. The design
+   tokens below mirror the app's (web/src/index.css :root blocks) so light/dark
+   match; if those palettes change, update these too. */
+
+/* ── Tokens (mirror web/src/index.css) ─────────────────────────────────────*/
+:root {
+  --space-2: 4px;
+  --space-4: 8px;
+  --space-6: 12px;
+  --space-8: 16px;
+  --space-10: 20px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 12px;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, Menlo, monospace;
+}
+
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #14161b;
+  --panel: #1a1d23;
+  --raised: #23272f;
+  --border: #2a2e37;
+  --border-strong: #565d6b;
+  --text: #e6e8ec;
+  --muted: #9aa0aa;
+  --accent: #f5a623;
+  --accent-strong: #f5a623;
+  /* On dark, accent text on the accent button needs a dark ink for contrast. */
+  --on-accent: #14161b;
+  /* Filled-CTA background. On dark it's the bright accent under dark ink; on
+     light it darkens (below) so white ink clears AA (bare --accent is only
+     3.18:1 under white). */
+  --cta-bg: var(--accent);
+  /* Chart series (Quito / OpenSCAD CGAL / OpenSCAD Manifold). Amber + rose +
+     blue — CVD-validated as a set on the panel surface (see dataviz check). */
+  --series-quito: var(--accent);
+  --series-cgal: #ef6f8e;
+  --series-mfld: #5aa9e6;
+  --focus: var(--accent-strong);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #ffffff;
+  --panel: #eef0f3;
+  --raised: #ffffff;
+  --border: #d5d9e0;
+  --border-strong: #8b929e;
+  --text: #1b1e23;
+  --muted: #5b6472;
+  --accent: #d97706;
+  --accent-strong: #a45a06;
+  --on-accent: #ffffff;
+  --cta-bg: #a45a06; /* white ink → 5.2:1 (bright --accent would be 3.18:1) */
+  --series-quito: var(--accent);
+  --series-cgal: #b0355a;
+  --series-mfld: #2b6cb0;
+  --focus: var(--accent-strong);
+}
+
+/* ── Base ──────────────────────────────────────────────────────────────────*/
+* {
+  box-sizing: border-box;
+}
+/* Visually hidden but available to screen readers (section headings). */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+html {
+  scroll-behavior: smooth;
+}
+body.mk {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+.mk a {
+  color: var(--accent-strong);
+  text-decoration: none;
+}
+.mk a:hover {
+  text-decoration: underline;
+}
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+/* ── Top nav ───────────────────────────────────────────────────────────────*/
+.mk-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-8);
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: var(--space-8) var(--space-10);
+}
+.mk-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-6);
+  font-weight: 700;
+  font-size: 18px;
+  letter-spacing: 0.3px;
+  color: var(--text) !important;
+}
+.mk-brand:hover {
+  text-decoration: none !important;
+}
+.mk-logo {
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  flex-shrink: 0;
+}
+.mk-nav-links {
+  display: flex;
+  align-items: center;
+  gap: var(--space-10);
+  font-size: 15px;
+}
+.mk-nav-links a {
+  color: var(--muted);
+}
+.mk-nav-links a:hover {
+  color: var(--text);
+  text-decoration: none;
+}
+
+/* ── Hero ──────────────────────────────────────────────────────────────────*/
+.mk-hero {
+  max-width: 780px;
+  margin: 0 auto;
+  padding: clamp(48px, 9vw, 104px) var(--space-10) 56px;
+  text-align: center;
+}
+.mk-title {
+  margin: 0 0 var(--space-10);
+  font-size: clamp(36px, 6.5vw, 60px);
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  font-weight: 800;
+}
+.mk-accent {
+  color: var(--accent-strong);
+}
+.mk-sub {
+  margin: 0 auto var(--space-10);
+  max-width: 620px;
+  font-size: clamp(16px, 2.2vw, 19px);
+  color: var(--muted);
+}
+.mk-cta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-6);
+  justify-content: center;
+  margin-top: 28px;
+}
+.mk-note {
+  margin: var(--space-8) 0 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* ── Buttons ───────────────────────────────────────────────────────────────*/
+.mk-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 22px;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    transform 120ms ease,
+    filter 120ms ease,
+    background 120ms ease;
+}
+.mk-btn:hover {
+  text-decoration: none !important;
+  transform: translateY(-1px);
+}
+.mk-btn-primary {
+  background: var(--cta-bg);
+  color: var(--on-accent) !important;
+  border-color: var(--cta-bg);
+}
+.mk-btn-primary:hover {
+  filter: brightness(1.06);
+}
+.mk-btn-ghost {
+  background: transparent;
+  color: var(--text) !important;
+  border-color: var(--border-strong);
+}
+.mk-btn-ghost:hover {
+  background: var(--panel);
+}
+
+/* ── Features ──────────────────────────────────────────────────────────────*/
+.mk-features {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 24px var(--space-10) 32px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--space-8);
+}
+.mk-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 22px;
+}
+.mk-card h3 {
+  margin: 0 0 var(--space-6);
+  font-size: 17px;
+  font-weight: 700;
+}
+.mk-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 15px;
+}
+.mk-card code {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 1px 5px;
+}
+
+/* ── Shootout ──────────────────────────────────────────────────────────────*/
+.mk-shootout {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 40px var(--space-10);
+  text-align: center;
+}
+.mk-shootout h2 {
+  margin: 0 0 var(--space-6);
+  font-size: clamp(26px, 4vw, 34px);
+  letter-spacing: -0.01em;
+}
+
+/* Headline stat tiles. */
+.mk-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-6);
+  margin: 32px 0 8px;
+}
+.mk-stat {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 22px var(--space-8);
+  text-align: left;
+}
+.mk-stat-num {
+  display: block;
+  font-size: clamp(38px, 6vw, 52px);
+  font-weight: 800;
+  line-height: 1;
+  color: var(--accent-strong);
+  letter-spacing: -0.02em;
+}
+.mk-stat-label {
+  display: block;
+  margin-top: var(--space-6);
+  color: var(--muted);
+  font-size: 14px;
+}
+
+/* Chart. */
+.mk-figure {
+  margin: 32px 0 0;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 22px;
+  text-align: left;
+}
+.mk-fig-title {
+  font-weight: 700;
+  font-size: 15px;
+  margin-bottom: var(--space-8);
+}
+.mk-fig-note {
+  color: var(--muted);
+  font-weight: 400;
+}
+.mk-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-8);
+  margin-bottom: var(--space-8);
+  font-size: 13px;
+  color: var(--muted);
+}
+.mk-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+.mk-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.mk-swatch--quito {
+  background: var(--series-quito);
+}
+.mk-swatch--cgal {
+  background: var(--series-cgal);
+}
+.mk-swatch--mfld {
+  background: var(--series-mfld);
+}
+
+.mk-plot {
+  position: relative;
+  padding-bottom: 22px; /* room for the axis tick labels */
+}
+/* Gridlines sit behind the rows, spanning the bar track: it starts after the
+   fixed-width label + the row gap, and ends at the reserved value-label gutter
+   so lines and bars share exactly one scale. */
+.mk-grid {
+  position: absolute;
+  left: calc(var(--label-w) + var(--space-8));
+  right: var(--value-gutter);
+  top: 0;
+  bottom: 22px;
+  pointer-events: none;
+}
+:root {
+  --value-gutter: 48px;
+}
+.mk-gridline {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border);
+  transform: translateX(-0.5px);
+}
+.mk-gridtick {
+  position: absolute;
+  bottom: -16px;
+  left: 0;
+  transform: translateX(-50%);
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.mk-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--label-w) 1fr;
+  gap: var(--space-8);
+  align-items: center;
+  padding: 8px 0;
+}
+:root {
+  --label-w: 168px;
+}
+.mk-row-label {
+  min-width: 0;
+}
+.mk-row-name {
+  display: block;
+  font-weight: 600;
+  font-size: 14px;
+}
+.mk-row-note {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+}
+.mk-bars {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  /* Reserve a gutter so the "×" value labels sit past the bar end without
+     overflowing; the gridlines reserve the same gutter (see .mk-grid). */
+  padding-right: var(--value-gutter);
+}
+.mk-track {
+  position: relative;
+  height: 18px;
+}
+.mk-bar {
+  height: 100%;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  min-width: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+.mk-bar--quito {
+  background: var(--series-quito);
+}
+.mk-bar--cgal {
+  background: var(--series-cgal);
+}
+.mk-bar--mfld {
+  background: var(--series-mfld);
+}
+.mk-bar-value {
+  position: absolute;
+  left: calc(100% + 6px);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+/* Table. */
+.mk-table-wrap {
+  margin: 24px 0 0;
+  overflow-x: auto;
+}
+.mk-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  text-align: left;
+}
+.mk-table th,
+.mk-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.mk-table thead th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 12px;
+  border-bottom-color: var(--border-strong);
+}
+.mk-table tbody th {
+  font-weight: 600;
+}
+.mk-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.mk-table .strong {
+  color: var(--accent-strong);
+  font-weight: 700;
+}
+.mk-table-cap {
+  margin: var(--space-6) 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.mk-method code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 1px 5px;
+}
+
+/* Narrow screens: give the bars more room so the log-axis ticks don't collide,
+   and let the model note wrap under a tighter label column. */
+@media (max-width: 640px) {
+  :root {
+    --label-w: 96px;
+    --value-gutter: 38px;
+  }
+  .mk-shootout {
+    padding-left: var(--space-8);
+    padding-right: var(--space-8);
+  }
+  .mk-row-note {
+    display: none;
+  }
+  .mk-gridtick {
+    font-size: 10px;
+  }
+  .mk-bar-value {
+    font-size: 10px;
+  }
+}
+
+/* ── Download section ──────────────────────────────────────────────────────*/
+.mk-download {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 56px var(--space-10) 40px;
+  text-align: center;
+}
+.mk-download h2 {
+  margin: 0 0 var(--space-6);
+  font-size: clamp(26px, 4vw, 34px);
+  letter-spacing: -0.01em;
+}
+.mk-download-sub {
+  margin: 0 auto 32px;
+  max-width: 520px;
+  color: var(--muted);
+}
+.mk-os-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-6);
+  max-width: 800px;
+  margin: 0 auto;
+}
+.mk-os-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 20px var(--space-8);
+  background: var(--panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  color: var(--text) !important;
+}
+.mk-os-card:hover {
+  border-color: var(--accent);
+  background: var(--raised);
+  text-decoration: none !important;
+}
+.mk-os-card--suggested {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.mk-os-name {
+  font-weight: 700;
+  font-size: 16px;
+}
+.mk-os-detail {
+  font-size: 13px;
+  color: var(--muted);
+}
+.mk-more {
+  margin: 32px 0 0;
+  font-size: 15px;
+}
+.mk-more-note {
+  display: block;
+  margin-top: var(--space-4);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* ── Footer ────────────────────────────────────────────────────────────────*/
+.mk-footer {
+  max-width: 1040px;
+  margin: 40px auto 0;
+  padding: 24px var(--space-10) 40px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-8);
+  align-items: center;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 14px;
+}
+.mk-footer-links {
+  display: flex;
+  gap: var(--space-10);
+}
+.mk-footer-links a {
+  color: var(--muted);
+}
+.mk-footer-links a:hover {
+  color: var(--text);
+}
