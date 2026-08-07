@@ -326,12 +326,29 @@ export class Viewer {
     const aspect =
       el.clientWidth && el.clientHeight ? el.clientWidth / el.clientHeight : 1;
     const span = Math.max(visH, visH * aspect);
-    // Nearest power of ten that puts ~10 major cells across the view: 1000mm
-    // visible → 100mm cells, ~100mm → 10mm, ~10mm → 1mm, and so on.
-    const spacing = Math.pow(10, Math.round(Math.log10(span / 10)));
-    // ~10 grid lines across the view (halfCells each way from center), so the
-    // grid stays sparse; labels then land on every other line (see buildGrid).
+    // Cell size that puts ~TARGET_CELLS major cells across the view, snapped to a
+    // 1-2-5-10 "nice" step rather than only powers of ten. This makes the unit
+    // jump as you zoom happen ~every 2.5× (…50, 20, 10, 5, 2, 1…) instead of
+    // every 10×, so the grid switches to a smaller unit much sooner when zooming
+    // in — while cell density stays even (no over-dense far field).
+    const TARGET_CELLS = 14;
+    const target = span / TARGET_CELLS;
+    const pow = Math.pow(10, Math.floor(Math.log10(target)));
+    const frac = target / pow; // 1..10
+    const step = frac < 1.5 ? 1 : frac < 3.5 ? 2 : frac < 7.5 ? 5 : 10;
+    const spacing = step * pow;
+    // Axis/tick/label extent: ~TARGET_CELLS lines across the view (halfCells
+    // each way from center), so labels stay sparse — they land on every other
+    // line (see buildGrid).
     const halfCells = Math.min(40, Math.max(5, Math.ceil(span / spacing / 2)));
+    // Grid *lines* reach far past the visible view so the floor plane never
+    // visibly ends on screen — it reads as extending forever as you orbit/pan.
+    // Only the lines extend; axes, ticks, and numeric labels keep `halfCells`,
+    // so the labeled region stays exactly as before.
+    const lineHalfCells = Math.min(
+      500,
+      Math.max(halfCells, Math.ceil((span / spacing / 2) * 10)),
+    );
     // Center on the orbit target, snapped to the grid so it slides cell-by-cell
     // and always fills the view as you pan.
     const cx = Math.round(this.controls.target.x / spacing);
@@ -348,10 +365,18 @@ export class Viewer {
       z: Math.abs(dir.z) > 0.95,
     };
     const sKey = `${+suppress.x}${+suppress.y}${+suppress.z}`;
-    const key = `${spacing}:${halfCells}:${cx}:${cy}:${this.themeDark}:${sKey}`;
+    const key =
+      `${spacing}:${halfCells}:${lineHalfCells}:${cx}:${cy}:${this.themeDark}:${sKey}`;
     if (!force && key === this.lastGridKey) return;
     this.lastGridKey = key;
-    this.buildGrid(spacing, halfCells, cx * spacing, cy * spacing, suppress);
+    this.buildGrid(
+      spacing,
+      halfCells,
+      lineHalfCells,
+      cx * spacing,
+      cy * spacing,
+      suppress,
+    );
   }
 
   /** Remove and dispose the current grid group (lines, axes, label sprites and
@@ -372,13 +397,15 @@ export class Viewer {
     this.gridGroup = null;
   }
 
-  /** Build the floor grid centered at (`ox`,`oy`) with `spacing`-mm cells,
-   *  `halfCells` out from the center each way, plus the X/Y/Z world axes and the
-   *  numeric tick labels running along them. The grid follows the orbit target so
-   *  it always fills the view; the labeled axes stay anchored at the origin. */
+  /** Build the floor grid centered at (`ox`,`oy`) with `spacing`-mm cells. The
+   *  grid *lines* run `lineHalfCells` out from the center each way so the plane
+   *  never visibly ends on screen; the X/Y/Z world axes, ruler ticks, and numeric
+   *  labels stay within the tighter `halfCells` extent. The grid follows the
+   *  orbit target so it always fills the view. */
   private buildGrid(
     spacing: number,
     halfCells: number,
+    lineHalfCells: number,
     ox: number,
     oy: number,
     suppress: { x: boolean; y: boolean; z: boolean } = {
@@ -389,19 +416,29 @@ export class Viewer {
   ) {
     this.disposeGrid();
     const g = new THREE.Group();
-    const half = halfCells * spacing;
-    const loX = ox - half,
-      hiX = ox + half,
-      loY = oy - half,
-      hiY = oy + half;
 
-    // --- grid lines ---
+    // --- grid lines (extend far past the view so the floor never visibly ends) ---
+    const lineHalf = lineHalfCells * spacing;
+    const gLoX = ox - lineHalf,
+      gHiX = ox + lineHalf,
+      gLoY = oy - lineHalf,
+      gHiY = oy + lineHalf;
+    // Ruler ticks and numeric labels run their own extent — much wider than the
+    // old one so the numbers reach across the viewport along each axis, but
+    // capped (each label is a canvas sprite) so grazing views don't spawn
+    // hundreds of off-screen numbers.
+    const labelHalfCells = Math.min(lineHalfCells, 50, halfCells * 5);
+    const labelHalf = labelHalfCells * spacing;
+    const lLoX = ox - labelHalf,
+      lHiX = ox + labelHalf,
+      lLoY = oy - labelHalf,
+      lHiY = oy + labelHalf;
     const pts: number[] = [];
-    for (let i = -halfCells; i <= halfCells; i++) {
+    for (let i = -lineHalfCells; i <= lineHalfCells; i++) {
       const x = ox + i * spacing;
-      pts.push(x, loY, 0, x, hiY, 0);
+      pts.push(x, gLoY, 0, x, gHiY, 0);
       const y = oy + i * spacing;
-      pts.push(loX, y, 0, hiX, y, 0);
+      pts.push(gLoX, y, 0, gHiX, y, 0);
     }
     const gridGeom = new THREE.BufferGeometry();
     gridGeom.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
@@ -481,8 +518,8 @@ export class Viewer {
         );
       }
     };
-    const xAxisOnGrid = loY <= 0 && 0 <= hiY; // the X axis (y=0) is within the grid
-    const yAxisOnGrid = loX <= 0 && 0 <= hiX; // the Y axis (x=0) is within the grid
+    const xAxisOnGrid = lLoY <= 0 && 0 <= lHiY; // the X axis (y=0) is within the labeled band
+    const yAxisOnGrid = lLoX <= 0 && 0 <= lHiX; // the Y axis (x=0) is within the labeled band
     const originOnGrid = xAxisOnGrid && yAxisOnGrid;
 
     // Label only every other grid line (even multiples of the spacing), so
@@ -490,13 +527,15 @@ export class Viewer {
     const labeled = (coord: number) => Math.round(coord / spacing) % 2 === 0;
 
     if (xAxisOnGrid) {
-      line([loX, 0, 0], [hiX, 0, 0], X_COL);
-      addLabel("X", hex(X_COL), hiX + lh * 1.8, -lh * 1.4, 0, 1.5);
+      // Colored axis line runs the full grid extent so it spans the viewport;
+      // ticks and numbers run the (wide) labeled extent so they reach across it.
+      line([gLoX, 0, 0], [gHiX, 0, 0], X_COL);
+      addLabel("X", hex(X_COL), lHiX + lh * 1.8, -lh * 1.4, 0, 1.5);
       if (!suppress.x) {
-        ticks("x", loX, hiX, X_COL);
+        ticks("x", lLoX, lHiX, X_COL);
         for (
-          let x = Math.ceil(loX / spacing) * spacing;
-          x <= hiX + 1e-6;
+          let x = Math.ceil(lLoX / spacing) * spacing;
+          x <= lHiX + 1e-6;
           x += spacing
         ) {
           if (Math.abs(x) < spacing / 2 || !labeled(x) || this.showDims)
@@ -506,13 +545,13 @@ export class Viewer {
       }
     }
     if (yAxisOnGrid) {
-      line([0, loY, 0], [0, hiY, 0], Y_COL);
-      addLabel("Y", hex(Y_COL), -lh * 1.4, hiY + lh * 1.8, 0, 1.5);
+      line([0, gLoY, 0], [0, gHiY, 0], Y_COL);
+      addLabel("Y", hex(Y_COL), -lh * 1.4, lHiY + lh * 1.8, 0, 1.5);
       if (!suppress.y) {
-        ticks("y", loY, hiY, Y_COL);
+        ticks("y", lLoY, lHiY, Y_COL);
         for (
-          let y = Math.ceil(loY / spacing) * spacing;
-          y <= hiY + 1e-6;
+          let y = Math.ceil(lLoY / spacing) * spacing;
+          y <= lHiY + 1e-6;
           y += spacing
         ) {
           if (Math.abs(y) < spacing / 2 || !labeled(y) || this.showDims)
@@ -522,12 +561,13 @@ export class Viewer {
       }
     }
     if (originOnGrid) {
-      // Vertical Z axis rising from the origin, with its own tick labels.
-      line([0, 0, 0], [0, 0, half], Z_COL);
-      addLabel("Z", hex(Z_COL), -lh * 1.4, -lh * 1.4, half + lh * 1.8, 1.5);
+      // Vertical Z axis rising from the origin; the colored line runs the full
+      // extent to span the viewport, ticks/labels run the labeled extent.
+      line([0, 0, 0], [0, 0, lineHalf], Z_COL);
+      addLabel("Z", hex(Z_COL), -lh * 1.4, -lh * 1.4, labelHalf + lh * 1.8, 1.5);
       if (!suppress.z) {
-        ticks("z", 0, half, Z_COL);
-        for (let i = 2; i <= halfCells && !this.showDims; i += 2) {
+        ticks("z", 0, labelHalf, Z_COL);
+        for (let i = 2; i <= labelHalfCells && !this.showDims; i += 2) {
           addLabel(
             fmt(i * spacing),
             this.vt.axisTick,
@@ -1245,6 +1285,27 @@ export class Viewer {
     highlight.visible = false;
     cube.add(highlight);
     scene.add(cube);
+
+    // Colored world-axis gnomon poking out of the cube's +X/+Y/+Z faces, using
+    // the same axis colors as the scene grid so the cube's orientation reads at a
+    // glance. Depth-tested against the cube, so an axis facing away is occluded.
+    const gnomon = (dir: [number, number, number], color: number) => {
+      const [x, y, z] = dir;
+      const geo = new THREE.BufferGeometry();
+      // From the face (0.5) out to 0.9 — a short stub that stays inside the small
+      // cube canvas so its colored tip isn't clipped.
+      geo.setAttribute(
+        "position",
+        new THREE.Float32BufferAttribute(
+          [x * 0.5, y * 0.5, z * 0.5, x * 0.9, y * 0.9, z * 0.9],
+          3,
+        ),
+      );
+      scene.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color })));
+    };
+    gnomon([1, 0, 0], viewerConst.axisX);
+    gnomon([0, 1, 0], viewerConst.axisY);
+    gnomon([0, 0, 1], viewerConst.axisZ);
 
     this.cubeRenderer = renderer;
     this.cubeScene = scene;
