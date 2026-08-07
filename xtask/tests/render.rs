@@ -268,6 +268,45 @@ fn imports_and_extrudes_dxf() {
     assert!(mesh.signed_volume() > 0.0, "dxf extrude is inward-facing");
 }
 
+/// `rotate_extrude(start=)` (OpenSCAD 2023.x+): sweep the profile from `start`
+/// to `start + angle` about Z. The 2024.12 oracle predates `start=`, so verify
+/// by rigid-motion invariant instead: the swept solid equals the `start=0`
+/// sweep rotated by `start` about Z — same volume, still a closed manifold, but
+/// occupying a different region (proving `start` has an effect).
+#[test]
+fn rotate_extrude_start_rotates_without_changing_volume() {
+    let dir = workspace_root().to_string_lossy().into_owned();
+    let profile = "translate([10, 0]) square([2, 3]);";
+    let base = render_scad_src(
+        &format!("rotate_extrude(angle=120, $fn=64) {profile}"),
+        &dir,
+    );
+    let rot = render_scad_src(
+        &format!("rotate_extrude(angle=120, start=90, $fn=64) {profile}"),
+        &dir,
+    );
+
+    let (vb, vr) = (base.volume(), rot.volume());
+    assert!(vr > 0.0, "start sweep has no volume");
+    assert!(is_manifold(&rot), "start sweep is not a closed 2-manifold");
+    assert!(
+        (vb - vr).abs() < 1e-6 * vb,
+        "start must preserve volume: {vb} vs {vr}"
+    );
+    // The base sweep starts at angle 0 (profile on +X, max x ~12); rotating the
+    // start to 90° swings the +X extreme away, so the bounding boxes differ.
+    let base_max_x = base.bbox().unwrap().1[0];
+    let rot_max_x = rot.bbox().unwrap().1[0];
+    assert!(
+        base_max_x > 11.0,
+        "base sweep should reach +X: {base_max_x}"
+    );
+    assert!(
+        rot_max_x < base_max_x - 5.0,
+        "start=90 should swing the profile off +X: base {base_max_x} vs rot {rot_max_x}"
+    );
+}
+
 /// The draped/fluted dome lamp shade: a single analytic-surface polyhedron
 /// built with C-style-for comprehensions. Must render to a watertight,
 /// outward-facing mesh matching OpenSCAD (17408 triangles, volume ~13.596).

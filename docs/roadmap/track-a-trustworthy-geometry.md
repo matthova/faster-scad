@@ -64,15 +64,27 @@ different shape.
 
 ## Also in scope if time allows
 
-- **Assignment-hoisting pre-pass** (COMPAT.md divergence #2, still open):
-  `eval_defs_and_assigns` (`quito-eval/src/lib.rs:341-386`) evaluates
-  assignments in source order, so forward references (`y = x; x = 5;`) yield
-  `undef` instead of upstream's "last assignment wins at first position".
-  Language-level, oracle-checkable via echo corpus — a good companion fix
-  while the evaluator is open, with a warn-on-reassignment lint per the plan's
-  "warn-and-keep" candidate.
-- **`rotate_extrude(start=)` and `linear_extrude(v=)`** parameters — small
-  parser+IR additions, oracle-checkable, common in newer scripts.
+- **Assignment hoisting (COMPAT.md divergence #2) — done.** Phase-2 assignment
+  evaluation now applies OpenSCAD's last-write-wins semantics: only a variable's
+  final assignment is evaluated, at its first-introduction point. Blessing the
+  behavior against the echo oracle disproved this note's premise — upstream does
+  **not** resolve forward references (`y = x; x = 5;` yields `undef`, not `5`);
+  the real divergence was that reassign-then-earlier-read read the intermediate
+  value instead of the final one (`p = 1; q = p; p = 5;` gave `q == 1`, now
+  `q == 5`). Covered by `corpus/echo/assign_hoist.scad` and eval unit tests. The
+  optional warn-on-reassignment lint ("warn-and-keep") was **added** for the
+  reassignment case only: a dead write emits a spanned, deduped "overwritten"
+  warning, restricted to the user's own source. The "unknown variable" companion
+  lint was attempted and **deferred** — it false-positived on real BOSL2 code
+  (library helpers read unset params as `undef` in the caller's statement
+  context), and separating those from genuine user typos needs read-site
+  provenance the AST does not carry.
+- **`rotate_extrude(start=)` and `linear_extrude(v=)`** parameters — **done.**
+  `v=` (an oblique/sheared extrude) was already implemented; it is now gated by
+  `corpus/geom/ext_linear_v*.scad` oracle goldens. `start=` (partial-sweep offset)
+  is new; it lowers to the plain `[0, angle]` sweep rotated by `start` about Z.
+  The 2024.12 oracle predates `start=`, so it is verified by rigid-motion
+  invariant (a render test) rather than a geom golden.
 
 ## Exit criterion (crisp, CI-enforced) — **MET**
 
