@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.2
+
+### Patch Changes
+
+- [#86](https://github.com/matthova/openrscad/pull/86) [`d02b299`](https://github.com/matthova/openrscad/commit/d02b299883da991c6265b967253c0a55561d0d4f) Thanks [@matthova](https://github.com/matthova)! - recolor desktop app icons and site favicon to the brand pure-yellow (#ffd60a), and use the real notched-square logo for the browser tab icon
+
 ## 0.9.1
 
 ### Patch Changes
