@@ -189,14 +189,14 @@ const el = (tag: string, cls?: string, text?: string) => {
   return n;
 };
 
-// The three series, in legend / stacking order (OpenRSCAD on top). Each row draws a
+// The three series, in legend / stacking order (OpenRSCAD on bottom). Each row draws a
 // bar per engine; colour identity is backed up by the direct time label.
 const SERIES = [
   {
-    key: "openrscad",
-    cls: "mk-bar--openrscad",
-    swatch: "mk-swatch--openrscad",
-    label: "OpenRSCAD (native)",
+    key: "cgal",
+    cls: "mk-bar--cgal",
+    swatch: "mk-swatch--cgal",
+    label: "OpenSCAD · CGAL (CSG, default)",
   },
   {
     key: "mfld",
@@ -205,10 +205,10 @@ const SERIES = [
     label: "OpenSCAD · Manifold",
   },
   {
-    key: "cgal",
-    cls: "mk-bar--cgal",
-    swatch: "mk-swatch--cgal",
-    label: "OpenSCAD · CGAL (CSG, default)",
+    key: "openrscad",
+    cls: "mk-bar--openrscad",
+    swatch: "mk-swatch--openrscad",
+    label: "OpenRSCAD (native)",
   },
 ] as const;
 
