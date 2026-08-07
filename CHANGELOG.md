@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.9.0
+
+### Minor Changes
+
+- [#75](https://github.com/matthova/openrscad/pull/75) [`57f2cec`](https://github.com/matthova/openrscad/commit/57f2cec9b1e6f1da1910b8b458f74dfd8b254608) Thanks [@matthova](https://github.com/matthova)! - web: add an /about marketing page — a render shootout (per-model charts + table of OpenRSCAD vs OpenSCAD CGAL/Manifold, geomean ~29× / ~3.9×) and OS-autodetecting desktop download CTAs (macOS Apple Silicon/Intel, Windows, Linux), plus a link to every other option on the GitHub release page
+
+- [#75](https://github.com/matthova/openrscad/pull/75) [`57f2cec`](https://github.com/matthova/openrscad/commit/57f2cec9b1e6f1da1910b8b458f74dfd8b254608) Thanks [@matthova](https://github.com/matthova)! - web: add a dismissable callout inviting browser users to download the desktop app (remembers dismissal across sessions)
+
+- [#82](https://github.com/matthova/openrscad/pull/82) [`45cd508`](https://github.com/matthova/openrscad/commit/45cd50801bc4361717f8752ed381a0c691eaa67a) Thanks [@matthova](https://github.com/matthova)! - Rename the project from Quito to OpenRSCAD. This renames the published npm engine
+  package (`quito-engine` → `openrscad-engine`), the Rust crates (`quito-*` →
+  `openrscad-*`), the desktop app and its bundle identifier, and all user-facing
+  branding. **Breaking:** consumers of `quito-engine` must switch to
+  `openrscad-engine`, and desktop users get a fresh app identity (previous
+  auto-updates do not carry over across the new bundle identifier).
+
+- [#80](https://github.com/matthova/openrscad/pull/80) [`2c84e79`](https://github.com/matthova/openrscad/commit/2c84e79b073e238d5307969aa2398465b2bf3d77) Thanks [@matthova](https://github.com/matthova)! - web: the marketing page is now the site root (/openrscad/) and the playground moved to /openrscad/playground (breaking: bookmarks to the old editor root now land on the marketing page; use /playground)
+
+### Patch Changes
+
+- [#77](https://github.com/matthova/openrscad/pull/77) [`1e9ab2f`](https://github.com/matthova/openrscad/commit/1e9ab2f79c6f1b65aa4cb5ff1ee9e85c6e49c22f) Thanks [@matthova](https://github.com/matthova)! - serialize function values to OpenSCAD's `function(params) body` text (str/echo), fix `is_num(nan)` and exact `tan()` at 45° multiples, and honor BOSL2 `expect_success` error tests — BOSL2 function-suite coverage rises from 428/513 to 503/513
+
+- [#76](https://github.com/matthova/openrscad/pull/76) [`45ee723`](https://github.com/matthova/openrscad/commit/45ee723e216ce662713dbb1927ee2ad6cb235139) Thanks [@matthova](https://github.com/matthova)! - web: the editor's desktop-app callout now downloads the right build for your OS directly (macOS Apple Silicon/Intel, Windows, Linux) instead of routing through /about, and is hidden on phones/tablets where there's no desktop build; the "OpenRSCAD playground" wordmark now links to /about
+
+- [#81](https://github.com/matthova/openrscad/pull/81) [`7a5c410`](https://github.com/matthova/openrscad/commit/7a5c410864682fdecd8a54117a3533257ec3e417) Thanks [@matthova](https://github.com/matthova)! - web: the viewer's floor grid, colored X/Y/Z axes, and their numeric unit labels now extend across the whole viewport so nothing visibly ends on screen as you orbit or pan. The grid cell size snaps to 1-2-5-10 steps (…50, 20, 10, 5, 2, 1…) instead of only powers of ten, so it switches to a smaller unit much sooner and more evenly as you zoom in. The navigation cube gains a matching colored X/Y/Z axis gnomon.
+
+- [#79](https://github.com/matthova/openrscad/pull/79) [`dac9632`](https://github.com/matthova/openrscad/commit/dac9632ffea1bd3cf2e7d379a458c8e841c280cc) Thanks [@matthova](https://github.com/matthova)! - 3D `minkowski()` now distributes over `union()`, so a concave shape built from a union of convex parts is computed exactly (e.g. `minkowski(){ union(){ cube A; cube B; } cube; }`) instead of as its convex hull. A genuinely concave leaf mesh still falls back to the convex approximation with a warning.
+
+- [#78](https://github.com/matthova/openrscad/pull/78) [`c12702c`](https://github.com/matthova/openrscad/commit/c12702c737a1d78e9056e1c92074f7b4c9a31156) Thanks [@matthova](https://github.com/matthova)! - `text(font=)` now selects across the bundled Liberation family — Sans/Serif/Mono in Regular/Bold/Italic/Bold Italic (e.g. `font="Liberation Serif:style=Bold"`) — matching OpenSCAD's glyphs exactly; unknown families still fall back to Liberation Sans with a warning. Bundling the full family grows the wasm engine by ~3.6 MB.
+
+- [#73](https://github.com/matthova/openrscad/pull/73) [`f41da66`](https://github.com/matthova/openrscad/commit/f41da66db37d3042d5e2d5c0e0fa8334fe6b20a1) Thanks [@matthova](https://github.com/matthova)! - fix scope assignments to match OpenSCAD's last-write-wins semantics: a read of a variable reassigned later now sees its final value (`p = 1; q = p; p = 5;` gives `q == 5`), while variables introduced later are still not forward-referenced
+
+- [#73](https://github.com/matthova/openrscad/pull/73) [`f41da66`](https://github.com/matthova/openrscad/commit/f41da66db37d3042d5e2d5c0e0fa8334fe6b20a1) Thanks [@matthova](https://github.com/matthova)! - warn on dead (overwritten) assignments in your own source, add `rotate_extrude(start=)` for partial sweeps, and lock `linear_extrude(v=)` oblique extrudes to the geometry oracle
+
 ## 0.8.0
 
 ### Minor Changes
