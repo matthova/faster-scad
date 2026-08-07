@@ -9,7 +9,7 @@ test("forced theme overrides the OS and persists across reload", async ({
   page,
 }) => {
   await page.emulateMedia({ colorScheme: "light" });
-  await page.goto("/");
+  await page.goto("/playground");
   await waitForRender(page);
   // Auto (default) follows the OS → light.
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");

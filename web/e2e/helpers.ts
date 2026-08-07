@@ -13,7 +13,7 @@ export async function gotoApp(page: Page) {
       localStorage.clear();
     } catch {}
   });
-  await page.goto("/");
+  await page.goto("/playground");
   await waitForRender(page);
 }
 

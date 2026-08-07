@@ -1,4 +1,5 @@
-// Standalone entry for the marketing page (about.html). No React — it only
+// Standalone entry for the marketing page (index.html, the site root). No React
+// — it only
 // (1) upgrades the hero's primary download button to the visitor's OS, and
 // (2) keeps the light/dark theme in sync with the OS after first paint.
 //
@@ -72,8 +73,8 @@ async function wirePrimaryDownload() {
     btn.href = `${DL}/${target.asset}`;
   } else {
     // No desktop build for this device — the button opens the playground. Use a
-    // relative link so it works under the /faster-scad/ subpath.
-    btn.href = "./";
+    // relative link so it resolves to /faster-scad/playground under the subpath.
+    btn.href = "playground";
   }
   if (note) note.textContent = target.note;
 

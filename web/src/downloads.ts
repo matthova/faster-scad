@@ -4,7 +4,7 @@
 
 /** GitHub release assets get a stable, version-less alias (see
  *  .github/workflows/release.yml → `stable-name`), so these URLs always resolve
- *  to the latest release. Keep asset names in sync with about.html's per-OS
+ *  to the latest release. Keep asset names in sync with index.html's per-OS
  *  cards. */
 export const RELEASES_LATEST =
   "https://github.com/matthova/faster-scad/releases/latest";

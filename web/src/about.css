@@ -1,4 +1,4 @@
-/* Marketing page (about.html) styles. Standalone — it does NOT import the app's
+/* Marketing page (index.html) styles. Standalone — it does NOT import the app's
    index.css, so the ~35 KB of playground chrome never loads here. The design
    tokens below mirror the app's (web/src/index.css :root blocks) so light/dark
    match; if those palettes change, update these too. */
