@@ -11,9 +11,8 @@ undocumented wrong result.
 Known gaps in the interpreter, to be closed in later milestones (not permanent
 divergences unless noted):
 
-| # | Area | Current behavior | Upstream | Track to close |
-|---|---|---|---|---|
-| 2 | Assignment hoisting | Assignments in a scope are hoisted then evaluated in source order (last write wins). Handles the common `x=1; …; x=2;` case; does not yet resolve forward references the way a full pre-pass does. | Full "last assignment wins at first position" pre-pass with a lint. | Track A |
+_None currently open — assignment hoisting (formerly gap #2) was closed; see
+below._
 
 ## Current known divergences (with repro)
 
@@ -61,8 +60,35 @@ the dangerous kind. Each has a minimal repro. Tracks A/B track the fixes.
 
 ## Closed since M0
 
-All oracle-checked; `corpus/echo` passes **24/24** and BOSL2's function suite
+All oracle-checked; `corpus/echo` passes **25/25** and BOSL2's function suite
 runs in the `xtask bosl2` harness:
+
+- **Assignment hoisting (last-write-wins).** Within a scope, only a variable's
+  *final* assignment is evaluated, at the point it was *first introduced*. A read
+  of a variable that is reassigned later sees the final value, not the
+  intermediate one (`p = 1; q = p; p = 5;` → `q == 5`), and an overwritten
+  assignment's RHS is discarded entirely, side effects included. There are **no
+  forward references**: a read of a variable introduced later in the scope does
+  not see it and falls through to an outer binding or `undef`
+  (`y = x; x = 5;` → `y == undef` at top level; the nested case reads the outer
+  binding). Earlier docs described the target as full forward-reference
+  resolution — the OpenSCAD oracle showed that is *not* how upstream behaves, so
+  this now matches observed OpenSCAD 2024.12 (`corpus/echo/assign_hoist.scad`).
+  A reassigned name emits a spanned "assigned again … overwritten" lint on the
+  dead write (deduped per source site; suppressed for `include`d/`use`d library
+  code). The companion "Ignoring unknown variable" lint is **deferred**: library
+  helpers evaluate in the caller's statement context and legitimately read unset
+  parameters as `undef`, so warning on unbound reads produced false positives on
+  real BOSL2 code — closing it needs read-site provenance the AST does not yet
+  carry.
+
+- **Oblique / offset extrudes.** `linear_extrude(height=h, v=[x,y,z])` sweeps
+  the profile a distance `h` along `normalize(v)` (an oblique prism); oracle-gated
+  by `corpus/geom/ext_linear_v*.scad`. `rotate_extrude(angle=a, start=s)` sweeps
+  from `s` to `s + a` about Z — equivalent to the `[0, a]` sweep rotated by `s`.
+  The 2024.12 oracle predates `start=` (it warns "variable start not specified as
+  parameter"), so `start=` is verified by rigid-motion invariant (volume
+  preserved, geometry rotated) rather than an echo/geom golden.
 
 - Geometry breadth — the full 2D/3D primitive, transform, extrude, `hull`,
   `minkowski`, and `offset` surface shipped in M3 (was M0's cube/sphere/cylinder

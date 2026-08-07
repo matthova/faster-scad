@@ -291,6 +291,10 @@ struct Interp<'a> {
     /// Customizer / `-D` overrides: these replace matching *top-level*
     /// assignments in the main file (they win, like OpenSCAD's `-D`).
     overrides: FastMap<String, Value>,
+    /// De-dup key set for the dead-assignment lint. A re-entered module body
+    /// re-runs its assignment phase, and OpenSCAD would warn each time; Quito's
+    /// warnings back editor squiggles, so we emit once per (name + source span).
+    warned: HashSet<(String, usize)>,
 }
 
 /// Evaluate a parsed program into a CSG tree plus console output (no file
@@ -412,6 +416,7 @@ fn eval_program_impl(
         cur_dir: base_dir.to_string(),
         loading: HashSet::new(),
         overrides: overrides.iter().cloned().collect(),
+        warned: HashSet::new(),
     };
 
     let nodes = interp.eval_stmts(prog)?;
@@ -531,6 +536,23 @@ impl Interp<'_> {
         });
     }
 
+    /// Record a dead-assignment lint at most once per (name, span). A `None`
+    /// span means the assignment lives in an `include`d/`use`d library (sentinel
+    /// span) — not the user's editable source — so it is skipped. See
+    /// [`Interp::warned`] for why this de-dups where `warn` does not.
+    fn warn_overwritten(&mut self, name: &str, span: Option<std::ops::Range<usize>>) {
+        let Some(range) = span else { return };
+        if !self.warned.insert((name.to_string(), range.start)) {
+            return;
+        }
+        self.warnings.push(Warning {
+            message: format!(
+                "variable '{name}' is assigned again later; this assignment is overwritten"
+            ),
+            span: Some(range),
+        });
+    }
+
     fn eval_stmts(&mut self, stmts: &[Spanned<Stmt>]) -> EResult<Vec<Node>> {
         // Splice `include`d files in first (only when present, to avoid cloning).
         let expanded;
@@ -601,23 +623,50 @@ impl Interp<'_> {
                 _ => {}
             }
         }
+        // Phase 2: hoist assignments with OpenSCAD's last-write-wins semantics.
+        // Within a scope only a variable's *final* assignment is evaluated, and
+        // it is evaluated at the position the variable was *first introduced*.
+        // Concretely: `p = 1; q = p; p = 5;` yields `q == 5` (the read of `p`
+        // sees its final value, not the intermediate `1`), and the overwritten
+        // `p = 1` is discarded entirely — including any side effects in its RHS.
+        // There are *no* forward references: a read of a variable introduced
+        // later in the scope does not see it and falls through to an outer
+        // binding or `undef` (`y = x; x = 5;` yields `y == undef` at top level),
+        // matching the OpenSCAD oracle.
+        //
         // Only the *main file's* top-level assignments (scope depth 1) are
         // customizer parameters; `use`d files run deeper and modules deeper
         // still, so their internal variables are never overridden.
         let top_level = self.scopes.len() == 1;
+
+        // Keep the last assignment per name, remembering first-introduction order.
+        // A name assigned more than once in the scope means the earlier write is
+        // dead — warn on it (OpenSCAD: "X was assigned … but was overwritten").
+        let mut order: Vec<&str> = Vec::new();
+        let mut last: FastMap<&str, (&Expr, Option<std::ops::Range<usize>>)> = FastMap::default();
         for s in stmts {
             if let Stmt::Assign { name, value } = &s.node {
-                let sp = self.stmt_span(s);
-                let saved = self.cur_span.take();
-                self.cur_span = sp.clone();
-                let v = match self.overrides.get(name) {
-                    Some(ov) if top_level => Ok(ov.clone()),
-                    _ => self.eval_expr(value),
-                };
-                self.cur_span = saved;
-                let v = v.map_err(|e| e.or_span(sp))?;
-                self.set_var(name, v);
+                let span = self.stmt_span(s);
+                match last.insert(name.as_str(), (value, span)) {
+                    Some((_, dead_span)) => self.warn_overwritten(name, dead_span),
+                    None => order.push(name.as_str()),
+                }
             }
+        }
+
+        // Evaluate in first-introduction order, binding each before the next so a
+        // reference to an earlier-introduced name sees its (final) value.
+        for name in order {
+            let (value, sp) = &last[name];
+            let saved = self.cur_span.take();
+            self.cur_span = sp.clone();
+            let v = match self.overrides.get(name) {
+                Some(ov) if top_level => Ok(ov.clone()),
+                _ => self.eval_expr(value),
+            };
+            self.cur_span = saved;
+            let v = v.map_err(|e| e.or_span(sp.clone()))?;
+            self.set_var(name, v);
         }
         Ok(())
     }
@@ -1414,12 +1463,29 @@ impl Interp<'_> {
     fn b_rotate_extrude(&mut self, args: &[Arg], children: &[Spanned<Stmt>]) -> EResult<Node> {
         let m = self.bind_named(&["angle"], args)?;
         let angle = m.get("angle").and_then(Value::as_number).unwrap_or(360.0);
+        let start = m.get("start").and_then(Value::as_number).unwrap_or(0.0);
         let child = Box::new(Node::group(self.eval_children(children)?));
-        Ok(Node::RotateExtrude {
+        let node = Node::RotateExtrude {
             angle,
             frags: self.frag_spec(&m),
             child,
-        })
+        };
+        // `start` (OpenSCAD 2023.x+) offsets where a partial sweep begins: the
+        // profile is swept from `start` to `start + angle` about Z. That is the
+        // plain `[0, angle]` extrude rotated by `start` degrees about Z.
+        if start != 0.0 {
+            let (s, c) = start.to_radians().sin_cos();
+            return Ok(Node::MultMatrix {
+                m: [
+                    [c, -s, 0.0, 0.0],
+                    [s, c, 0.0, 0.0],
+                    [0.0, 0.0, 1.0, 0.0],
+                    [0.0, 0.0, 0.0, 1.0],
+                ],
+                child: Box::new(node),
+            });
+        }
+        Ok(node)
     }
 
     /// Resolve the fragment spec from call-site `$fn/$fa/$fs` args, falling back
@@ -3269,6 +3335,100 @@ mod tests {
 
     fn echoes(src: &str) -> Vec<String> {
         eval(src).echoes
+    }
+
+    // The following cases pin OpenSCAD's last-write-wins scope semantics, each
+    // verified against the OpenSCAD 2024.12 echo oracle. See `corpus/echo/
+    // assign_hoist.scad` for the blessed end-to-end golden.
+
+    #[test]
+    fn assignment_last_write_wins_is_visible_to_earlier_reads() {
+        // A read of a variable that is reassigned later sees the *final* value,
+        // not the intermediate one: `p = 1; q = p; p = 5;` gives q == 5. This is
+        // the core divergence the fix closes (was q == 1).
+        assert_eq!(
+            echoes("p = 1; q = p; p = 5; echo(q, p);"),
+            vec!["ECHO: 5, 5"]
+        );
+        // Multiple rewrites: the last expression wins regardless of position.
+        assert_eq!(
+            echoes("p = 1; p = 2; q = p; p = 3; echo(q, p);"),
+            vec!["ECHO: 3, 3"]
+        );
+    }
+
+    #[test]
+    fn assignment_has_no_forward_references() {
+        // A read of a variable introduced *later* does not see it; at top level
+        // it is undef (OpenSCAD warns "Ignoring unknown variable").
+        assert_eq!(echoes("y = x; x = 5; echo(y, x);"), vec!["ECHO: undef, 5"]);
+        assert_eq!(
+            echoes("a = b + 1; b = c * 2; c = 10; echo(a, b, c);"),
+            vec!["ECHO: undef, undef, 10"]
+        );
+    }
+
+    #[test]
+    fn assignment_final_expr_referencing_later_var_is_undef() {
+        // The final expression is evaluated at the variable's first-introduction
+        // point, so it cannot see a variable introduced afterwards: in
+        // `a = 1; c = a; b = 2; a = b;` the surviving `a = b` reads `b` before it
+        // exists (undef), and `c = a` then reads that undef.
+        assert_eq!(
+            echoes("a = 1; c = a; b = 2; a = b; echo(a, b, c);"),
+            vec!["ECHO: undef, 2, undef"]
+        );
+        // Self-reference in the surviving assignment is likewise undef.
+        assert_eq!(echoes("x = x + 1; echo(x);"), vec!["ECHO: undef"]);
+    }
+
+    #[test]
+    fn assignment_overwritten_rhs_is_not_evaluated() {
+        // Only the last assignment's RHS runs; an overwritten one is discarded
+        // entirely, side effects included (no echo from the dead assignment).
+        assert_eq!(
+            echoes("x = echo(\"dead\") 1; x = 2; echo(x);"),
+            vec!["ECHO: 2"]
+        );
+    }
+
+    #[test]
+    fn assignment_hoisting_falls_through_to_outer_scope() {
+        // In a nested scope, a read before the local is introduced falls through
+        // to the outer binding (not undef): outer x == 99, so `y = x` sees 99
+        // while the later local `x = 5` shadows it afterwards.
+        assert_eq!(
+            echoes("x = 99; module m() { y = x; x = 5; echo(y, x); } m();"),
+            vec!["ECHO: 99, 5"]
+        );
+    }
+
+    fn warnings_of(src: &str) -> Vec<String> {
+        eval(src).warnings.into_iter().map(|w| w.message).collect()
+    }
+
+    #[test]
+    fn overwritten_assignment_warns() {
+        // Reassigning a name in a scope warns on each dead (earlier) write.
+        assert_eq!(
+            warnings_of("z = 1; z = 2; z = 3; echo(z);"),
+            vec![
+                "variable 'z' is assigned again later; this assignment is overwritten",
+                "variable 'z' is assigned again later; this assignment is overwritten",
+            ]
+        );
+        // A single assignment does not warn.
+        assert!(warnings_of("z = 1; echo(z);").is_empty());
+    }
+
+    #[test]
+    fn overwritten_warning_dedups_across_module_reentry() {
+        // A module body re-runs its assignment phase on each call; the dead-write
+        // lint fires once per source site, not once per invocation.
+        assert_eq!(
+            warnings_of("module m() { z = 1; z = 2; echo(z); } m(); m();"),
+            vec!["variable 'z' is assigned again later; this assignment is overwritten"]
+        );
     }
 
     #[test]

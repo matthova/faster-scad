@@ -1,0 +1,8 @@
+ECHO: "lastwin", 5, 5
+ECHO: "multi", 3, 3
+ECHO: "forward", undef, 5
+ECHO: "chain", undef, undef, 10
+ECHO: "survivor", undef, 2, undef
+ECHO: "selfref", undef
+ECHO: "overwrite", 2
+ECHO: "nested", 99, 5
