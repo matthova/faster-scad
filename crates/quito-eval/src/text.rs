@@ -1,7 +1,8 @@
-//! `text()` — turn a string into 2D glyph outlines (contours), using a bundled
-//! copy of Liberation Sans (SIL OFL), the same font OpenSCAD ships as its
-//! default, so glyph shapes match. Outlines come from `ttf-parser`; Bézier
-//! segments are flattened to line segments.
+//! `text()` — turn a string into 2D glyph outlines (contours) using the bundled
+//! Liberation family (Sans/Serif/Mono × Regular/Bold/Italic/BoldItalic, SIL OFL)
+//! — the exact files OpenSCAD ships — so `font=` selects the same face and glyph
+//! shapes match. Outlines come from `ttf-parser`; Bézier segments are flattened
+//! to line segments.
 //!
 //! The result is a set of contours (outer boundaries and holes) that become a
 //! `Node::Polygon`; even-odd triangulation in `quito-geom` turns them into a
@@ -10,18 +11,99 @@
 use std::sync::OnceLock;
 use ttf_parser::Face;
 
-/// Liberation Sans Regular (SIL Open Font License) — bundled so `text()` works
-/// identically native and in the browser. See `fonts/LICENSE`.
-static FONT_BYTES: &[u8] = include_bytes!("../fonts/LiberationSans-Regular.ttf");
+/// One bundled Liberation face. The whole family (SIL Open Font License) is
+/// bundled — the exact Liberation 2.00.1 files OpenSCAD ships — so `text(font=)`
+/// works identically native and in the browser *and* matches OpenSCAD's glyph
+/// shapes byte-for-byte. `family`/`style` are lowercase, `style` space-stripped
+/// (`bolditalic`). See `fonts/LICENSE`.
+struct BundledFont {
+    family: &'static str,
+    style: &'static str,
+    bytes: &'static [u8],
+}
 
-fn face() -> &'static Face<'static> {
-    static FACE: OnceLock<Face<'static>> = OnceLock::new();
-    FACE.get_or_init(|| Face::parse(FONT_BYTES, 0).expect("bundled font parses"))
+macro_rules! font {
+    ($family:literal, $style:literal, $file:literal) => {
+        BundledFont {
+            family: $family,
+            style: $style,
+            bytes: include_bytes!(concat!("../fonts/", $file)),
+        }
+    };
+}
+
+static FONTS: &[BundledFont] = &[
+    font!("liberation sans", "regular", "LiberationSans-Regular.ttf"),
+    font!("liberation sans", "bold", "LiberationSans-Bold.ttf"),
+    font!("liberation sans", "italic", "LiberationSans-Italic.ttf"),
+    font!(
+        "liberation sans",
+        "bolditalic",
+        "LiberationSans-BoldItalic.ttf"
+    ),
+    font!("liberation serif", "regular", "LiberationSerif-Regular.ttf"),
+    font!("liberation serif", "bold", "LiberationSerif-Bold.ttf"),
+    font!("liberation serif", "italic", "LiberationSerif-Italic.ttf"),
+    font!(
+        "liberation serif",
+        "bolditalic",
+        "LiberationSerif-BoldItalic.ttf"
+    ),
+    font!("liberation mono", "regular", "LiberationMono-Regular.ttf"),
+    font!("liberation mono", "bold", "LiberationMono-Bold.ttf"),
+    font!("liberation mono", "italic", "LiberationMono-Italic.ttf"),
+    font!(
+        "liberation mono",
+        "bolditalic",
+        "LiberationMono-BoldItalic.ttf"
+    ),
+];
+
+/// The parsed faces, one per [`FONTS`] entry (same order), parsed once.
+fn faces() -> &'static [Face<'static>] {
+    static FACES: OnceLock<Vec<Face<'static>>> = OnceLock::new();
+    FACES.get_or_init(|| {
+        FONTS
+            .iter()
+            .map(|f| Face::parse(f.bytes, 0).expect("bundled font parses"))
+            .collect()
+    })
+}
+
+/// Resolve an OpenSCAD `font` string (`"Family"` or `"Family:style=Style"`) to a
+/// bundled face. Returns the face and whether the requested *family* is one we
+/// bundle — `false` means we fell back to Liberation Sans and the caller should
+/// warn. An unavailable style within a known family silently uses that family's
+/// regular. Matching is case-insensitive; the style's spaces are ignored.
+pub fn resolve_font(font: &str) -> (&'static Face<'static>, bool) {
+    let (family_part, attrs) = font.split_once(':').unwrap_or((font, ""));
+    let family = family_part.trim().to_ascii_lowercase();
+    let style = attrs
+        .split(':')
+        .find_map(|a| a.trim().strip_prefix("style="))
+        .map(|s| s.trim().to_ascii_lowercase().replace(' ', ""))
+        .unwrap_or_default();
+    let style = if style.is_empty() { "regular" } else { &style };
+
+    let find = |fam: &str, sty: &str| FONTS.iter().position(|f| f.family == fam && f.style == sty);
+    // Empty family means the default (Liberation Sans) — a match, not a fallback.
+    let family = if family.is_empty() {
+        "liberation sans"
+    } else {
+        &family
+    };
+    let known_family = FONTS.iter().any(|f| f.family == family);
+    let idx = find(family, style)
+        .or_else(|| find(family, "regular"))
+        .unwrap_or(0);
+    (&faces()[idx], known_family)
 }
 
 /// Parameters for a `text()` call.
 pub struct TextOpts<'a> {
     pub text: &'a str,
+    /// The resolved font face (see [`resolve_font`]).
+    pub face: &'a Face<'a>,
     pub size: f64,
     pub halign: &'a str,
     pub valign: &'a str,
@@ -106,7 +188,7 @@ impl ttf_parser::OutlineBuilder for Outliner {
 /// `Node::Polygon`. Coordinates are in mm; the baseline is at y=0 for
 /// `valign="baseline"`.
 pub fn text_contours(opts: &TextOpts) -> (Vec<[f64; 2]>, Vec<Vec<u32>>) {
-    let face = face();
+    let face = opts.face;
     let upem = face.units_per_em() as f64;
     if upem <= 0.0 {
         return (Vec::new(), Vec::new());
@@ -173,4 +255,40 @@ pub fn text_contours(opts: &TextOpts) -> (Vec<[f64; 2]>, Vec<Vec<u32>>) {
         pen_x += widths[i];
     }
     (points, paths)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn advance(f: &Face, c: char) -> u16 {
+        f.glyph_hor_advance(f.glyph_index(c).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn resolve_font_selects_family_and_reports_unknown() {
+        // A known family resolves and reports availability; an unknown one falls
+        // back to Liberation Sans and reports `false` so the caller can warn.
+        assert!(resolve_font("Liberation Serif").1);
+        assert!(resolve_font("Liberation Mono").1);
+        assert!(resolve_font("").1); // empty == default Liberation Sans
+        assert!(!resolve_font("Arial").1);
+
+        // Mono is fixed-width; Sans is proportional — proves distinct faces.
+        let mono = resolve_font("Liberation Mono").0;
+        let sans = resolve_font("Liberation Sans").0;
+        assert_eq!(advance(mono, 'i'), advance(mono, 'M'));
+        assert_ne!(advance(sans, 'i'), advance(sans, 'M'));
+    }
+
+    #[test]
+    fn resolve_font_style_matching_is_case_and_space_insensitive() {
+        // "Bold Italic", "bolditalic", mixed case all select the same face.
+        let a = resolve_font("Liberation Sans:style=Bold Italic").0;
+        let b = resolve_font("liberation sans:style=bolditalic").0;
+        let regular = resolve_font("Liberation Sans").0;
+        assert_eq!(advance(a, 'A'), advance(b, 'A'));
+        // The styled face is genuinely different from regular.
+        assert_ne!(advance(a, 'A'), advance(regular, 'A'));
+    }
 }

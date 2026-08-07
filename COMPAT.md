@@ -33,12 +33,20 @@ the dangerous kind. Each has a minimal repro. Tracks A/B track the fixes.
   minkowski() { linear_extrude(6) polygon([[0,0],[24,0],[24,6],[6,6],[6,24],[0,24]]); sphere(2); }
   ```
 
-- **`text(font=…)` is ignored.** Only the bundled Liberation Sans (the face
-  OpenSCAD ships) is available; any `font=` request is silently substituted with
-  it, so glyphs differ for other fonts.
+- **`text(font=…)` supports the bundled Liberation family only.** The full
+  Liberation family — Sans / Serif / Mono × Regular / Bold / Italic / Bold Italic,
+  the exact Liberation 2.00.1 files OpenSCAD ships — is bundled, so
+  `font="Liberation Serif"`, `font="Liberation Sans:style=Bold"`, etc. select the
+  same face and render byte-for-byte like OpenSCAD (verified by
+  `corpus/geom/text_*`). A request for any *other* family (a system font, which is
+  non-portable and would not exist in the browser) falls back to Liberation Sans
+  **with a warning**, rather than silently. Arbitrary system-font resolution is
+  intentionally out of scope: it is non-portable and non-reproducible against the
+  oracle.
 
   ```scad
-  text("Ag", font = "Courier New");    // rendered in Liberation Sans
+  text("Ag", font = "Liberation Serif:style=Bold");  // exact match
+  text("Ag", font = "Courier New");                  // warns, falls back to Liberation Sans
   ```
 
 - **`rands()` is not bit-compatible (documented).** Quito uses an xorshift PRNG;
