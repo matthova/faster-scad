@@ -7,6 +7,7 @@ test_max_index
 test_min_index
 test_pointlist_bounds
 test_unit
+test_unit_errors
 test_v_abs
 test_v_ceil
 test_v_div
@@ -16,6 +17,7 @@ test_v_mul
 test_v_round
 test_v_theta
 test_vector_angle
+test_vector_angle_errors
 test_vector_axis
 test_vector_bisect
 test_vector_nearest

@@ -21,6 +21,7 @@ test_is_type
 test_loop_done
 test_loop_while
 test_looping
+test_no_function
 test_num_defined
 test_num_true
 test_one_defined

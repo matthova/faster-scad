@@ -1,6 +1,6 @@
 //! Runtime values and their operational semantics.
 
-use quito_syntax::ast::{BinOp, UnOp};
+use quito_syntax::ast::{Arg, BinOp, Expr, ListElem, Param, UnOp};
 use std::rc::Rc;
 
 /// A runtime value.
@@ -107,7 +107,7 @@ impl Value {
                 format_number(*step),
                 format_number(*end)
             ),
-            Value::Function(_) => "function".to_string(),
+            Value::Function(f) => format_function(&f.params, &f.body),
         }
     }
 
@@ -135,6 +135,154 @@ fn escape_string(s: &str) -> String {
         }
     }
     out
+}
+
+/// Serialize a function value to OpenSCAD's textual form — `function(params)
+/// body`, with the body expression pretty-printed. Binary and ternary
+/// sub-expressions are parenthesized; unary ops, calls, indexing, member access,
+/// vectors, ranges, `let`, and literals are not. Matches OpenSCAD 2024.12, which
+/// BOSL2's `test_fnliterals` suite asserts on via `str(<function literal>)`.
+pub(crate) fn format_function(params: &[Param], body: &Expr) -> String {
+    format!("function({}) {}", fmt_params(params), fmt_expr(body))
+}
+
+fn fmt_params(params: &[Param]) -> String {
+    params
+        .iter()
+        .map(|p| match &p.default {
+            Some(d) => format!("{} = {}", p.name, fmt_expr(d)),
+            None => p.name.clone(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn fmt_args(args: &[Arg]) -> String {
+    args.iter()
+        .map(|a| match &a.name {
+            Some(n) => format!("{} = {}", n, fmt_expr(&a.value)),
+            None => fmt_expr(&a.value),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn fmt_bindings(bindings: &[(String, Expr)]) -> String {
+    bindings
+        .iter()
+        .map(|(n, e)| format!("{} = {}", n, fmt_expr(e)))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn fmt_listelem(el: &ListElem) -> String {
+    match el {
+        ListElem::Item(e) => fmt_expr(e),
+        ListElem::Each(inner) => format!("each {}", fmt_listelem(inner)),
+        // A comprehension body is itself wrapped in parens by OpenSCAD, so a
+        // binary body ends up double-parenthesized (e.g. `for(i=r) ((i * 2))`).
+        ListElem::For { bindings, body } => {
+            format!("for({}) ({})", fmt_bindings(bindings), fmt_listelem(body))
+        }
+        ListElem::CFor {
+            init,
+            cond,
+            update,
+            body,
+        } => format!(
+            "for({}; {}; {}) ({})",
+            fmt_bindings(init),
+            fmt_expr(cond),
+            fmt_bindings(update),
+            fmt_listelem(body)
+        ),
+        ListElem::If { cond, then, els } => match els {
+            Some(e) => format!(
+                "if({}) ({}) else ({})",
+                fmt_expr(cond),
+                fmt_listelem(then),
+                fmt_listelem(e)
+            ),
+            None => format!("if({}) ({})", fmt_expr(cond), fmt_listelem(then)),
+        },
+        ListElem::Let { bindings, body } => {
+            format!("let({}) {}", fmt_bindings(bindings), fmt_listelem(body))
+        }
+    }
+}
+
+fn fmt_expr(e: &Expr) -> String {
+    match e {
+        Expr::Number(n) => format_number(*n),
+        Expr::Bool(b) => b.to_string(),
+        Expr::Str(s) => format!("\"{}\"", escape_string(s)),
+        Expr::Undef => "undef".to_string(),
+        Expr::Ident(n) => n.clone(),
+        Expr::Vector(elems) => format!(
+            "[{}]",
+            elems
+                .iter()
+                .map(fmt_listelem)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Expr::Range { start, step, end } => match step {
+            Some(s) => format!(
+                "[{} : {} : {}]",
+                fmt_expr(start),
+                fmt_expr(s),
+                fmt_expr(end)
+            ),
+            None => format!("[{} : {}]", fmt_expr(start), fmt_expr(end)),
+        },
+        // OpenSCAD drops a unary plus and never parenthesizes a unary operand.
+        Expr::Unary { op, expr } => match op {
+            UnOp::Neg => format!("-{}", fmt_expr(expr)),
+            UnOp::Not => format!("!{}", fmt_expr(expr)),
+            UnOp::Pos => fmt_expr(expr),
+        },
+        Expr::Binary { op, lhs, rhs } => {
+            format!("({} {} {})", fmt_expr(lhs), binop_str(*op), fmt_expr(rhs))
+        }
+        Expr::Ternary { cond, then, els } => {
+            format!(
+                "({} ? {} : {})",
+                fmt_expr(cond),
+                fmt_expr(then),
+                fmt_expr(els)
+            )
+        }
+        Expr::Index { base, index } => format!("{}[{}]", fmt_expr(base), fmt_expr(index)),
+        Expr::Member { base, field } => format!("{}.{}", fmt_expr(base), field),
+        Expr::Call { name, args } => format!("{}({})", name, fmt_args(args)),
+        Expr::CallValue { callee, args } => format!("{}({})", fmt_expr(callee), fmt_args(args)),
+        Expr::Let { bindings, body } => {
+            format!("let({}) {}", fmt_bindings(bindings), fmt_expr(body))
+        }
+        Expr::FunctionLiteral { params, body } => format_function(params, body),
+        Expr::Echo { args, body } => format!("echo({}) {}", fmt_args(args), fmt_expr(body)),
+        Expr::Assert { args, body } => format!("assert({}) {}", fmt_args(args), fmt_expr(body)),
+    }
+}
+
+fn binop_str(op: BinOp) -> &'static str {
+    use BinOp::*;
+    match op {
+        Add => "+",
+        Sub => "-",
+        Mul => "*",
+        Div => "/",
+        Mod => "%",
+        Pow => "^",
+        Eq => "==",
+        Ne => "!=",
+        Lt => "<",
+        Le => "<=",
+        Gt => ">",
+        Ge => ">=",
+        And => "&&",
+        Or => "||",
+    }
 }
 
 /// Format a number like OpenSCAD: 6 significant digits (`%g`-style), with the

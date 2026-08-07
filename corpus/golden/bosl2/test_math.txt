@@ -24,11 +24,15 @@ test_deriv2
 test_deriv3
 test_exponential_rands
 test_factorial
+test_factorial_errors
 test_fit_to_range
 test_gcd
+test_gcd_errors
 test_hypot
 test_lcm
+test_lcm_errors
 test_lerp
+test_lerp_errors
 test_lerpn
 test_log2
 test_mean

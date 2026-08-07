@@ -52,11 +52,14 @@ the dangerous kind. Each has a minimal repro. Tracks A/B track the fixes.
 
 - **BOSL2 function-suite coverage is partial (recorded, gated).** `cargo run -p
   xtask -- bosl2` runs **every** `[[test]]` block of the 15 function-oriented
-  files and currently passes **422/513**; the rest exercise unimplemented
-  language corners (chiefly `test_fnliterals`, 26/88 — advanced function-literal
-  edge cases). The passing set is pinned per file under `corpus/golden/bosl2/`,
-  so these gaps are recorded and a regression fails CI — they are not a silent
-  loss. Closing them is open-ended and tracked separately.
+  files and currently passes **503/513**; the gate now also honors each block's
+  `expect_success` flag, so error-path tests pass when Quito correctly *rejects*
+  bad input. The ~10 remaining gaps are scattered edge cases (e.g. `rands`
+  distribution — an intentional, documented divergence; inverse-trig exactness at
+  nice angles; a few string/struct helpers). The passing set is pinned per file
+  under `corpus/golden/bosl2/`, so these gaps are recorded and a regression fails
+  CI — they are not a silent loss. Closing them is open-ended and tracked
+  separately.
 
 ## Closed since M0
 

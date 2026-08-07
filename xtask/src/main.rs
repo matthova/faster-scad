@@ -79,8 +79,17 @@ const BOSL2_SUBSET: [&str; 15] = [
     "test_regions",
 ];
 
-/// Extract every `[[test]]` block's `(name, script)` from a `.scadtest` file.
-fn extract_tests(raw: &str) -> Vec<(String, String)> {
+/// One extracted `[[test]]` block: its name, script, and whether it is expected
+/// to evaluate successfully. `expect_success = false` blocks assert that bad
+/// input is *rejected* — they pass when evaluation errors, not when it succeeds.
+struct Bosl2Block {
+    name: String,
+    script: String,
+    expect_success: bool,
+}
+
+/// Extract every `[[test]]` block from a `.scadtest` file.
+fn extract_tests(raw: &str) -> Vec<Bosl2Block> {
     let mut out = Vec::new();
     for chunk in raw.split("[[test]]").skip(1) {
         let name = chunk.find("name = \"").and_then(|i| {
@@ -91,11 +100,40 @@ fn extract_tests(raw: &str) -> Vec<(String, String)> {
             let rest = &chunk[i + "script = '''".len()..];
             rest.find("'''").map(|j| rest[..j].to_string())
         });
-        if let (Some(n), Some(s)) = (name, script) {
-            out.push((n, s));
+        // `expect_success = false` (before the script body) inverts the pass
+        // condition; absence means the default `true`.
+        let expect_success = !chunk
+            .split_once("script = '''")
+            .map(|(head, _)| head)
+            .unwrap_or(chunk)
+            .contains("expect_success = false");
+        if let (Some(name), Some(script)) = (name, script) {
+            out.push(Bosl2Block {
+                name,
+                script,
+                expect_success,
+            });
         }
     }
     out
+}
+
+/// Whether a single BOSL2 block passes. A normal block must parse, evaluate
+/// without error, and run at least one assert (0 asserts is a vacuous pass). An
+/// `expect_success = false` block instead must parse but *fail* to evaluate —
+/// it exists to prove bad input is rejected.
+fn bosl2_block_passes(b: &Bosl2Block, dir_str: &str) -> bool {
+    match quito_syntax::parse(&b.script) {
+        Ok(prog) => {
+            let result = quito_eval::eval_program_with(&prog, &DiskResolver, dir_str);
+            if b.expect_success {
+                matches!(result, Ok(out) if out.asserts_run > 0)
+            } else {
+                result.is_err()
+            }
+        }
+        Err(_) => false,
+    }
 }
 
 /// Run every `[[test]]` block of one file through quito; return the sorted names
@@ -111,16 +149,8 @@ fn bosl2_file_results(dir: &Path, name: &str) -> Result<(Vec<String>, usize), St
     let dir_str = dir.to_string_lossy().into_owned();
     let mut passing: Vec<String> = tests
         .iter()
-        .filter(|(_, script)| match quito_syntax::parse(script) {
-            // A block passes only if it evaluates AND actually ran an assert —
-            // a test that executes zero asserts is a vacuous pass.
-            Ok(prog) => matches!(
-                quito_eval::eval_program_with(&prog, &DiskResolver, &dir_str),
-                Ok(out) if out.asserts_run > 0
-            ),
-            Err(_) => false,
-        })
-        .map(|(n, _)| n.clone())
+        .filter(|b| bosl2_block_passes(b, &dir_str))
+        .map(|b| b.name.clone())
         .collect();
     passing.sort();
     passing.dedup();
