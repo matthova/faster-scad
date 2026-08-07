@@ -917,7 +917,10 @@ impl LanguageServer for Backend {
             }
             RenderOutcome::Err(msg) => {
                 self.client
-                    .show_message(MessageType::ERROR, format!("openrscad render failed: {msg}"))
+                    .show_message(
+                        MessageType::ERROR,
+                        format!("openrscad render failed: {msg}"),
+                    )
                     .await;
                 json!({ "ok": false, "error": msg })
             }

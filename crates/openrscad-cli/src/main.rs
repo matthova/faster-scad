@@ -276,8 +276,9 @@ fn run() -> Result<()> {
         let json = std::fs::read_to_string(file)
             .with_context(|| format!("reading parameter-set file {}", file.display()))?;
         let schema = openrscad_syntax::customizer::extract(&src);
-        let set_overrides = openrscad_syntax::customizer::parameter_set_overrides(&json, set, &schema)
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let set_overrides =
+            openrscad_syntax::customizer::parameter_set_overrides(&json, set, &schema)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
         for (name, pv) in set_overrides {
             overrides.push((name, openrscad_eval::value_from_param(&pv)));
         }
@@ -290,7 +291,10 @@ fn run() -> Result<()> {
             .with_context(|| format!("--param must be NAME=VALUE, got '{p}'"))?;
         let pv = openrscad_syntax::customizer::parse_value(val.trim())
             .with_context(|| format!("invalid parameter value: '{val}'"))?;
-        overrides.push((name.trim().to_string(), openrscad_eval::value_from_param(&pv)));
+        overrides.push((
+            name.trim().to_string(),
+            openrscad_eval::value_from_param(&pv),
+        ));
     }
 
     // Animation: re-eval per frame with a swept `$t` and write numbered PNGs.

@@ -1205,7 +1205,8 @@ fn hash_all(node: &Node, out: &mut HashMap<*const Node, u64>) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     std::mem::discriminant(node).hash(&mut h);
     let bits = |x: &f64, h: &mut std::collections::hash_map::DefaultHasher| x.to_bits().hash(h);
-    let frags = |f: &openrscad_ir::FragmentSpec, h: &mut std::collections::hash_map::DefaultHasher| {
+    let frags = |f: &openrscad_ir::FragmentSpec,
+                 h: &mut std::collections::hash_map::DefaultHasher| {
         f.fn_.to_bits().hash(h);
         f.fa.to_bits().hash(h);
         f.fs.to_bits().hash(h);

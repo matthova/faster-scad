@@ -394,7 +394,8 @@ fn render_impl(
     };
 
     // Evaluate.
-    let eval = match openrscad_eval::eval_program_with_params(&program, &resolver, ".", &overrides) {
+    let eval = match openrscad_eval::eval_program_with_params(&program, &resolver, ".", &overrides)
+    {
         Ok(o) => o,
         Err(e) => {
             let diag = openrscad_eval::eval_error_diagnostic(&e);
@@ -460,19 +461,19 @@ fn render_impl(
 
     // Preview color channel — only for models that actually use color/`#`/`%`, so
     // plain models keep the fast single-mesh path (and the warm-edit budget).
-    let (preview_positions, preview_normals, groups) = if openrscad_geom::has_display_attrs(&eval.node)
-    {
-        let r = CACHE.with(|c| {
-            let mut cache = c.borrow_mut();
-            openrscad_geom::render_groups_cached(&eval.node, &kernel, &mut cache)
-        });
-        match r {
-            Ok(groups) => openrscad_geom::preview_channel(&groups),
-            Err(_) => (Vec::new(), Vec::new(), String::new()),
-        }
-    } else {
-        (Vec::new(), Vec::new(), String::new())
-    };
+    let (preview_positions, preview_normals, groups) =
+        if openrscad_geom::has_display_attrs(&eval.node) {
+            let r = CACHE.with(|c| {
+                let mut cache = c.borrow_mut();
+                openrscad_geom::render_groups_cached(&eval.node, &kernel, &mut cache)
+            });
+            match r {
+                Ok(groups) => openrscad_geom::preview_channel(&groups),
+                Err(_) => (Vec::new(), Vec::new(), String::new()),
+            }
+        } else {
+            (Vec::new(), Vec::new(), String::new())
+        };
 
     // Provenance channel for editor↔preview linking — any model with geometry
     // (2D flat meshes and 3D solids alike). Shares the cache with the fused
