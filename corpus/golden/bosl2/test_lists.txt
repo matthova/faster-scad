@@ -16,6 +16,7 @@ test_list_pad
 test_list_remove
 test_list_remove_values
 test_list_rotate
+test_list_rotate_errors
 test_list_set
 test_list_shape
 test_list_swap
@@ -28,7 +29,9 @@ test_permutations
 test_repeat
 test_repeat_entries
 test_reverse
+test_reverse_errors
 test_select
+test_select_errors
 test_set_difference
 test_set_intersection
 test_set_union

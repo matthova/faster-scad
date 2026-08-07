@@ -2657,7 +2657,9 @@ fn builtin_fn(name: &str, args: &[Value], warnings: &mut Vec<String>) -> Value {
             value::vector(out)
         }
         "is_undef" => Value::Bool(matches!(args.first(), Some(Value::Undef) | None)),
-        "is_num" => Value::Bool(matches!(args.first(), Some(Value::Number(_)))),
+        // `is_num(nan)` is false in OpenSCAD (a NaN is not a usable number), but
+        // `is_num(inf)` is true. Match that: a finite-or-infinite Number, not NaN.
+        "is_num" => Value::Bool(matches!(args.first(), Some(Value::Number(n)) if !n.is_nan())),
         "is_bool" => Value::Bool(matches!(args.first(), Some(Value::Bool(_)))),
         "is_string" => Value::Bool(matches!(args.first(), Some(Value::Str(_)))),
         "is_list" => Value::Bool(matches!(args.first(), Some(Value::Vector(_)))),
@@ -2762,8 +2764,15 @@ fn cos_deg(x: f64) -> f64 {
     }
 }
 fn tan_deg(x: f64) -> f64 {
+    // Exact values at quadrant / 45-degree angles (matching OpenSCAD, which
+    // returns exactly ±1 and ±inf here rather than the ~1e-16 error a naive
+    // radian `tan` leaves — BOSL2 compares with exact `!=`).
     match norm_deg(x) {
         0.0 | 180.0 => 0.0,
+        45.0 | 225.0 => 1.0,
+        135.0 | 315.0 => -1.0,
+        90.0 => f64::INFINITY,
+        270.0 => f64::NEG_INFINITY,
         a => a.to_radians().tan(),
     }
 }
@@ -3335,6 +3344,59 @@ mod tests {
 
     fn echoes(src: &str) -> Vec<String> {
         eval(src).echoes
+    }
+
+    #[test]
+    fn function_literal_serializes_like_openscad() {
+        // `str()`/`echo` of a function value render it as source: `function(params)
+        // body`, with binary/ternary sub-expressions parenthesized and calls,
+        // vectors, ranges, indexing, and literals left bare. BOSL2's fnliterals
+        // suite asserts on these exact strings. Verified against OpenSCAD 2024.12.
+        assert_eq!(
+            echoes(concat!(
+                "echo(str(function(x) x));\n",
+                "echo(str(function(x, y) x + y * 2));\n",
+                "echo(str(function(x) -x));\n",
+                "echo(str(function(a, b) a == undef ? b : a));\n",
+                "echo(str(function(x) f(x, 2)));\n",
+                "echo(str(function(x) g(a=x, b=2)));\n",
+                "echo(str(function(x) [1, x, 3]));\n",
+                "echo(str(function(x) x[0]));\n",
+                "echo(str(function(x = 5) x));\n",
+                "echo(str(function(x) function(y) x + y));\n",
+            )),
+            vec![
+                "ECHO: \"function(x) x\"",
+                "ECHO: \"function(x, y) (x + (y * 2))\"",
+                "ECHO: \"function(x) -x\"",
+                "ECHO: \"function(a, b) ((a == undef) ? b : a)\"",
+                "ECHO: \"function(x) f(x, 2)\"",
+                "ECHO: \"function(x) g(a = x, b = 2)\"",
+                "ECHO: \"function(x) [1, x, 3]\"",
+                "ECHO: \"function(x) x[0]\"",
+                "ECHO: \"function(x = 5) x\"",
+                "ECHO: \"function(x) function(y) (x + y)\"",
+            ]
+        );
+    }
+
+    #[test]
+    fn is_num_rejects_nan_but_accepts_inf() {
+        // OpenSCAD: is_num(nan) is false, is_num(inf) is true.
+        assert_eq!(
+            echoes("echo(is_num(0/0), is_num(1/0), is_num(3));"),
+            vec!["ECHO: false, true, true"]
+        );
+    }
+
+    #[test]
+    fn tan_is_exact_at_45_degree_multiples() {
+        // OpenSCAD returns exact ±1 / ±inf at these angles (BOSL2 compares with
+        // exact `!=`), where a naive radian `tan` leaves a ~1e-16 error.
+        assert_eq!(
+            echoes("echo(tan(45), tan(135), tan(225), tan(315), tan(90), tan(270));"),
+            vec!["ECHO: 1, -1, 1, -1, inf, -inf"]
+        );
     }
 
     // The following cases pin OpenSCAD's last-write-wins scope semantics, each

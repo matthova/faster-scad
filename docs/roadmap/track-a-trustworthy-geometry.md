@@ -52,11 +52,14 @@ different shape.
   hard-fail-on-missing + `asserts_run > 0` landed with Track C/C1; A6 closed the
   core gap: the gate ran only the *first* `[[test]]` block per file (a fake
   "15/15" over ~15 of 513 blocks). `run_bosl2` now runs **every** block of all 15
-  files (**422/513** pass), a block counting as passing only if it evals and runs
-  ≥1 assert. The passing set is pinned per file under `corpus/golden/bosl2/`
-  (`xtask bless-bosl2`), and any regression, unblessed improvement, missing file,
-  or zero-block run hard-fails CI. The 91 known-failing blocks are recorded
-  (COMPAT.md), not fixed — closing them is open-ended and trails.
+  files (**503/513** pass, up from 422 once function-literal `str()` serialization,
+  the `is_num(nan)`/exact-`tan` fixes, and `expect_success`-aware error tests
+  landed), a block counting as passing only if it evals and runs ≥1 assert (or, for
+  an `expect_success = false` block, correctly errors). The passing set is pinned
+  per file under `corpus/golden/bosl2/` (`xtask bless-bosl2`), and any regression,
+  unblessed improvement, missing file, or zero-block run hard-fails CI. The ~10
+  remaining known-failing blocks are recorded (COMPAT.md), not fixed — closing
+  them is open-ended and trails.
 
 **Track A (M6) is complete: A1–A6 all landed.**
 
@@ -88,11 +91,11 @@ different shape.
 
 ## Exit criterion (crisp, CI-enforced) — **MET**
 
-> `cargo run -p xtask -- geom` passes **69/69** golden geometry cases
+> `cargo run -p xtask -- geom` passes **71/71** golden geometry cases
 > (volume ±0.1%, bbox ±0.01 mm, signed centroid, manifoldness, component count;
 > triangle count where pinned) blessed against OpenSCAD 2024.12, **and**
 > `cargo run -p xtask -- bosl2` runs every BOSL2 `[[test]]` block with
-> assertion-output checking (**422/513**, passing set pinned per file), both
+> assertion-output checking (**503/513**, passing set pinned per file), both
 > enforced in CI on every PR (regression, unblessed improvement, skipped/missing
 > file, or 0/0 = red).
 

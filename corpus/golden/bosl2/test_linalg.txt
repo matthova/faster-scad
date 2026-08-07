@@ -20,9 +20,11 @@ test_matrix_trace
 test_norm_fro
 test_null_space
 test_outer_product
+test_outer_product_errors
 test_qr_factor
 test_rot_inverse
 test_submatrix
 test_submatrix_set
 test_swap_columns
 test_transpose
+test_transpose_errors
