@@ -16,8 +16,8 @@ export const viewerConst = {
   axisZ: 0x4f83d9,
   /** Thin dark wireframe drawn over meshes and the nav cube. */
   edge: 0x000000,
-  /** Default single-color mesh = the app accent (amber). */
-  mesh: 0xf5a623,
+  /** Default single-color mesh = the app accent (yellow). */
+  mesh: 0xffd60a,
   /** Pick highlight + nav-cube hover wash. Cyan means "the thing you pointed
    *  at" everywhere it appears; do not split this hue (see track-D §3). */
   selection: 0x4fc3f7,

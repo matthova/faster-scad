@@ -27,15 +27,15 @@
   --border-strong: #565d6b;
   --text: #e6e8ec;
   --muted: #9aa0aa;
-  --accent: #f5a623;
-  --accent-strong: #f5a623;
+  --accent: #ffd60a;
+  --accent-strong: #ffd60a;
   /* On dark, accent text on the accent button needs a dark ink for contrast. */
   --on-accent: #14161b;
   /* Filled-CTA background. On dark it's the bright accent under dark ink; on
      light it darkens (below) so white ink clears AA (bare --accent is only
      3.18:1 under white). */
   --cta-bg: var(--accent);
-  /* Chart series (OpenRSCAD / OpenSCAD CGAL / OpenSCAD Manifold). Amber + rose +
+  /* Chart series (OpenRSCAD / OpenSCAD CGAL / OpenSCAD Manifold). Yellow + rose +
      blue — CVD-validated as a set on the panel surface (see dataviz check). */
   --series-openrscad: var(--accent);
   --series-cgal: #ef6f8e;
@@ -52,10 +52,10 @@
   --border-strong: #8b929e;
   --text: #1b1e23;
   --muted: #5b6472;
-  --accent: #d97706;
-  --accent-strong: #a45a06;
+  --accent: #b09b00;
+  --accent-strong: #7a6e00;
   --on-accent: #ffffff;
-  --cta-bg: #a45a06; /* white ink → 5.2:1 (bright --accent would be 3.18:1) */
+  --cta-bg: #7a6e00; /* white ink → 5.1:1 (bright --accent would be 2.5:1) */
   --series-openrscad: var(--accent);
   --series-cgal: #b0355a;
   --series-mfld: #2b6cb0;

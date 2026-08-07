@@ -61,8 +61,8 @@
   --border-strong: #565d6b;
   --text: #e6e8ec;
   --muted: #9aa0aa;
-  --accent: #f5a623;
-  --accent-strong: #f5a623;
+  --accent: #ffd60a;
+  --accent-strong: #ffd60a;
   --err: #ff6b6b;
   --warn: #e0b341;
 }
@@ -78,13 +78,13 @@
   --border: #d5d9e0;
   /* --border was 1.24:1 (a hairline). Control boundaries and the focus ring use
      the stronger variants, which clear WCAG 1.4.11's 3:1 / 1.4.3's text ratios.
-     --accent-strong darkens the amber to 4.5:1 for text/border/focus, where the
-     brand --accent (2.79:1 on --panel) is illegible. */
+     --accent-strong darkens the yellow to 4.5:1 for text/border/focus, where the
+     brand --accent (2.78:1 on --panel) is illegible. */
   --border-strong: #8b929e;
   --text: #1b1e23;
   --muted: #5b6472;
-  --accent: #d97706;
-  --accent-strong: #a45a06;
+  --accent: #b09b00;
+  --accent-strong: #7a6e00;
   --err: #c62222;
   --warn: #8a5a00;
 }
@@ -602,7 +602,7 @@ body {
   color: inherit;
 }
 .tab-dirty {
-  color: var(--accent, #f5a623);
+  color: var(--accent, #ffd60a);
   font-size: 9px;
   line-height: 1;
   margin-right: calc(-1 * var(--space-1));
