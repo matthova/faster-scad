@@ -112,6 +112,7 @@ import {
 } from "./desktopEngine";
 import { useUpdater } from "./checkForUpdates";
 import { UpdateBanner } from "./UpdateBanner";
+import { pickDownloadUrl } from "./downloads";
 
 const TAURI = isTauri();
 
@@ -464,6 +465,22 @@ export function App() {
     "desktopCalloutDismissed",
     loadPrefs().desktopCalloutDismissed,
   );
+  // Direct "latest release" download URL for the visitor's OS. null while
+  // resolving and on phones/tablets (no desktop build) — the callout is hidden
+  // in that case rather than pointing anywhere generic.
+  const [desktopDownloadUrl, setDesktopDownloadUrl] = useState<string | null>(
+    null,
+  );
+  useEffect(() => {
+    if (TAURI) return;
+    let live = true;
+    void pickDownloadUrl().then((url) => {
+      if (live) setDesktopDownloadUrl(url);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
   // Narrow-screen pane selection (≤1023px): the editor and viewer become a
   // Code⎪Model segmented switch instead of side-by-side. "model" first — the
   // customizer and viewer are the point at tablet/phone widths.
@@ -2047,9 +2064,9 @@ export function App() {
     >
       <header className="topbar">
         <h1 className="sr-only">Quito playground</h1>
-        <div className="brand">
+        <a className="brand" href={ABOUT_URL}>
           Quito <span className="tag">playground</span>
-        </div>
+        </a>
         <div className="actions">
           <select
             className="examples-select"
@@ -2456,7 +2473,7 @@ export function App() {
         </div>
       )}
 
-      {!TAURI && !desktopCalloutDismissed && (
+      {!TAURI && !desktopCalloutDismissed && desktopDownloadUrl && (
         <div className="update-banner" role="status">
           <div className="update-banner-row">
             <span className="update-banner-msg">
@@ -2466,7 +2483,7 @@ export function App() {
             <div className="update-banner-actions">
               <button
                 className="update-primary"
-                onClick={() => void openExternal(ABOUT_URL)}
+                onClick={() => void openExternal(desktopDownloadUrl)}
               >
                 Download
               </button>
